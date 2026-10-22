@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fly Diary</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <header class="sidebar-header">
+                <h1>Fly Diary</h1>
+                <button id="new-today" class="btn-primary" title="前往今天 (Ctrl/Cmd+T)">
+                    今天
+                </button>
+            </header>
+            <div class="search-wrap">
+                <input id="search" type="search" placeholder="搜尋日期或內容…" autocomplete="off" />
+            </div>
+            <ul id="entry-list" class="entry-list"></ul>
+            <footer class="sidebar-footer">
+                <span id="diary-path" class="path" title="日記儲存位置"></span>
+            </footer>
+        </aside>
+
+        <main class="editor">
+            <header class="editor-header">
+                <div class="date-nav">
+                    <button id="prev-day" class="btn-icon" title="前一天 (Alt+←)">‹</button>
+                    <input id="date-picker" type="date" />
+                    <button id="next-day" class="btn-icon" title="後一天 (Alt+→)">›</button>
+                </div>
+                <div class="status">
+                    <span id="status" class="status-text"></span>
+                    <button id="delete-btn" class="btn-danger" title="刪除這一天的日記">刪除</button>
+                </div>
+            </header>
+
+            <div class="editor-body">
+                <textarea id="content" placeholder="今天過得如何？" spellcheck="false"></textarea>
+            </div>
+
+            <footer class="editor-footer">
+                <span id="word-count" class="word-count"></span>
+                <span class="hint">Markdown 格式 · 自動儲存</span>
+            </footer>
+        </main>
+    </div>
+
+    <script type="module" src="main.js"></script>
+</body>
+
+</html>
