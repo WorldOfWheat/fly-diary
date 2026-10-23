@@ -1,0 +1,121 @@
+// ---------------------------------------------------------------------------
+// DOM references
+// ---------------------------------------------------------------------------
+//
+// A single lookup table for every element `main.js` touches, so the rest of the
+// app never calls `document.getElementById` directly and a renamed id only has
+// to be fixed in one place.
+//
+// This module is deliberately *side-effect free*: it only reads the document
+// once at import time and exports the result. Nothing here wires events or
+// starts work, which is what makes `main.js` importable from a test once the
+// event wiring lives in `wiring.js`.
+
+const $ = (id) => document.getElementById(id);
+
+export const els = {
+  // Lock screen
+  lockScreen: $("lock-screen"),
+  lockForm: $("lock-form"),
+  langToggle: $("lang-toggle"),
+  themeToggle: $("theme-toggle"),
+  lockSubtitle: $("lock-subtitle"),
+  lockError: $("lock-error"),
+  lockSubmit: $("lock-submit"),
+  passphrase: $("passphrase"),
+  passphraseConfirm: $("passphrase-confirm"),
+  pathField: $("path-field"),
+  diaryDir: $("diary-dir"),
+  browseDir: $("browse-dir"),
+  advancedField: $("advanced-field"),
+  kdfMemory: $("kdf-memory"),
+  kdfIterations: $("kdf-iterations"),
+  kdfParallelism: $("kdf-parallelism"),
+  kdfEstimate: $("kdf-estimate"),
+  kdfReset: $("kdf-reset"),
+  // App
+  app: $("app"),
+  list: $("entry-list"),
+  listScroll: $("entry-scroll"),
+  listSpacer: $("entry-spacer"),
+  search: $("search"),
+  viewAll: $("view-all"),
+  viewFavourites: $("view-favourites"),
+  favouriteBtn: $("favourite-btn"),
+  favouriteLabel: $("favourite-label"),
+  datePicker: $("date-picker"),
+  dateLabel: $("date-label"),
+  dateMain: $("date-main"),
+  dateSub: $("date-sub"),
+  calendar: $("calendar"),
+  calPrev: $("cal-prev"),
+  calNext: $("cal-next"),
+  calTitle: $("cal-title"),
+  calWeekdays: $("cal-weekdays"),
+  calGrid: $("cal-grid"),
+  calToday: $("cal-today"),
+  title: $("title"),
+  content: $("content"),
+  status: $("status"),
+  wordCount: $("word-count"),
+  fontSmaller: $("font-smaller"),
+  fontLarger: $("font-larger"),
+  fontReset: $("font-reset"),
+  diaryPath: $("diary-path"),
+  prevDay: $("prev-day"),
+  nextDay: $("next-day"),
+  newToday: $("new-today"),
+  deleteBtn: $("delete-btn"),
+  lockBtn: $("lock-btn"),
+  changeDirBtn: $("change-dir-btn"),
+  settingsBtn: $("settings-btn"),
+  statsBtn: $("stats-btn"),
+  // Statistics dialog
+  statsOverlay: $("stats-overlay"),
+  statsClose: $("stats-close"),
+  statsDone: $("stats-done"),
+  statsTotal: $("stats-total"),
+  statsFavourites: $("stats-favourites"),
+  statsStreak: $("stats-streak"),
+  statsLongest: $("stats-longest"),
+  statsRange: $("stats-range"),
+  statsMonths: $("stats-months"),
+  statsWeekdays: $("stats-weekdays"),
+  // Settings dialog
+  settingsOverlay: $("settings-overlay"),
+  settingsClose: $("settings-close"),
+  settingsCancel: $("settings-cancel"),
+  settingsSave: $("settings-save"),
+  settingsError: $("settings-error"),
+  autoLockSelect: $("auto-lock-select"),
+  vaultKdf: $("vault-kdf"),
+  settingsCurrentPass: $("settings-current-pass"),
+  settingsNewPass: $("settings-new-pass"),
+  settingsNewPassConfirm: $("settings-new-pass-confirm"),
+  settingsKdfMemory: $("settings-kdf-memory"),
+  settingsKdfIterations: $("settings-kdf-iterations"),
+  settingsKdfParallelism: $("settings-kdf-parallelism"),
+  settingsCalibrate: $("settings-calibrate"),
+  settingsCalibrateNote: $("settings-calibrate-note"),
+  // Import dialog
+  importBtn: $("import-btn"),
+  importOverlay: $("import-overlay"),
+  importClose: $("import-close"),
+  importCancel: $("import-cancel"),
+  importConfirm: $("import-confirm"),
+  importDir: $("import-dir"),
+  importReady: $("import-ready"),
+  importConflicts: $("import-conflicts"),
+  importFailed: $("import-failed"),
+  importOverwriteRow: $("import-overwrite-row"),
+  importOverwrite: $("import-overwrite"),
+  importList: $("import-list"),
+  importProgress: $("import-progress"),
+  importProgressBar: $("import-progress-bar"),
+  importProgressCount: $("import-progress-count"),
+  importProgressTrack: document.querySelector(
+    "#import-progress .import-progress-track"
+  ),
+  importResult: $("import-result"),
+  importError: $("import-error"),
+};

@@ -310,6 +310,12 @@ npm run coverage       # 前端 + Rust coverage
 `src/lib/dates.js` 與 `src/lib/stats.js`，`src/i18n.js` 另有字典完整性檢查（兩份字典的
 key 必須一致、`index.html` 與 `main.js` 用到的 key 必須存在）。
 
+各對話框模組（`calendar.js`、`import-dialog.js`、`stats-dialog.js`、`settings-dialog.js`、
+`lock-screen.js`）都以 `createXxx(deps)` 工廠形式匯出，依賴全部由參數注入，因此可以在
+Node 裡直接測試。`tests/helpers/dom.js` 提供一個約 300 行的極簡 DOM stub（`fakeElement`、
+`installDom`、`fakeEls`、`fakeT`、`spy`、`fakeInvoke`），不需要 jsdom 之類的額外套件；
+遇到 stub 不支援的 selector 會直接丟錯，避免測試默默通過。
+
 Rust 測試分兩層：`src-tauri/src/*.rs` 內的單元測試，以及 `src-tauri/tests/vault_lifecycle.rs`
 的整合測試（建立 vault → 寫入 → 上鎖 → 解鎖 → 讀回 → 改密碼）。涵蓋加解密 roundtrip、
 錯誤密碼、密文竄改偵測、XML 序列化、日期驗證、索引重建與匯入流程。
@@ -333,16 +339,31 @@ npm run build
 fly-diary/
 ├── src/                    # 前端（純 HTML/JS/CSS）
 │   ├── index.html          # 解鎖畫面 + 編輯器（文字以 data-i18n 標記）
-│   ├── main.js             # UI 邏輯、自動儲存、invoke 呼叫
+│   ├── main.js             # 編輯器、清單、自動儲存、invoke 呼叫
+│   ├── dom.js              # DOM 查表（els），無副作用
+│   ├── wiring.js           # 所有事件綁定，以 deps 注入回呼（可單獨測試）
+│   ├── calendar.js         # 日期選擇彈窗（createCalendar）
+│   ├── import-dialog.js    # 匯入對話框：掃描、進度、報告（createImportDialog）
+│   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
+│   ├── settings-dialog.js  # 設定對話框：自動鎖定、KDF、改密碼（createSettingsDialog）
+│   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準（createLockScreen）
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   └── styles.css
 ├── tests/                  # 前端測試（node --test）
+│   ├── helpers/
+│   │   └── dom.js          # 極簡 DOM stub（fakeElement / installDom / fakeInvoke）
 │   ├── dates.test.js
 │   ├── stats.test.js
-│   └── i18n.test.js
+│   ├── i18n.test.js
+│   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce
+│   ├── calendar.test.js    # 月曆格線、焦點移動、月份切換
+│   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
+│   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
+│   ├── settings-dialog.test.js # 自動鎖定選項、KDF 單位換算、儲存驗證
+│   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
 │   ├── build.rs

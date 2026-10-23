@@ -18,20 +18,14 @@ import {
   formatWeekday,
   weekdayName,
 } from "./i18n.js";
-import {
-  toISODate,
-  fromISODate,
-  shiftDate,
-  monthStartOf,
-  shiftMonth,
-  calendarGrid,
-} from "./lib/dates.js";
-import {
-  computeStreaks,
-  monthlyBuckets,
-  weekdayBuckets,
-  barFractions,
-} from "./lib/stats.js";
+import { toISODate, shiftDate, monthStartOf } from "./lib/dates.js";
+import { els } from "./dom.js";
+import { initEventWiring } from "./wiring.js";
+import { createCalendar } from "./calendar.js";
+import { createImportDialog } from "./import-dialog.js";
+import { createStatsDialog } from "./stats-dialog.js";
+import { createSettingsDialog } from "./settings-dialog.js";
+import { createLockScreen } from "./lock-screen.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -62,134 +56,23 @@ let currentFavourite = false;
 let favouriteBusy = false;
 /** Guard so programmatic input updates don't trigger autosave. */
 let suppressInput = false;
-/** Whether the app has a settings file (i.e. the diary location is known). */
-let configured = false;
-/** Whether the vault has been created before (first run shows confirm field). */
-let vaultInitialized = false;
-/** First day of the month currently shown in the calendar popup, `YYYY-MM-01`. */
-let calendarMonth = "";
 
 const AUTOSAVE_DELAY = 800;
 
 // ---------------------------------------------------------------------------
 // DOM references
 // ---------------------------------------------------------------------------
-
-const $ = (id) => document.getElementById(id);
-const els = {
-  // Lock screen
-  lockScreen: $("lock-screen"),
-  lockForm: $("lock-form"),
-  langToggle: $("lang-toggle"),
-  themeToggle: $("theme-toggle"),
-  lockSubtitle: $("lock-subtitle"),
-  lockError: $("lock-error"),
-  lockSubmit: $("lock-submit"),
-  passphrase: $("passphrase"),
-  passphraseConfirm: $("passphrase-confirm"),
-  pathField: $("path-field"),
-  diaryDir: $("diary-dir"),
-  browseDir: $("browse-dir"),
-  advancedField: $("advanced-field"),
-  kdfMemory: $("kdf-memory"),
-  kdfIterations: $("kdf-iterations"),
-  kdfParallelism: $("kdf-parallelism"),
-  kdfEstimate: $("kdf-estimate"),
-  kdfReset: $("kdf-reset"),
-  // App
-  app: $("app"),
-  list: $("entry-list"),
-  listScroll: $("entry-scroll"),
-  listSpacer: $("entry-spacer"),
-  search: $("search"),
-  viewAll: $("view-all"),
-  viewFavourites: $("view-favourites"),
-  favouriteBtn: $("favourite-btn"),
-  favouriteLabel: $("favourite-label"),
-  datePicker: $("date-picker"),
-  dateLabel: $("date-label"),
-  dateMain: $("date-main"),
-  dateSub: $("date-sub"),
-  calendar: $("calendar"),
-  calPrev: $("cal-prev"),
-  calNext: $("cal-next"),
-  calTitle: $("cal-title"),
-  calWeekdays: $("cal-weekdays"),
-  calGrid: $("cal-grid"),
-  calToday: $("cal-today"),
-  title: $("title"),
-  content: $("content"),
-  status: $("status"),
-  wordCount: $("word-count"),
-  fontSmaller: $("font-smaller"),
-  fontLarger: $("font-larger"),
-  fontReset: $("font-reset"),
-  diaryPath: $("diary-path"),
-  prevDay: $("prev-day"),
-  nextDay: $("next-day"),
-  newToday: $("new-today"),
-  deleteBtn: $("delete-btn"),
-  lockBtn: $("lock-btn"),
-  changeDirBtn: $("change-dir-btn"),
-  settingsBtn: $("settings-btn"),
-  statsBtn: $("stats-btn"),
-  // Statistics dialog
-  statsOverlay: $("stats-overlay"),
-  statsClose: $("stats-close"),
-  statsDone: $("stats-done"),
-  statsTotal: $("stats-total"),
-  statsFavourites: $("stats-favourites"),
-  statsStreak: $("stats-streak"),
-  statsLongest: $("stats-longest"),
-  statsRange: $("stats-range"),
-  statsMonths: $("stats-months"),
-  statsWeekdays: $("stats-weekdays"),
-  // Settings dialog
-  settingsOverlay: $("settings-overlay"),
-  settingsClose: $("settings-close"),
-  settingsCancel: $("settings-cancel"),
-  settingsSave: $("settings-save"),
-  settingsError: $("settings-error"),
-  autoLockSelect: $("auto-lock-select"),
-  vaultKdf: $("vault-kdf"),
-  settingsCurrentPass: $("settings-current-pass"),
-  settingsNewPass: $("settings-new-pass"),
-  settingsNewPassConfirm: $("settings-new-pass-confirm"),
-  settingsKdfMemory: $("settings-kdf-memory"),
-  settingsKdfIterations: $("settings-kdf-iterations"),
-  settingsKdfParallelism: $("settings-kdf-parallelism"),
-  settingsCalibrate: $("settings-calibrate"),
-  settingsCalibrateNote: $("settings-calibrate-note"),
-  // Import dialog
-  importBtn: $("import-btn"),
-  importOverlay: $("import-overlay"),
-  importClose: $("import-close"),
-  importCancel: $("import-cancel"),
-  importConfirm: $("import-confirm"),
-  importDir: $("import-dir"),
-  importReady: $("import-ready"),
-  importConflicts: $("import-conflicts"),
-  importFailed: $("import-failed"),
-  importOverwriteRow: $("import-overwrite-row"),
-  importOverwrite: $("import-overwrite"),
-  importList: $("import-list"),
-  importProgress: $("import-progress"),
-  importProgressBar: $("import-progress-bar"),
-  importProgressCount: $("import-progress-count"),
-  importProgressTrack: document.querySelector(
-    "#import-progress .import-progress-track"
-  ),
-  importResult: $("import-result"),
-  importError: $("import-error"),
-};
+//
+// `els` lives in `dom.js` so this file only holds behaviour. The lookup table
+// is a plain object with no side effects, which keeps it importable from tests.
 
 // ---------------------------------------------------------------------------
 // Date helpers (local timezone, no UTC drift)
 // ---------------------------------------------------------------------------
 //
-// `toISODate` / `fromISODate` / `shiftDate` / `monthStartOf` / `shiftMonth` /
-// `calendarGrid` live in `lib/dates.js` so they can be unit-tested without a
-// DOM. The two wrappers below stay here because they need the active locale.
+// `toISODate` / `shiftDate` / `monthStartOf` live in `lib/dates.js` so they can
+// be unit-tested without a DOM. The two wrappers below stay here because they
+// need the active locale.
 
 /** `2026-10-23` → `週五` / `Fri`. */
 function weekdayOf(iso) {
@@ -222,393 +105,27 @@ function renderDateLabel() {
 }
 
 // ---------------------------------------------------------------------------
-// Calendar popup
+// Feature controllers
 // ---------------------------------------------------------------------------
+//
+// The calendar, the import dialog, the settings dialog, the statistics dialog
+// and the lock screen each live in their own module. They are created here so
+// that `main.js` stays the single place that owns the editor state and the
+// backend session, while the modules stay testable in isolation.
+//
+// The controllers are created lazily inside `init()` (see `createControllers`)
+// because several of them need callbacks that are defined further down.
 
-/** Dates that already have an entry, for the little dot in the grid. */
-function entryDateSet() {
-  return new Set(allEntries.map((e) => e.date));
-}
-
-/** Fill the weekday header row. Monday-first, matching the grid below. */
-function renderWeekdayHeaders() {
-  if (!els.calWeekdays) return;
-  const frag = document.createDocumentFragment();
-  // `getDay()` is Sunday-based; the grid starts on Monday, so walk 1..6 then 0.
-  for (let i = 1; i <= 7; i += 1) {
-    const span = document.createElement("span");
-    span.textContent = weekdayName(i % 7);
-    frag.appendChild(span);
-  }
-  els.calWeekdays.replaceChildren(frag);
-}
-
-/** Build the 6×7 grid of day buttons for `calendarMonth`. */
-function renderCalendar() {
-  const month = Number(calendarMonth.slice(5, 7));
-  els.calTitle.textContent = formatMonth(calendarMonth);
-
-  const today = toISODate(new Date());
-  const withEntries = entryDateSet();
-
-  const frag = document.createDocumentFragment();
-  for (const iso of calendarGrid(calendarMonth)) {
-    const d = fromISODate(iso);
-
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "cal-day";
-    btn.dataset.date = iso;
-    btn.textContent = String(d.getDate());
-    btn.setAttribute("role", "gridcell");
-    btn.setAttribute("aria-label", longDateOf(iso));
-
-    if (d.getMonth() !== month - 1) btn.classList.add("outside");
-    if (iso === today) btn.classList.add("today");
-    if (iso === currentDate) {
-      btn.classList.add("selected");
-      btn.setAttribute("aria-selected", "true");
-    }
-    if (withEntries.has(iso)) btn.classList.add("has-entry");
-
-    frag.appendChild(btn);
-  }
-  els.calGrid.replaceChildren(frag);
-}
-
-function isCalendarOpen() {
-  return !els.calendar.hidden;
-}
-
-function openCalendar() {
-  // Always open on the month of the selected date.
-  calendarMonth = monthStartOf(currentDate || toISODate(new Date()));
-  renderCalendar();
-  els.calendar.hidden = false;
-  els.dateLabel.setAttribute("aria-expanded", "true");
-
-  // Focus the selected day so arrow keys work immediately.
-  const target =
-    els.calGrid.querySelector(".cal-day.selected") ||
-    els.calGrid.querySelector(".cal-day.today") ||
-    els.calGrid.querySelector(".cal-day");
-  if (target) target.focus();
-}
-
-function closeCalendar({ restoreFocus = false } = {}) {
-  if (!isCalendarOpen()) return;
-  els.calendar.hidden = true;
-  els.dateLabel.setAttribute("aria-expanded", "false");
-  if (restoreFocus) els.dateLabel.focus();
-}
-
-function toggleCalendar() {
-  if (isCalendarOpen()) closeCalendar({ restoreFocus: true });
-  else openCalendar();
-}
-
-/** Move the calendar view by `months` without changing the selected date. */
-function stepCalendarMonth(months) {
-  calendarMonth = shiftMonth(calendarMonth, months);
-  renderCalendar();
-}
-
-/** Move focus to the day `days` away from the currently focused cell. */
-function moveCalendarFocus(days) {
-  const cells = [...els.calGrid.querySelectorAll(".cal-day")];
-  const index = cells.indexOf(document.activeElement);
-  if (index < 0) return;
-
-  const next = cells[index + days];
-  if (next) {
-    next.focus();
-    return;
-  }
-
-  // Ran off the grid: flip the month and land on the matching edge.
-  stepCalendarMonth(days > 0 ? 1 : -1);
-  const fresh = [...els.calGrid.querySelectorAll(".cal-day")];
-  const edge = days > 0 ? fresh[0] : fresh[fresh.length - 1];
-  if (edge) edge.focus();
-}
-
-/** Pick a date from the calendar and close it. */
-function pickCalendarDate(iso) {
-  closeCalendar({ restoreFocus: true });
-  selectDate(iso);
-}
-
-// ---------------------------------------------------------------------------
-// Import
-// ---------------------------------------------------------------------------
-
-/** Result of the last scan, or `null` when the dialog is closed. */
-let importScan = null;
-/** Whether the last import finished, so the footer switches to "close". */
-let importDone = false;
-
-/** Badge label for each import status, resolved at render time. */
-const IMPORT_BADGE_KEYS = {
-  ready: "import.statReady",
-  conflict: "import.statConflict",
-  failed: "import.statFailed",
-};
-
-/** Build one row of the import preview list. */
-function createImportRow(file) {
-  const row = document.createElement("div");
-  row.className = `import-row ${file.status}`;
-  row.setAttribute("role", "listitem");
-
-  const date = document.createElement("span");
-  date.className = "row-date";
-  date.textContent = file.date || file.name;
-
-  const title = document.createElement("span");
-  title.className = "row-title" + (file.title ? "" : " empty");
-  title.textContent = file.title || t("common.untitled");
-  title.title = file.title || "";
-
-  const badge = document.createElement("span");
-  badge.className = "row-badge";
-  const badgeKey = IMPORT_BADGE_KEYS[file.status];
-  badge.textContent = badgeKey ? t(badgeKey) : file.status;
-
-  row.append(date, title, badge);
-
-  // Conflicts and failures explain themselves on a second line.
-  if (file.reason) {
-    const reason = document.createElement("span");
-    reason.className = "row-reason";
-    reason.textContent = file.reason;
-    row.append(reason);
-  }
-
-  return row;
-}
-
-/** Render the scan result into the dialog. */
-function renderImportScan(scan) {
-  importScan = scan;
-  importDone = false;
-
-  els.importDir.textContent = scan.dir;
-  els.importReady.textContent = String(scan.ready);
-  els.importConflicts.textContent = String(scan.conflicts);
-  els.importFailed.textContent = String(scan.failed);
-
-  // The overwrite switch only makes sense when something would collide.
-  els.importOverwriteRow.hidden = scan.conflicts === 0;
-  els.importOverwrite.checked = false;
-
-  els.importResult.hidden = true;
-  els.importResult.replaceChildren();
-  els.importError.textContent = "";
-  hideImportProgress();
-
-  if (scan.files.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "import-row failed";
-    empty.textContent = t("import.emptyFolder");
-    els.importList.replaceChildren(empty);
-  } else {
-    const frag = document.createDocumentFragment();
-    for (const file of scan.files) frag.appendChild(createImportRow(file));
-    els.importList.replaceChildren(frag);
-  }
-
-  els.importConfirm.textContent = t("sidebar.import");
-  els.importConfirm.disabled = scan.ready === 0 && scan.conflicts === 0;
-  els.importCancel.textContent = t("common.cancel");
-}
-
-/** Show the dialog in a loading state while the folder is scanned. */
-function showImportLoading(dir) {
-  importScan = null;
-  importDone = false;
-  els.importDir.textContent = dir;
-  els.importReady.textContent = "0";
-  els.importConflicts.textContent = "0";
-  els.importFailed.textContent = "0";
-  els.importOverwriteRow.hidden = true;
-  els.importResult.hidden = true;
-  els.importError.textContent = "";
-  hideImportProgress();
-  els.importConfirm.disabled = true;
-  els.importConfirm.textContent = t("sidebar.import");
-  els.importCancel.textContent = t("common.cancel");
-
-  const loading = document.createElement("div");
-  loading.className = "import-row";
-  loading.textContent = t("import.scanning");
-  els.importList.replaceChildren(loading);
-
-  els.importOverlay.hidden = false;
-}
-
-/**
- * Show the progress bar at `done / total`.
- *
- * The bar is driven by the backend's `import-progress` event, which fires once
- * per finished file. `total` is clamped to at least 1 so an empty batch cannot
- * produce a division by zero.
- */
-function setImportProgress(done, total) {
-  const safeTotal = Math.max(total, 1);
-  const percent = Math.min(100, Math.round((done / safeTotal) * 100));
-
-  els.importProgress.hidden = false;
-  els.importProgressBar.style.width = `${percent}%`;
-  els.importProgressCount.textContent = `${done} / ${total}`;
-  els.importProgressTrack.setAttribute("aria-valuenow", String(percent));
-}
-
-/** Hide the progress bar (before a scan, or once the report is shown). */
-function hideImportProgress() {
-  els.importProgress.hidden = true;
-  els.importProgressBar.style.width = "0%";
-  els.importProgressCount.textContent = "0 / 0";
-  els.importProgressTrack.setAttribute("aria-valuenow", "0");
-}
-
-function isImportOpen() {
-  return !els.importOverlay.hidden;
-}
-
-function closeImport() {
-  els.importOverlay.hidden = true;
-  importScan = null;
-  importDone = false;
-}
-
-/** Pick a folder, scan it, and show the preview. */
-async function startImport() {
-  let dir;
-  try {
-    dir = await invoke("pick_import_dir");
-  } catch (err) {
-    console.error("pick_import_dir failed:", err);
-    setStatus(t("import.errPicker"));
-    return;
-  }
-  if (!dir) return;
-
-  showImportLoading(dir);
-  try {
-    const scan = await invoke("scan_import", { importDir: dir });
-    renderImportScan(scan);
-  } catch (err) {
-    console.error("scan_import failed:", err);
-    els.importList.replaceChildren();
-    els.importError.textContent =
-      typeof err === "string" ? err : t("import.errScan");
-  }
-}
-
-/** Write the confirmed dates and show the outcome in the same dialog. */
-async function confirmImport() {
-  if (!importScan) return;
-
-  const overwrite = els.importOverwrite.checked;
-  // Conflicts are only included when the user opted into overwriting.
-  const dates = importScan.files
-    .filter(
-      (f) => f.status === "ready" || (overwrite && f.status === "conflict")
-    )
-    .map((f) => f.date)
-    .filter(Boolean);
-
-  if (dates.length === 0) {
-    els.importError.textContent = t("import.errNothing");
-    return;
-  }
-
-  els.importConfirm.disabled = true;
-  els.importConfirm.textContent = t("import.progress");
-  els.importError.textContent = "";
-  setImportProgress(0, dates.length);
-
-  // The backend imports on a thread pool and reports each finished file.
-  const onProgress = (event) => {
-    const { done, total } = event.payload || {};
-    if (typeof done !== "number" || typeof total !== "number") return;
-    setImportProgress(done, total);
-  };
-  let unlisten = null;
-  try {
-    unlisten = await listen("import-progress", onProgress);
-  } catch (err) {
-    // Progress is cosmetic; the import still works without it.
-    console.warn("import-progress listener failed:", err);
-  }
-
-  try {
-    const report = await invoke("run_import", {
-      importDir: importScan.dir,
-      dates,
-      overwrite,
-    });
-    renderImportReport(report);
-    await refreshList();
-  } catch (err) {
-    console.error("run_import failed:", err);
-    els.importError.textContent =
-      typeof err === "string" ? err : t("import.errImport");
-    els.importConfirm.disabled = false;
-    els.importConfirm.textContent = t("sidebar.import");
-    hideImportProgress();
-  } finally {
-    if (typeof unlisten === "function") unlisten();
-  }
-}
-
-/** Replace the preview with the import outcome. */
-function renderImportReport(report) {
-  importDone = true;
-
-  const lines = [];
-  if (report.imported.length > 0) {
-    lines.push(t("import.reportImported", { count: report.imported.length }));
-  }
-  if (report.skipped.length > 0) {
-    lines.push(t("import.reportSkipped", { count: report.skipped.length }));
-  }
-  if (report.failed.length > 0) {
-    lines.push(t("import.reportFailed", { count: report.failed.length }));
-  }
-  if (lines.length === 0) {
-    lines.push(t("import.reportNoChange"));
-  }
-
-  const frag = document.createDocumentFragment();
-  for (const line of lines) {
-    const p = document.createElement("div");
-    p.className = "result-line";
-    p.textContent = line;
-    frag.appendChild(p);
-  }
-  for (const failure of report.failed) {
-    const p = document.createElement("div");
-    p.className = "result-fail";
-    p.textContent = `${failure.name}：${failure.reason}`;
-    frag.appendChild(p);
-  }
-
-  els.importResult.replaceChildren(frag);
-  els.importResult.hidden = false;
-  els.importList.replaceChildren();
-  hideImportProgress();
-
-  els.importConfirm.disabled = false;
-  els.importConfirm.textContent = t("common.done");
-  els.importCancel.textContent = t("common.close");
-  els.importOverwriteRow.hidden = true;
-
-  setStatus(
-    t("import.statusImported", { count: report.imported.length }),
-    true
-  );
-}
+/** @type {ReturnType<typeof createCalendar>} */
+let calendar;
+/** @type {ReturnType<typeof createImportDialog>} */
+let importDialog;
+/** @type {ReturnType<typeof createStatsDialog>} */
+let statsDialog;
+/** @type {ReturnType<typeof createSettingsDialog>} */
+let settingsDialog;
+/** @type {ReturnType<typeof createLockScreen>} */
+let lockScreen;
 
 // ---------------------------------------------------------------------------
 // Status / word count
@@ -825,23 +342,23 @@ function renderLangToggle() {
  */
 function refreshForLocale() {
   renderLangToggle();
-  renderLockScreen();
-  renderWeekdayHeaders();
+  lockScreen.renderLockScreen();
+  calendar.renderWeekdayHeaders();
   renderDateLabel();
   renderFavouriteButton();
   applyTheme();
   updateWordCount();
-  if (isCalendarOpen()) renderCalendar();
+  if (calendar.isCalendarOpen()) calendar.renderCalendar();
   if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
 
   // The statistics dialog builds its labels in JS, so it has to be redrawn
   // when the language changes while it is open.
-  if (isStatsOpen()) renderStats();
+  if (statsDialog.isStatsOpen()) statsDialog.renderStats();
 
   // The import dialog is rebuilt from the last scan so its badges and buttons
   // follow the new language. A finished report is left alone: it is a record of
   // what happened, and re-rendering it would need the report object again.
-  if (importScan && !importDone) renderImportScan(importScan);
+  importDialog.refreshForLocale();
 }
 
 /** Wire the language toggle. */
@@ -1031,7 +548,7 @@ function renderList() {
 
   // The calendar marks days that already have an entry, so it has to follow
   // the list. Only redraw while it is actually open.
-  if (isCalendarOpen()) renderCalendar();
+  if (calendar.isCalendarOpen()) calendar.renderCalendar();
 
   if (visibleEntries.length === 0) {
     els.listSpacer.style.height = "0px";
@@ -1101,7 +618,7 @@ function scrollDateIntoView(date) {
 async function refreshList() {
   // Titles are encrypted, so listing only works while unlocked. Never leave
   // stale titles on screen after the key has been dropped.
-  if (!vaultInitialized) {
+  if (!lockScreen.isVaultInitialized()) {
     allEntries = [];
     renderList();
     return;
@@ -1305,262 +822,37 @@ async function deleteCurrent() {
     setStatus(t("status.deleteFailed"));
   }
 }
-
 // ---------------------------------------------------------------------------
-// Lock / unlock
+// Editor reset / lock helpers
 // ---------------------------------------------------------------------------
+//
+// `changeDiaryDir` and `lockNow` live in `lock-screen.js`, but they need to
+// drop the editor state and flush the pending save before the session key is
+// wiped. Those two operations are injected as callbacks so the lock screen
+// module never touches the editor state directly.
 
-function showLockScreen(message = "") {
-  els.app.hidden = true;
-  els.lockScreen.hidden = false;
-  els.lockError.textContent = message;
-  els.passphrase.value = "";
-  els.passphraseConfirm.value = "";
-  els.passphrase.focus();
-}
-
-// ---------------------------------------------------------------------------
-// Argon2id parameters (advanced options, first run only)
-// ---------------------------------------------------------------------------
-
-/** Bounds and defaults reported by the backend. */
-let kdfDefaults = null;
-
-/** Populate the advanced panel from the backend's defaults. */
-async function loadKdfDefaults() {
-  try {
-    kdfDefaults = await invoke("get_kdf_defaults");
-  } catch (err) {
-    console.error("get_kdf_defaults failed:", err);
-    return;
-  }
-  els.kdfMemory.min = kdfDefaults.minMemoryKib / 1024;
-  els.kdfMemory.max = kdfDefaults.maxMemoryKib / 1024;
-  els.kdfIterations.min = kdfDefaults.minIterations;
-  els.kdfIterations.max = kdfDefaults.maxIterations;
-  els.kdfParallelism.min = kdfDefaults.minParallelism;
-  els.kdfParallelism.max = kdfDefaults.maxParallelism;
-  resetKdfFields();
-}
-
-/** Restore the recommended (OWASP) parameters. */
-function resetKdfFields() {
-  if (!kdfDefaults) return;
-  els.kdfMemory.value = kdfDefaults.memoryKib / 1024;
-  els.kdfIterations.value = kdfDefaults.iterations;
-  els.kdfParallelism.value = kdfDefaults.parallelism;
-  updateKdfEstimate();
-}
-
-/** Read the panel as `{ memoryKib, iterations, parallelism }`. */
-function readKdfParams() {
-  return {
-    memoryKib: Math.round(Number(els.kdfMemory.value) * 1024),
-    iterations: Math.round(Number(els.kdfIterations.value)),
-    parallelism: Math.round(Number(els.kdfParallelism.value)),
-  };
+/**
+ * Drop everything the editor is holding.
+ *
+ * Called after the session key is gone, so nothing here may touch the backend.
+ */
+function resetEditorState() {
+  currentDate = "";
+  savedTitle = "";
+  savedContent = "";
+  allEntries = [];
+  resetList();
+  els.title.value = "";
+  els.content.value = "";
 }
 
 /**
- * Rough unlock-time estimate.
+ * Flush the pending autosave, then lock the session.
  *
- * Argon2id cost is dominated by `memory * iterations`; the constant is a
- * deliberately conservative guess so the label errs on the slow side.
+ * The write has to happen *before* `invoke("lock")`, otherwise the last
+ * keystrokes would be lost when the key is dropped.
  */
-function updateKdfEstimate() {
-  const { memoryKib, iterations } = readKdfParams();
-  if (!Number.isFinite(memoryKib) || !Number.isFinite(iterations)) {
-    els.kdfEstimate.textContent = "";
-    return;
-  }
-  const seconds = (memoryKib / 1024) * iterations * 0.02;
-  els.kdfEstimate.textContent = t("lock.kdfEstimate", {
-    seconds: seconds.toFixed(2),
-  });
-}
-
-/** Apply the lock screen layout for the current setup state. */
-function renderLockScreen() {
-  // The path field is only shown while the app has no settings file yet.
-  els.pathField.hidden = configured;
-  // KDF parameters can only be chosen when a new vault is being created.
-  els.advancedField.hidden = vaultInitialized;
-
-  if (vaultInitialized) {
-    // A vault exists at the selected location: ask for the passphrase only.
-    els.lockSubtitle.textContent = configured
-      ? t("lock.subtitle.unlock")
-      : t("lock.subtitle.existing");
-    els.passphraseConfirm.hidden = true;
-    els.passphrase.placeholder = t("lock.passphrase");
-    els.passphrase.autocomplete = "current-password";
-    els.lockSubmit.textContent = t("lock.submitUnlock");
-  } else if (configured) {
-    // Configured folder but no vault yet (e.g. an empty folder was picked).
-    els.lockSubtitle.textContent = t("lock.subtitle.newInFolder");
-    els.passphraseConfirm.hidden = false;
-    els.passphrase.placeholder = t("lock.passphraseSet");
-    els.passphrase.autocomplete = "new-password";
-    els.lockSubmit.textContent = t("lock.submitCreate");
-  } else {
-    // First run: pick a folder, then choose a passphrase.
-    els.lockSubtitle.textContent = t("lock.subtitle.firstRun");
-    els.passphraseConfirm.hidden = false;
-    els.passphrase.placeholder = t("lock.passphraseSet");
-    els.passphrase.autocomplete = "new-password";
-    els.lockSubmit.textContent = t("lock.submitCreate");
-  }
-}
-
-async function enterApp() {
-  els.lockScreen.hidden = true;
-  els.app.hidden = false;
-
-  try {
-    const path = await invoke("diary_path");
-    els.diaryPath.textContent = path;
-    els.diaryPath.title = path;
-  } catch (err) {
-    console.error("diary_path failed:", err);
-  }
-
-  // Start the idle countdown as soon as the diary is visible. The duration was
-  // read from the settings file during `init()`.
-  resetAutoLockTimer();
-
-  await refreshList();
-
-  const today = await invoke("today");
-  await selectDate(today);
-}
-
-/** Re-read the settings file and refresh the lock screen state. */
-async function loadSettings() {
-  const settings = await invoke("get_settings");
-  configured = settings.configured;
-  els.diaryDir.value = settings.diaryDir ?? settings.defaultDir ?? "";
-  // Keep the idle timer in sync with whatever is on disk.
-  setAutoLockMinutes(settings.autoLockMinutes ?? 0);
-  return settings;
-}
-
-/**
- * Check whether a directory already holds a vault.
- *
- * With no argument the configured directory is inspected; with a path the
- * given directory is inspected instead (used by the setup screen).
- */
-async function detectVault(path) {
-  try {
-    return await invoke("vault_exists", path ? { path } : {});
-  } catch (err) {
-    console.error("vault_exists failed:", err);
-    return false;
-  }
-}
-
-/** Re-check whether the diary directory already holds a vault. */
-async function refreshVaultState() {
-  vaultInitialized = await detectVault();
-}
-
-/**
- * Re-detect the vault in the path currently typed on the setup screen.
- *
- * This is what makes an existing diary folder open in unlock mode instead of
- * failing with "Vault already exists".
- */
-async function refreshSetupVaultState() {
-  const dir = els.diaryDir.value.trim();
-  if (!dir) {
-    vaultInitialized = false;
-    renderLockScreen();
-    return;
-  }
-  vaultInitialized = await detectVault(dir);
-  renderLockScreen();
-}
-
-async function handleUnlockSubmit(event) {
-  event.preventDefault();
-  els.lockError.textContent = "";
-
-  const passphrase = els.passphrase.value;
-  if (!passphrase) {
-    els.lockError.textContent = t("lock.errNoPassphrase");
-    return;
-  }
-
-  const creating = !vaultInitialized;
-  if (creating) {
-    const confirmValue = els.passphraseConfirm.value;
-    if (passphrase.length < 6) {
-      els.lockError.textContent = t("lock.errTooShort");
-      return;
-    }
-    if (passphrase !== confirmValue) {
-      els.lockError.textContent = t("lock.errMismatch");
-      return;
-    }
-  }
-
-  els.lockSubmit.disabled = true;
-  try {
-    if (!configured) {
-      const dir = els.diaryDir.value.trim();
-      if (!dir) {
-        els.lockError.textContent = t("lock.errNoDir");
-        return;
-      }
-      // Re-check right before committing: the folder may already hold a vault.
-      vaultInitialized = await detectVault(dir);
-      await invoke("set_diary_dir", { path: dir });
-      configured = true;
-    }
-
-    if (vaultInitialized) {
-      await invoke("unlock", { passphrase });
-    } else {
-      const kdf = readKdfParams();
-      if (
-        !Number.isFinite(kdf.memoryKib) ||
-        !Number.isFinite(kdf.iterations) ||
-        !Number.isFinite(kdf.parallelism)
-      ) {
-        els.lockError.textContent = t("lock.errKdfNaN");
-        return;
-      }
-      await invoke("create_vault", { passphrase, kdf });
-      vaultInitialized = true;
-    }
-    await enterApp();
-  } catch (err) {
-    console.error("unlock failed:", err);
-    els.lockError.textContent =
-      typeof err === "string" ? err : t("lock.errUnlockFailed");
-    els.passphrase.select();
-  } finally {
-    els.lockSubmit.disabled = false;
-  }
-}
-
-/** Open the native folder picker and store the result in the path field. */
-async function browseForDir() {
-  els.lockError.textContent = "";
-  try {
-    const picked = await invoke("pick_diary_dir");
-    if (picked) {
-      els.diaryDir.value = picked;
-      await refreshSetupVaultState();
-    }
-  } catch (err) {
-    console.error("pick_diary_dir failed:", err);
-    els.lockError.textContent = t("lock.errPicker");
-  }
-}
-
-/** Change the diary location from the sidebar (must be locked first). */
-async function changeDiaryDir() {
+async function lockAndFlush() {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -1571,63 +863,6 @@ async function changeDiaryDir() {
   } catch (err) {
     console.error("lock failed:", err);
   }
-
-  currentDate = "";
-  savedTitle = "";
-  savedContent = "";
-  allEntries = [];
-  resetList();
-  closeCalendar();
-  closeImport();
-  closeSettings();
-  renderDateLabel();
-  els.title.value = "";
-  els.content.value = "";
-
-  // Show the lock screen with the path field so the user can pick a new folder.
-  // `configured` is cleared so the path field is visible, but the vault state
-  // is *not* forced to false: the folder the user lands on may already hold a
-  // diary, in which case the form must ask for the passphrase rather than
-  // offering to create a new vault.
-  configured = false;
-  showLockScreen();
-  els.diaryDir.focus();
-  els.diaryDir.select();
-  await refreshSetupVaultState();
-}
-
-async function lockNow() {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    saveTimer = null;
-    await saveNow();
-  }
-  try {
-    await invoke("lock");
-  } catch (err) {
-    console.error("lock failed:", err);
-  }
-  currentDate = "";
-  savedTitle = "";
-  savedContent = "";
-  allEntries = [];
-  resetList();
-  closeCalendar();
-  closeImport();
-  renderDateLabel();
-  els.title.value = "";
-  els.content.value = "";
-
-  // Locking must return to the *unlock* form, not the first-run setup form.
-  // `configured` stays true (the settings file is still there) and the vault
-  // still exists, so re-render instead of leaving the previous layout on
-  // screen. Re-detect the vault so a folder that was swapped out from under
-  // us is handled correctly.
-  stopAutoLockTimer();
-  closeSettings();
-  await refreshVaultState();
-  showLockScreen();
-  renderLockScreen();
 }
 
 // ---------------------------------------------------------------------------
@@ -1698,510 +933,190 @@ function initAutoLock() {
 }
 
 // ---------------------------------------------------------------------------
-// Settings dialog
-// ---------------------------------------------------------------------------
-
-/** Whether the settings dialog is open. */
-function isSettingsOpen() {
-  return !els.settingsOverlay.hidden;
-}
-
-/** Fill the auto-lock dropdown from the choices the backend allows. */
-function renderAutoLockChoices(choices, current) {
-  els.autoLockSelect.replaceChildren();
-  for (const minutes of choices) {
-    const option = document.createElement("option");
-    option.value = String(minutes);
-    option.textContent =
-      minutes === 0
-        ? t("settings.autoLockNever")
-        : t("settings.autoLockMinutes", { n: minutes });
-    if (minutes === current) option.selected = true;
-    els.autoLockSelect.append(option);
-  }
-}
-
-/** Show the Argon2id parameters currently recorded in the vault. */
-function renderVaultKdf(params) {
-  if (!params) {
-    els.vaultKdf.textContent = t("settings.vaultKdfLegacy");
-    return;
-  }
-  els.vaultKdf.textContent = t("settings.vaultKdf", {
-    memory: Math.round(params.memoryKib / 1024),
-    iterations: params.iterations,
-    parallelism: params.parallelism,
-  });
-}
-
-/** Copy the vault's current parameters into the advanced inputs. */
-function fillSettingsKdf(params) {
-  if (!params) return;
-  els.settingsKdfMemory.value = Math.round(params.memoryKib / 1024);
-  els.settingsKdfIterations.value = params.iterations;
-  els.settingsKdfParallelism.value = params.parallelism;
-}
-
-/** Read the advanced inputs as a KdfView payload. */
-function readSettingsKdf() {
-  return {
-    memoryKib: Number(els.settingsKdfMemory.value) * 1024,
-    iterations: Number(els.settingsKdfIterations.value),
-    parallelism: Number(els.settingsKdfParallelism.value),
-  };
-}
-
-/** Open the settings dialog and populate it from the backend. */
-async function openSettings() {
-  els.settingsError.textContent = "";
-  els.settingsCalibrateNote.textContent = "";
-  els.settingsCurrentPass.value = "";
-  els.settingsNewPass.value = "";
-  els.settingsNewPassConfirm.value = "";
-
-  try {
-    const settings = await invoke("get_settings");
-    renderAutoLockChoices(
-      settings.autoLockChoices ?? [0, 1, 5, 10, 15, 30, 60],
-      settings.autoLockMinutes ?? 0
-    );
-    const params = await invoke("get_vault_kdf");
-    renderVaultKdf(params);
-    fillSettingsKdf(params);
-  } catch (err) {
-    console.error("settings load failed:", err);
-    els.settingsError.textContent = t("settings.errSave", {
-      message: typeof err === "string" ? err : String(err),
-    });
-  }
-
-  els.settingsOverlay.hidden = false;
-  els.settingsCurrentPass.focus();
-}
-
-/** Close the settings dialog without saving. */
-function closeSettings() {
-  els.settingsOverlay.hidden = true;
-  els.settingsError.textContent = "";
-  // Never leave a passphrase sitting in a hidden input.
-  els.settingsCurrentPass.value = "";
-  els.settingsNewPass.value = "";
-  els.settingsNewPassConfirm.value = "";
-}
-
-// ---------------------------------------------------------------------------
-// Statistics dialog
+// Controller construction
 // ---------------------------------------------------------------------------
 //
-// Everything here is derived from `allEntries`, the metadata the sidebar
-// already holds: date, title, size and the favourite flag. No extra backend
-// call is needed, and nothing is cached, so locking the diary (which clears
-// `allEntries`) cannot leave stale numbers on screen.
+// Every controller is created here, after all the callbacks it needs are
+// defined. The order matters only in that `lockScreen` is built last: it is the
+// one that closes over the other controllers.
 
-/** Whether the statistics dialog is open. */
-function isStatsOpen() {
-  return !els.statsOverlay.hidden;
-}
+function createControllers() {
+  calendar = createCalendar({
+    els,
+    getCurrentDate: () => currentDate,
+    selectDate,
+    getEntries: () => allEntries,
+    formatMonth,
+    formatDate,
+    weekdayName,
+    t,
+  });
 
-/**
- * Render one bar chart.
- *
- * `items` is `[{ label, count, title }]`. Heights are relative to the tallest
- * bucket so a quiet month still shows a readable shape; an all-zero chart
- * falls back to a flat row of stubs. The maths lives in `lib/stats.js`; this
- * function only touches the DOM.
- */
-function renderBarChart(container, items, extraClass) {
-  container.replaceChildren();
-  container.className = "stats-chart" + (extraClass ? ` ${extraClass}` : "");
+  importDialog = createImportDialog({
+    els,
+    invoke,
+    listen,
+    t,
+    setStatus,
+    refreshList,
+  });
 
-  const fractions = barFractions(items.map((item) => item.count));
-  items.forEach((item, index) => {
-    const bar = document.createElement("div");
-    bar.className = "stats-bar";
-    bar.title = item.title;
+  statsDialog = createStatsDialog({
+    els,
+    getEntries: () => allEntries,
+    t,
+    formatDate,
+    weekdayName,
+  });
 
-    const fill = document.createElement("div");
-    fill.className = "stats-bar-fill" + (item.count === 0 ? " empty" : "");
-    fill.style.setProperty("--v", fractions[index]);
+  settingsDialog = createSettingsDialog({
+    els,
+    invoke,
+    t,
+    setStatus,
+    setAutoLockMinutes,
+  });
 
-    const label = document.createElement("span");
-    label.className = "stats-bar-label";
-    label.textContent = item.label;
-
-    bar.append(fill, label);
-    container.append(bar);
+  lockScreen = createLockScreen({
+    els,
+    invoke,
+    t,
+    setAutoLockMinutes,
+    enterApp,
+    resetAutoLockTimer,
+    stopAutoLockTimer,
+    refreshList,
+    selectDate,
+    resetEditorState,
+    closeCalendar: () => calendar.closeCalendar(),
+    closeImport: () => importDialog.closeImport(),
+    closeSettings: () => settingsDialog.closeSettings(),
+    renderDateLabel,
+    lockAndFlush,
   });
 }
 
-/** Fill the dialog from `allEntries`. */
-function renderStats() {
-  const total = allEntries.length;
-  els.statsTotal.textContent = String(total);
-  els.statsFavourites.textContent = String(
-    allEntries.filter((e) => e.favourite).length
-  );
-
-  const { current, longest } = computeStreaks(allEntries);
-  els.statsStreak.textContent = t("stats.days", { n: current });
-  els.statsLongest.textContent = t("stats.days", { n: longest });
-
-  if (total === 0) {
-    els.statsRange.textContent = "";
-    els.statsMonths.replaceChildren();
-    els.statsWeekdays.replaceChildren();
-
-    const empty = document.createElement("p");
-    empty.className = "stats-empty";
-    empty.textContent = t("stats.empty");
-    els.statsMonths.append(empty);
-    return;
-  }
-
-  // `allEntries` is newest first, so the last element is the oldest entry.
-  els.statsRange.textContent = t("stats.range", {
-    first: longDateOf(allEntries[total - 1].date),
-    last: longDateOf(allEntries[0].date),
-  });
-
-  renderBarChart(
-    els.statsMonths,
-    monthlyBuckets(allEntries, 12).map((bucket) => ({
-      label: t("stats.monthLabel", { month: bucket.month }),
-      count: bucket.count,
-      title: t("stats.count", { n: bucket.count }),
-    }))
-  );
-
-  renderBarChart(
-    els.statsWeekdays,
-    weekdayBuckets(allEntries).map((count, day) => ({
-      label: weekdayName(day),
-      count,
-      title: t("stats.count", { n: count }),
-    })),
-    "weekdays"
-  );
-}
-
-/** Open the statistics dialog. */
-function openStats() {
-  renderStats();
-  els.statsOverlay.hidden = false;
-  els.statsDone.focus();
-}
-
-/** Close the statistics dialog. */
-function closeStats() {
-  els.statsOverlay.hidden = true;
-}
-
-/** Measure this machine and fill the advanced inputs with the result. */
-async function calibrateKdf() {
-  els.settingsError.textContent = "";
-  els.settingsCalibrate.disabled = true;
-  els.settingsCalibrateNote.textContent = t("settings.calibrating");
-  try {
-    const params = await invoke("calibrate_kdf");
-    fillSettingsKdf(params);
-    els.settingsCalibrateNote.textContent = t("settings.calibrated", {
-      memory: Math.round(params.memoryKib / 1024),
-      iterations: params.iterations,
-      parallelism: params.parallelism,
-    });
-  } catch (err) {
-    console.error("calibrate_kdf failed:", err);
-    els.settingsCalibrateNote.textContent = "";
-    els.settingsError.textContent = t("settings.errCalibrate", {
-      message: typeof err === "string" ? err : String(err),
-    });
-  } finally {
-    els.settingsCalibrate.disabled = false;
-  }
-}
-
 /**
- * Save the dialog.
+ * Enter the diary after a successful unlock.
  *
- * The auto-lock preference and the passphrase/KDF change are independent: the
- * former is always written, the latter only when the user typed a current
- * passphrase. That way the dialog can be used for either purpose alone.
+ * Lives here rather than in `lock-screen.js` because it is the hand-off point
+ * between the lock screen and the editor: it reveals the app, then lets the
+ * editor pick today's entry.
  */
-async function saveSettings() {
-  els.settingsError.textContent = "";
+async function enterApp() {
+  els.lockScreen.hidden = true;
+  els.app.hidden = false;
 
-  const current = els.settingsCurrentPass.value;
-  const next = els.settingsNewPass.value;
-  const confirm = els.settingsNewPassConfirm.value;
-  const wantsPassChange = current !== "" || next !== "" || confirm !== "";
-
-  if (wantsPassChange) {
-    if (!current) {
-      els.settingsError.textContent = t("settings.errCurrentRequired");
-      return;
-    }
-    if (next !== confirm) {
-      els.settingsError.textContent = t("settings.errMismatch");
-      return;
-    }
-  }
-
-  els.settingsSave.disabled = true;
   try {
-    const minutes = Number(els.autoLockSelect.value);
-    await invoke("set_auto_lock", { minutes });
-    setAutoLockMinutes(minutes);
-
-    if (wantsPassChange) {
-      const kdf = readSettingsKdf();
-      if (
-        !Number.isFinite(kdf.memoryKib) ||
-        !Number.isFinite(kdf.iterations) ||
-        !Number.isFinite(kdf.parallelism)
-      ) {
-        els.settingsError.textContent = t("lock.errKdfNaN");
-        return;
-      }
-      await invoke("change_passphrase", {
-        currentPassphrase: current,
-        newPassphrase: next,
-        kdf,
-      });
-      // The vault now records the parameters we just sent.
-      renderVaultKdf(kdf);
-    }
-
-    closeSettings();
-    setStatus(t("settings.saved"), true);
+    const path = await invoke("diary_path");
+    els.diaryPath.textContent = path;
+    els.diaryPath.title = path;
   } catch (err) {
-    console.error("save settings failed:", err);
-    els.settingsError.textContent = t("settings.errSave", {
-      message: typeof err === "string" ? err : String(err),
-    });
-  } finally {
-    els.settingsSave.disabled = false;
+    console.error("diary_path failed:", err);
   }
+
+  // Start the idle countdown as soon as the diary is visible. The duration was
+  // read from the settings file during `init()`.
+  resetAutoLockTimer();
+
+  await refreshList();
+
+  const today = await invoke("today");
+  await selectDate(today);
 }
 
 // ---------------------------------------------------------------------------
 // Event wiring
 // ---------------------------------------------------------------------------
+//
+// Every listener lives in `wiring.js`; this file only supplies the callbacks.
+// Keeping the wiring out of the module body is what makes `main.js` importable
+// from a test without a live webview.
 
-els.lockForm.addEventListener("submit", handleUnlockSubmit);
-els.browseDir.addEventListener("click", browseForDir);
-els.kdfReset.addEventListener("click", resetKdfFields);
-els.kdfMemory.addEventListener("input", updateKdfEstimate);
-els.kdfIterations.addEventListener("input", updateKdfEstimate);
-els.kdfParallelism.addEventListener("input", updateKdfEstimate);
-
-// Detect an existing vault as soon as the user edits the path, so a returning
-// user is switched to the unlock form instead of being asked to create one.
-let pathDetectTimer = null;
-els.diaryDir.addEventListener("input", () => {
-  if (pathDetectTimer) clearTimeout(pathDetectTimer);
-  pathDetectTimer = setTimeout(() => {
-    pathDetectTimer = null;
-    refreshSetupVaultState();
-  }, 350);
-});
-
-els.title.addEventListener("input", () => {
-  if (suppressInput) return;
-  scheduleSave();
-});
-
-els.content.addEventListener("input", () => {
-  if (suppressInput) return;
-  updateWordCount();
-  scheduleSave();
-});
-
-// The native input is hidden and only mirrors the selected date, so it never
-// fires `change` from user interaction. The calendar below is the real UI.
-els.dateLabel.addEventListener("click", toggleCalendar);
-
-els.calPrev.addEventListener("click", () => stepCalendarMonth(-1));
-els.calNext.addEventListener("click", () => stepCalendarMonth(1));
-
-// Clicking the month title jumps back to the month of the selected date.
-els.calTitle.addEventListener("click", () => {
-  calendarMonth = monthStartOf(currentDate || toISODate(new Date()));
-  renderCalendar();
-});
-
-els.calToday.addEventListener("click", async () => {
-  const today = await invoke("today");
-  pickCalendarDate(today);
-});
-
-els.calGrid.addEventListener("click", (e) => {
-  const cell = e.target.closest(".cal-day");
-  if (cell) pickCalendarDate(cell.dataset.date);
-});
-
-// Arrow keys move the focus ring, PageUp/PageDown flip the month.
-els.calGrid.addEventListener("keydown", (e) => {
-  const moves = {
-    ArrowLeft: -1,
-    ArrowRight: 1,
-    ArrowUp: -7,
-    ArrowDown: 7,
-  };
-  if (e.key in moves) {
-    e.preventDefault();
-    moveCalendarFocus(moves[e.key]);
-  } else if (e.key === "PageUp") {
-    e.preventDefault();
-    stepCalendarMonth(-1);
-  } else if (e.key === "PageDown") {
-    e.preventDefault();
-    stepCalendarMonth(1);
-  }
-});
-
-// Clicking anywhere outside the popup dismisses it.
-document.addEventListener("mousedown", (e) => {
-  if (!isCalendarOpen()) return;
-  if (els.calendar.contains(e.target) || els.dateLabel.contains(e.target))
-    return;
-  closeCalendar();
-});
-
-els.prevDay.addEventListener("click", () =>
-  selectDate(shiftDate(currentDate, -1))
-);
-els.nextDay.addEventListener("click", () =>
-  selectDate(shiftDate(currentDate, 1))
-);
-
-els.newToday.addEventListener("click", async () => {
-  const today = await invoke("today");
-  await selectDate(today);
-});
-
-els.deleteBtn.addEventListener("click", deleteCurrent);
-els.favouriteBtn.addEventListener("click", toggleFavourite);
-els.lockBtn.addEventListener("click", lockNow);
-els.changeDirBtn.addEventListener("click", changeDiaryDir);
-
-// Settings dialog.
-els.settingsBtn.addEventListener("click", openSettings);
-els.settingsClose.addEventListener("click", closeSettings);
-els.settingsCancel.addEventListener("click", closeSettings);
-els.settingsSave.addEventListener("click", saveSettings);
-els.settingsCalibrate.addEventListener("click", calibrateKdf);
-els.settingsOverlay.addEventListener("mousedown", (e) => {
-  if (e.target === els.settingsOverlay) closeSettings();
-});
-
-// Statistics dialog.
-els.statsBtn.addEventListener("click", openStats);
-els.statsClose.addEventListener("click", closeStats);
-els.statsDone.addEventListener("click", closeStats);
-els.statsOverlay.addEventListener("mousedown", (e) => {
-  if (e.target === els.statsOverlay) closeStats();
-});
-
-// Sidebar view switch.
-els.viewAll.addEventListener("click", () => setView("all"));
-els.viewFavourites.addEventListener("click", () => setView("favourites"));
-
-// Import dialog.
-els.importBtn.addEventListener("click", startImport);
-els.importClose.addEventListener("click", closeImport);
-els.importCancel.addEventListener("click", closeImport);
-els.importConfirm.addEventListener("click", () => {
-  // After a run the primary button just dismisses the result.
-  if (importDone) closeImport();
-  else confirmImport();
-});
-
-// Clicking the backdrop (but not the dialog itself) dismisses it.
-els.importOverlay.addEventListener("mousedown", (e) => {
-  if (e.target === els.importOverlay) closeImport();
-});
-
-els.search.addEventListener("input", () => {
-  searchQuery = els.search.value;
-  // A new filter changes the row count, so reset the scroll position.
-  els.listScroll.scrollTop = 0;
-  renderList();
-});
-
-// Virtual scrolling: redraw the window as the user scrolls. `passive` keeps
-// the scroll smooth because the handler never calls `preventDefault()`.
-els.listScroll.addEventListener("scroll", () => renderVisibleRows(), {
-  passive: true,
-});
-
-// The viewport height changes with the window, so the rendered window must be
-// recomputed.
-window.addEventListener("resize", () => renderVisibleRows(true));
-
-// Keyboard shortcuts.
-document.addEventListener("keydown", (e) => {
-  const mod = e.ctrlKey || e.metaKey;
-
-  if (e.key === "Escape" && isStatsOpen()) {
-    e.preventDefault();
-    closeStats();
-    return;
-  }
-
-  if (e.key === "Escape" && isImportOpen()) {
-    e.preventDefault();
-    closeImport();
-    return;
-  }
-
-  if (e.key === "Escape" && isCalendarOpen()) {
-    e.preventDefault();
-    closeCalendar({ restoreFocus: true });
-    return;
-  }
-
-  if (mod && e.key.toLowerCase() === "l") {
-    e.preventDefault();
-    if (!els.app.hidden) lockNow();
-  } else if (els.app.hidden) {
-    return;
-  } else if (mod && e.key.toLowerCase() === "s") {
-    e.preventDefault();
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-      saveTimer = null;
-    }
-    saveNow();
-  } else if (mod && e.key.toLowerCase() === "t") {
-    e.preventDefault();
-    els.newToday.click();
-  } else if (mod && e.key.toLowerCase() === "d") {
-    e.preventDefault();
-    toggleFavourite();
-  } else if (e.altKey && e.key === "ArrowLeft") {
-    e.preventDefault();
-    selectDate(shiftDate(currentDate, -1));
-  } else if (e.altKey && e.key === "ArrowRight") {
-    e.preventDefault();
-    selectDate(shiftDate(currentDate, 1));
-  }
-});
-
-// Save before the window closes so nothing is lost.
-window.addEventListener("beforeunload", () => {
+/** Clear the pending autosave timer, if any. */
+function clearPendingSave() {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
-    // Fire-and-forget; the webview may not wait, but autosave usually beats it.
-    saveNow();
   }
-});
+}
+
+/** Wire every listener once the initial state is known. */
+function wireEvents() {
+  initEventWiring({
+    els,
+    // Lock screen
+    handleUnlockSubmit: lockScreen.handleUnlockSubmit,
+    browseForDir: lockScreen.browseForDir,
+    resetKdfFields: lockScreen.resetKdfFields,
+    updateKdfEstimate: lockScreen.updateKdfEstimate,
+    refreshSetupVaultState: lockScreen.refreshSetupVaultState,
+    lockNow: lockScreen.lockNow,
+    changeDiaryDir: lockScreen.changeDiaryDir,
+    // Editor
+    scheduleSave,
+    updateWordCount,
+    selectDate,
+    deleteCurrent,
+    toggleFavourite,
+    saveNow,
+    hasPendingSave: () => saveTimer !== null,
+    clearPendingSave,
+    isInputSuppressed: () => suppressInput,
+    // Calendar
+    toggleCalendar: calendar.toggleCalendar,
+    stepCalendarMonth: calendar.stepCalendarMonth,
+    pickCalendarDate: calendar.pickCalendarDate,
+    moveCalendarFocus: calendar.moveCalendarFocus,
+    isCalendarOpen: calendar.isCalendarOpen,
+    closeCalendar: calendar.closeCalendar,
+    setCalendarMonth: calendar.setCalendarMonth,
+    renderCalendar: calendar.renderCalendar,
+    // Settings
+    openSettings: settingsDialog.openSettings,
+    closeSettings: settingsDialog.closeSettings,
+    saveSettings: settingsDialog.saveSettings,
+    calibrateKdf: settingsDialog.calibrateKdf,
+    // Statistics
+    openStats: statsDialog.openStats,
+    closeStats: statsDialog.closeStats,
+    isStatsOpen: statsDialog.isStatsOpen,
+    // Import
+    startImport: importDialog.startImport,
+    closeImport: importDialog.closeImport,
+    confirmImport: importDialog.confirmImport,
+    isImportOpen: importDialog.isImportOpen,
+    isImportDone: importDialog.isImportDone,
+    // Sidebar
+    setView,
+    setSearchQuery: (query) => {
+      searchQuery = query;
+    },
+    renderList,
+    renderVisibleRows,
+    // Date helpers
+    today: () => invoke("today"),
+    shiftDate,
+    getCurrentDate: () => currentDate,
+    monthStartOf,
+    toISODate,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
 
 async function init() {
+  // Controllers first: the wiring below hands out their methods, so they have
+  // to exist before any listener is attached.
+  createControllers();
+
+  // Listeners next: the lock screen is interactive as soon as it is shown, and
+  // the wiring only reads state lazily through the callbacks, so it is safe to
+  // attach before the settings have loaded.
+  wireEvents();
+
   // Pick the language first: every other render below reads translated
   // strings, so the dictionaries have to be active before anything is drawn.
   initLocaleSwitch();
@@ -2225,24 +1140,27 @@ async function init() {
   renderFavouriteButton();
   els.favouriteBtn.disabled = true;
 
-  await loadKdfDefaults();
+  // The weekday header never changes, so it is filled once.
+  calendar.renderWeekdayHeaders();
+
+  await lockScreen.loadKdfDefaults();
   try {
-    await loadSettings();
-    if (configured) {
-      await refreshVaultState();
+    await lockScreen.loadSettings();
+    if (lockScreen.isConfigured()) {
+      await lockScreen.refreshVaultState();
     } else {
       // First run: check the pre-filled default folder for an existing vault.
-      await refreshSetupVaultState();
+      await lockScreen.refreshSetupVaultState();
     }
   } catch (err) {
     console.error("settings load failed:", err);
-    configured = false;
-    vaultInitialized = false;
+    lockScreen.setConfigured(false);
+    lockScreen.setVaultInitialized(false);
     els.lockError.textContent = t("lock.errSettings");
   }
 
-  showLockScreen();
-  renderLockScreen();
+  lockScreen.showLockScreen();
+  lockScreen.renderLockScreen();
 }
 
 init();
