@@ -114,16 +114,21 @@
                     <ul id="entry-list" class="entry-list"></ul>
                 </div>
             </div>
+            <!-- Two rows: the storage path gets its own full-width line above
+                 the action buttons, so long paths are readable instead of
+                 being squeezed between the buttons. -->
             <footer class="sidebar-footer">
                 <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
-                <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
-                    data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
-                <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
-                    data-i18n-title="sidebar.settingsTitle" title="設定">設定</button>
-                <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
-                    data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
-                <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
-                    title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
+                <div class="footer-actions">
+                    <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
+                        data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
+                    <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
+                        data-i18n-title="sidebar.settingsTitle" title="設定">設定</button>
+                    <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
+                        data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
+                    <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
+                        title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
+                </div>
             </footer>
         </aside>
 

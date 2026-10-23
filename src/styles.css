@@ -119,8 +119,7 @@
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.5);
-  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.6),
-    0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
   --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.65);
 
   --overlay: rgba(0, 0, 0, 0.55);
@@ -169,7 +168,9 @@
    control and persisted in localStorage. */
 html {
   --font-scale: 1;
-  font-size: calc(clamp(0.875rem, 0.78rem + 0.28vw, 1.125rem) * var(--font-scale));
+  font-size: calc(
+    clamp(0.875rem, 0.78rem + 0.28vw, 1.125rem) * var(--font-scale)
+  );
   height: 100%;
 }
 
@@ -211,8 +212,7 @@ button {
   border: none;
   border-radius: var(--radius);
   background: transparent;
-  transition: background 0.12s ease, color 0.12s ease,
-    border-color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
 button:focus-visible,
@@ -669,8 +669,7 @@ summary:focus-visible {
    current entry is still distinguishable from the other favourites. */
 .entry-item.favourite.active {
   background: var(--panel);
-  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge),
-    var(--shadow-sm);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge), var(--shadow-sm);
 }
 
 .entry-item .entry-preview.empty {
@@ -688,12 +687,21 @@ summary:focus-visible {
   text-align: center;
 }
 
+/* Stacked footer: the storage path sits on its own line above the buttons so
+   it can use the full sidebar width instead of competing with them. */
 .sidebar-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.375rem;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.footer-actions {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.5rem 0.75rem;
-  border-top: 1px solid var(--border);
 }
 
 .btn-lock {
@@ -709,8 +717,13 @@ summary:focus-visible {
   border-color: var(--text-muted);
 }
 
+/* Full-width line inside the stacked footer. `direction: rtl` keeps the tail
+   of a long path visible (the folder name matters more than the root), while
+   `unicode-bidi: plaintext` stops short paths from being reordered. */
 .path {
   display: block;
+  flex: none;
+  width: 100%;
   min-width: 0;
   font-family: var(--mono);
   font-size: 0.625rem;
@@ -719,6 +732,7 @@ summary:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   direction: rtl;
+  unicode-bidi: plaintext;
   text-align: left;
 }
 
@@ -1728,6 +1742,17 @@ summary:focus-visible {
 
   .sidebar-header {
     padding: 0.625rem 0.75rem 0.375rem;
+  }
+
+  /* The sidebar is only 40vh tall here, so the extra path row would eat into
+     the entry list. Keep the path on one line but shrink it. */
+  .sidebar-footer {
+    gap: 0.25rem;
+    padding: 0.375rem 0.75rem;
+  }
+
+  .path {
+    font-size: 0.5625rem;
   }
 
   .modal-overlay {
