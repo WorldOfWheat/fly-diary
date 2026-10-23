@@ -118,6 +118,18 @@ const els = {
   lockBtn: $("lock-btn"),
   changeDirBtn: $("change-dir-btn"),
   settingsBtn: $("settings-btn"),
+  statsBtn: $("stats-btn"),
+  // Statistics dialog
+  statsOverlay: $("stats-overlay"),
+  statsClose: $("stats-close"),
+  statsDone: $("stats-done"),
+  statsTotal: $("stats-total"),
+  statsFavourites: $("stats-favourites"),
+  statsStreak: $("stats-streak"),
+  statsLongest: $("stats-longest"),
+  statsRange: $("stats-range"),
+  statsMonths: $("stats-months"),
+  statsWeekdays: $("stats-weekdays"),
   // Settings dialog
   settingsOverlay: $("settings-overlay"),
   settingsClose: $("settings-close"),
@@ -617,7 +629,10 @@ function renderImportReport(report) {
   els.importCancel.textContent = t("common.close");
   els.importOverwriteRow.hidden = true;
 
-  setStatus(t("import.statusImported", { count: report.imported.length }), true);
+  setStatus(
+    t("import.statusImported", { count: report.imported.length }),
+    true
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -666,12 +681,9 @@ function measureRowHeight() {
   if (!raw) return ROW_HEIGHT;
 
   // `--row-h` is authored in rem, so resolve it against the root font size.
-  const rem = parseFloat(
-    getComputedStyle(document.documentElement).fontSize
-  ) || 16;
-  const value = raw.endsWith("rem")
-    ? parseFloat(raw) * rem
-    : parseFloat(raw);
+  const rem =
+    parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const value = raw.endsWith("rem") ? parseFloat(raw) * rem : parseFloat(raw);
 
   return Number.isFinite(value) && value > 0 ? value : ROW_HEIGHT;
 }
@@ -846,6 +858,10 @@ function refreshForLocale() {
   updateWordCount();
   if (isCalendarOpen()) renderCalendar();
   if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
+
+  // The statistics dialog builds its labels in JS, so it has to be redrawn
+  // when the language changes while it is open.
+  if (isStatsOpen()) renderStats();
 
   // The import dialog is rebuilt from the last scan so its badges and buttons
   // follow the new language. A finished report is left alone: it is a record of
@@ -1193,10 +1209,7 @@ async function toggleFavourite() {
     });
     currentFavourite = stored;
     renderFavouriteButton();
-    setStatus(
-      stored ? t("status.favourited") : t("status.unfavourited"),
-      true
-    );
+    setStatus(stored ? t("status.favourited") : t("status.unfavourited"), true);
 
     // Keep the cached metadata in step so the star and the favourites view
     // update without a round trip.
@@ -1724,9 +1737,10 @@ function renderAutoLockChoices(choices, current) {
   for (const minutes of choices) {
     const option = document.createElement("option");
     option.value = String(minutes);
-    option.textContent = minutes === 0
-      ? t("settings.autoLockNever")
-      : t("settings.autoLockMinutes", { n: minutes });
+    option.textContent =
+      minutes === 0
+        ? t("settings.autoLockNever")
+        : t("settings.autoLockMinutes", { n: minutes });
     if (minutes === current) option.selected = true;
     els.autoLockSelect.append(option);
   }
@@ -1798,6 +1812,177 @@ function closeSettings() {
   els.settingsCurrentPass.value = "";
   els.settingsNewPass.value = "";
   els.settingsNewPassConfirm.value = "";
+}
+
+// ---------------------------------------------------------------------------
+// Statistics dialog
+// ---------------------------------------------------------------------------
+//
+// Everything here is derived from `allEntries`, the metadata the sidebar
+// already holds: date, title, size and the favourite flag. No extra backend
+// call is needed, and nothing is cached, so locking the diary (which clears
+// `allEntries`) cannot leave stale numbers on screen.
+
+/** Whether the statistics dialog is open. */
+function isStatsOpen() {
+  return !els.statsOverlay.hidden;
+}
+
+/**
+ * Longest and current run of consecutive days.
+ *
+ * Dates are compared as local calendar days, matching the rest of the app: the
+ * diary decides "today" in local time, so a UTC-based streak would disagree
+ * with the entry list around midnight.
+ */
+function computeStreaks(entries) {
+  if (entries.length === 0) return { current: 0, longest: 0 };
+
+  const days = entries
+    .map((e) => fromISODate(e.date).getTime())
+    .sort((a, b) => a - b);
+
+  let longest = 1;
+  let run = 1;
+  for (let i = 1; i < days.length; i++) {
+    // `Math.round` absorbs the one-hour drift on daylight-saving boundaries.
+    const diff = Math.round((days[i] - days[i - 1]) / 86400000);
+    run = diff === 1 ? run + 1 : 1;
+    if (run > longest) longest = run;
+  }
+
+  // The current streak counts back from today. A day that has not been written
+  // yet must not break it, so start from yesterday when today is empty.
+  const written = new Set(entries.map((e) => e.date));
+  let cursor = toISODate(new Date());
+  if (!written.has(cursor)) cursor = shiftDate(cursor, -1);
+
+  let current = 0;
+  while (written.has(cursor)) {
+    current++;
+    cursor = shiftDate(cursor, -1);
+  }
+
+  return { current, longest };
+}
+
+/** Bucket entries into the last `count` months, oldest first. */
+function monthlyBuckets(entries, count) {
+  const today = new Date();
+  const buckets = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    buckets.push({ key, month: d.getMonth() + 1, count: 0 });
+  }
+
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
+  for (const entry of entries) {
+    const bucket = byKey.get(entry.date.slice(0, 7));
+    if (bucket) bucket.count++;
+  }
+  return buckets;
+}
+
+/** Count entries per weekday, Sunday first to match `weekdayName()`. */
+function weekdayBuckets(entries) {
+  const counts = [0, 0, 0, 0, 0, 0, 0];
+  for (const entry of entries) {
+    counts[fromISODate(entry.date).getDay()]++;
+  }
+  return counts;
+}
+
+/**
+ * Render one bar chart.
+ *
+ * `items` is `[{ label, count, title }]`. Heights are relative to the tallest
+ * bucket so a quiet month still shows a readable shape; an all-zero chart
+ * falls back to a flat row of stubs.
+ */
+function renderBarChart(container, items, extraClass) {
+  container.replaceChildren();
+  container.className = "stats-chart" + (extraClass ? ` ${extraClass}` : "");
+
+  const max = Math.max(...items.map((item) => item.count), 0);
+  for (const item of items) {
+    const bar = document.createElement("div");
+    bar.className = "stats-bar";
+    bar.title = item.title;
+
+    const fill = document.createElement("div");
+    fill.className = "stats-bar-fill" + (item.count === 0 ? " empty" : "");
+    fill.style.setProperty("--v", max === 0 ? 0 : item.count / max);
+
+    const label = document.createElement("span");
+    label.className = "stats-bar-label";
+    label.textContent = item.label;
+
+    bar.append(fill, label);
+    container.append(bar);
+  }
+}
+
+/** Fill the dialog from `allEntries`. */
+function renderStats() {
+  const total = allEntries.length;
+  els.statsTotal.textContent = String(total);
+  els.statsFavourites.textContent = String(
+    allEntries.filter((e) => e.favourite).length
+  );
+
+  const { current, longest } = computeStreaks(allEntries);
+  els.statsStreak.textContent = t("stats.days", { n: current });
+  els.statsLongest.textContent = t("stats.days", { n: longest });
+
+  if (total === 0) {
+    els.statsRange.textContent = "";
+    els.statsMonths.replaceChildren();
+    els.statsWeekdays.replaceChildren();
+
+    const empty = document.createElement("p");
+    empty.className = "stats-empty";
+    empty.textContent = t("stats.empty");
+    els.statsMonths.append(empty);
+    return;
+  }
+
+  // `allEntries` is newest first, so the last element is the oldest entry.
+  els.statsRange.textContent = t("stats.range", {
+    first: longDateOf(allEntries[total - 1].date),
+    last: longDateOf(allEntries[0].date),
+  });
+
+  renderBarChart(
+    els.statsMonths,
+    monthlyBuckets(allEntries, 12).map((bucket) => ({
+      label: t("stats.monthLabel", { month: bucket.month }),
+      count: bucket.count,
+      title: t("stats.count", { n: bucket.count }),
+    }))
+  );
+
+  renderBarChart(
+    els.statsWeekdays,
+    weekdayBuckets(allEntries).map((count, day) => ({
+      label: weekdayName(day),
+      count,
+      title: t("stats.count", { n: count }),
+    })),
+    "weekdays"
+  );
+}
+
+/** Open the statistics dialog. */
+function openStats() {
+  renderStats();
+  els.statsOverlay.hidden = false;
+  els.statsDone.focus();
+}
+
+/** Close the statistics dialog. */
+function closeStats() {
+  els.statsOverlay.hidden = true;
 }
 
 /** Measure this machine and fill the advanced inputs with the result. */
@@ -1998,6 +2183,14 @@ els.settingsOverlay.addEventListener("mousedown", (e) => {
   if (e.target === els.settingsOverlay) closeSettings();
 });
 
+// Statistics dialog.
+els.statsBtn.addEventListener("click", openStats);
+els.statsClose.addEventListener("click", closeStats);
+els.statsDone.addEventListener("click", closeStats);
+els.statsOverlay.addEventListener("mousedown", (e) => {
+  if (e.target === els.statsOverlay) closeStats();
+});
+
 // Sidebar view switch.
 els.viewAll.addEventListener("click", () => setView("all"));
 els.viewFavourites.addEventListener("click", () => setView("favourites"));
@@ -2037,6 +2230,12 @@ window.addEventListener("resize", () => renderVisibleRows(true));
 // Keyboard shortcuts.
 document.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
+
+  if (e.key === "Escape" && isStatsOpen()) {
+    e.preventDefault();
+    closeStats();
+    return;
+  }
 
   if (e.key === "Escape" && isImportOpen()) {
     e.preventDefault();

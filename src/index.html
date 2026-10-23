@@ -122,6 +122,8 @@
                 <div class="footer-actions">
                     <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
                         data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
+                    <button id="stats-btn" class="btn-lock" data-i18n="sidebar.stats"
+                        data-i18n-title="sidebar.statsTitle" title="查看統計">統計</button>
                     <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
                         data-i18n-title="sidebar.settingsTitle" title="設定">設定</button>
                     <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
@@ -327,9 +329,8 @@
                     </label>
                     <label class="settings-row" for="settings-new-pass">
                         <span class="settings-label" data-i18n="settings.newPass">新密碼</span>
-                        <input id="settings-new-pass" class="settings-input" type="password"
-                            autocomplete="new-password" data-i18n-placeholder="settings.newPassPlaceholder"
-                            placeholder="留空表示不變更" />
+                        <input id="settings-new-pass" class="settings-input" type="password" autocomplete="new-password"
+                            data-i18n-placeholder="settings.newPassPlaceholder" placeholder="留空表示不變更" />
                     </label>
                     <label class="settings-row" for="settings-new-pass-confirm">
                         <span class="settings-label" data-i18n="settings.newPassConfirm">確認新密碼</span>
@@ -344,8 +345,8 @@
                             提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。
                         </p>
                         <div class="settings-kdf-grid">
-                            <label class="settings-label" for="settings-kdf-memory"
-                                data-i18n="lock.kdfMemory">記憶體 (MiB)</label>
+                            <label class="settings-label" for="settings-kdf-memory" data-i18n="lock.kdfMemory">記憶體
+                                (MiB)</label>
                             <input id="settings-kdf-memory" class="settings-input" type="number" step="1" min="8"
                                 max="1024" />
                             <label class="settings-label" for="settings-kdf-iterations"
@@ -368,6 +369,57 @@
                 <span id="settings-error" class="import-error"></span>
                 <button id="settings-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
                 <button id="settings-save" class="btn-primary" type="button" data-i18n="settings.save">儲存</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Statistics dialog: everything is derived from the entry metadata the
+         sidebar already holds, so opening it costs no extra backend call. -->
+    <div id="stats-overlay" class="modal-overlay" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="stats-title">
+            <header class="modal-head">
+                <h2 id="stats-title" class="modal-title" data-i18n="stats.title">統計</h2>
+                <button id="stats-close" class="modal-close" type="button" data-i18n-title="common.close"
+                    data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <!-- Headline numbers. Values are filled in by `renderStats()`. -->
+                <div class="stats-cards">
+                    <div class="stats-card">
+                        <span class="stats-value" id="stats-total">0</span>
+                        <span class="stats-label" data-i18n="stats.total">總篇數</span>
+                    </div>
+                    <div class="stats-card">
+                        <span class="stats-value" id="stats-favourites">0</span>
+                        <span class="stats-label" data-i18n="stats.favourites">收藏</span>
+                    </div>
+                    <div class="stats-card">
+                        <span class="stats-value" id="stats-streak">0</span>
+                        <span class="stats-label" data-i18n="stats.streak">目前連續</span>
+                    </div>
+                    <div class="stats-card">
+                        <span class="stats-value" id="stats-longest">0</span>
+                        <span class="stats-label" data-i18n="stats.longest">最長連續</span>
+                    </div>
+                </div>
+
+                <p class="stats-range" id="stats-range"></p>
+
+                <section class="stats-section">
+                    <h3 class="settings-heading" data-i18n="stats.months">近 12 個月</h3>
+                    <div id="stats-months" class="stats-chart"></div>
+                </section>
+
+                <section class="stats-section">
+                    <h3 class="settings-heading" data-i18n="stats.weekdays">星期分布</h3>
+                    <div id="stats-weekdays" class="stats-chart"></div>
+                </section>
+            </div>
+
+            <footer class="modal-foot">
+                <span class="import-error"></span>
+                <button id="stats-done" class="btn-primary" type="button" data-i18n="common.done">完成</button>
             </footer>
         </div>
     </div>

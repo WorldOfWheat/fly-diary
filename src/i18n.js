@@ -86,6 +86,8 @@ const zhHant = {
   "sidebar.importTitle": "從資料夾匯入日記",
   "sidebar.settings": "設定",
   "sidebar.settingsTitle": "開啟設定",
+  "sidebar.stats": "統計",
+  "sidebar.statsTitle": "查看統計",
   "sidebar.changeDir": "路徑",
   "sidebar.changeDirTitle": "變更日記儲存資料夾",
   "sidebar.lock": "鎖定",
@@ -125,6 +127,20 @@ const zhHant = {
   "sidebar.viewFavouritesTitle": "只顯示收藏的日記",
   "sidebar.emptyFavourites": "還沒有收藏任何日記",
   "sidebar.emptyFavouritesFiltered": "沒有符合的收藏",
+
+  // --- Statistics ----------------------------------------------------------
+  "stats.title": "統計",
+  "stats.total": "總篇數",
+  "stats.favourites": "收藏",
+  "stats.streak": "目前連續",
+  "stats.longest": "最長連續",
+  "stats.days": "{n} 天",
+  "stats.range": "首篇 {first} · 最新 {last}",
+  "stats.empty": "還沒有任何日記，開始寫下第一篇吧。",
+  "stats.months": "近 12 個月",
+  "stats.weekdays": "星期分布",
+  "stats.monthLabel": "{month} 月",
+  "stats.count": "{n} 篇",
 
   // --- Editor --------------------------------------------------------------
   "editor.prevDay": "前一天",
@@ -273,6 +289,8 @@ const en = {
   "sidebar.importTitle": "Import diaries from a folder",
   "sidebar.settings": "Settings",
   "sidebar.settingsTitle": "Open settings",
+  "sidebar.stats": "Stats",
+  "sidebar.statsTitle": "View statistics",
   "sidebar.changeDir": "Path",
   "sidebar.changeDirTitle": "Change the diary folder",
   "sidebar.lock": "Lock",
@@ -312,6 +330,20 @@ const en = {
   "sidebar.viewFavouritesTitle": "Show only favourites",
   "sidebar.emptyFavourites": "No favourites yet",
   "sidebar.emptyFavouritesFiltered": "No matching favourites",
+
+  // --- Statistics ----------------------------------------------------------
+  "stats.title": "Statistics",
+  "stats.total": "Entries",
+  "stats.favourites": "Favourites",
+  "stats.streak": "Current streak",
+  "stats.longest": "Longest streak",
+  "stats.days": "{n} days",
+  "stats.range": "First {first} · Latest {last}",
+  "stats.empty": "No entries yet — write your first one.",
+  "stats.months": "Last 12 months",
+  "stats.weekdays": "Weekday distribution",
+  "stats.monthLabel": "{month}",
+  "stats.count": "{n} entries",
 
   // --- Editor --------------------------------------------------------------
   "editor.prevDay": "Previous day",
