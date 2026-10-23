@@ -829,6 +829,313 @@ button {
   border-color: transparent;
 }
 
+/* ---------- Import dialog ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(30, 29, 27, 0.32);
+  animation: overlay-in 0.12s ease-out;
+}
+
+.modal-overlay[hidden] {
+  display: none;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 560px;
+  max-width: 100%;
+  max-height: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.modal-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-muted);
+  background: transparent;
+  border-radius: 50%;
+}
+
+.modal-close:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+
+.modal-foot .btn-browse,
+.modal-foot .btn-primary {
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius);
+}
+
+.import-dir {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.import-summary {
+  display: flex;
+  gap: 14px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.import-stat {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.import-stat b {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-stat.ready b {
+  color: var(--accent);
+}
+
+.import-stat.conflict b {
+  color: #b8860b;
+}
+
+.import-stat.failed b {
+  color: var(--danger);
+}
+
+.import-overwrite {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.import-overwrite[hidden] {
+  display: none;
+}
+
+.import-overwrite input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px;
+}
+
+.import-row {
+  display: grid;
+  grid-template-columns: 92px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.import-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.import-row .row-date {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-row .row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-row .row-title.empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.import-row .row-badge {
+  flex: none;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.import-row.ready .row-badge {
+  color: var(--accent);
+  background: rgba(74, 124, 89, 0.12);
+}
+
+.import-row.conflict .row-badge {
+  color: #8a6508;
+  background: rgba(184, 134, 11, 0.14);
+}
+
+.import-row.failed .row-badge {
+  color: var(--danger);
+  background: rgba(180, 84, 74, 0.12);
+}
+
+.import-row.failed .row-title {
+  color: var(--danger);
+}
+
+.import-row .row-reason {
+  grid-column: 2 / -1;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.import-row.failed .row-reason {
+  color: var(--danger);
+}
+
+/* ---------- Import progress ---------- */
+
+.import-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.import-progress[hidden] {
+  display: none;
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.import-progress-count {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.import-progress-track {
+  height: 6px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.import-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.15s linear;
+}
+
+/* Respect users who asked the OS to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  .import-progress-bar {
+    transition: none;
+  }
+}
+
+.import-result {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.import-result[hidden] {
+  display: none;
+}
+
+.import-result .result-line {
+  color: var(--text);
+}
+
+.import-result .result-fail {
+  color: var(--danger);
+}
+
+.import-error {
+  flex: 1;
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* ---------- Scrollbar ---------- */
 
 ::-webkit-scrollbar {

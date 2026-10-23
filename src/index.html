@@ -77,6 +77,7 @@
             </div>
             <footer class="sidebar-footer">
                 <span id="diary-path" class="path" title="日記儲存位置"></span>
+                <button id="import-btn" class="btn-lock" title="從資料夾匯入日記">匯入</button>
                 <button id="change-dir-btn" class="btn-lock" title="變更日記儲存資料夾">路徑</button>
                 <button id="lock-btn" class="btn-lock" title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
             </footer>
@@ -159,6 +160,61 @@
                 <span class="hint">Markdown 格式 · AES-256-GCM 加密 · 自動儲存</span>
             </footer>
         </main>
+    </div>
+
+    <!-- Import dialog: shown after scanning a folder of YYYY-MM-DD.txt files,
+         so the user can review what will be written before anything happens. -->
+    <div id="import-overlay" class="modal-overlay" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+            <header class="modal-head">
+                <h2 id="import-title" class="modal-title">匯入日記</h2>
+                <button id="import-close" class="modal-close" type="button" title="關閉" aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <p id="import-dir" class="import-dir"></p>
+
+                <div id="import-summary" class="import-summary">
+                    <span class="import-stat ready"><b id="import-ready">0</b> 可匯入</span>
+                    <span class="import-stat conflict"><b id="import-conflicts">0</b> 已存在</span>
+                    <span class="import-stat failed"><b id="import-failed">0</b> 失敗</span>
+                </div>
+
+                <label id="import-overwrite-row" class="import-overwrite" hidden>
+                    <input id="import-overwrite" type="checkbox" />
+                    <span>覆蓋已存在的日記</span>
+                </label>
+
+                <div id="import-list" class="import-list" role="list"></div>
+
+                <!-- Shown only while the batch is being written. The bar is
+                     driven by the `import-progress` event from the backend. -->
+                <div id="import-progress" class="import-progress" hidden>
+                    <div class="import-progress-head">
+                        <span id="import-progress-label">匯入中…</span>
+                        <span id="import-progress-count" class="import-progress-count">0 / 0</span>
+                    </div>
+                    <div
+                        class="import-progress-track"
+                        role="progressbar"
+                        aria-labelledby="import-progress-label"
+                        aria-valuemin="0"
+                        aria-valuemax="100"
+                        aria-valuenow="0"
+                    >
+                        <div id="import-progress-bar" class="import-progress-bar"></div>
+                    </div>
+                </div>
+
+                <div id="import-result" class="import-result" hidden></div>
+            </div>
+
+            <footer class="modal-foot">
+                <span id="import-error" class="import-error"></span>
+                <button id="import-cancel" class="btn-browse" type="button">取消</button>
+                <button id="import-confirm" class="btn-primary" type="button">匯入</button>
+            </footer>
+        </div>
     </div>
 
     <script type="module" src="main.js"></script>

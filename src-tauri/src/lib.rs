@@ -322,6 +322,99 @@ fn rebuild_index(
     storage::rebuild_index(&dir, guard.key()?)
 }
 
+// ---------------------------------------------------------------------------
+// Import commands
+// ---------------------------------------------------------------------------
+
+/// Open a native folder picker for the import source and return its path.
+///
+/// Returns `None` when the user cancels.
+#[tauri::command]
+async fn pick_import_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("選擇要匯入的資料夾")
+        .pick_folder(move |folder| {
+            let _ = tx.send(folder);
+        });
+
+    let picked = rx
+        .recv()
+        .map_err(|e| format!("Folder picker failed: {e}"))?;
+
+    Ok(picked.map(|p| p.to_string()))
+}
+
+/// Inspect a folder of `YYYY-MM-DD.txt` files without writing anything.
+///
+/// The frontend shows the result so the user can confirm before importing.
+#[tauri::command]
+fn scan_import(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    import_dir: String,
+) -> Result<storage::ImportScan, String> {
+    let dir = diary_dir(&app)?;
+    let src = PathBuf::from(import_dir.trim());
+    if !src.is_dir() {
+        return Err("匯入路徑不是資料夾".to_string());
+    }
+
+    let guard = session.lock().unwrap();
+    let key = guard.key()?;
+    let existing = storage::list_entries(&dir, key)?;
+    let existing: std::collections::BTreeMap<String, String> = existing
+        .into_iter()
+        .map(|meta| (meta.date, meta.title))
+        .collect();
+
+    storage::scan_import(&src, &existing)
+}
+
+/// Import the confirmed dates from `import_dir` into the diary.
+///
+/// `overwrite` decides whether dates that already exist are replaced or
+/// skipped. The report lists what happened to every requested date.
+///
+/// The work runs on the rayon pool, so this command is `async` and hands the
+/// blocking batch to `spawn_blocking`: a few thousand entries would otherwise
+/// freeze the webview for the duration of the import. Progress is reported as
+/// `import-progress` events carrying `{ done, total }`.
+#[tauri::command]
+async fn run_import(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    import_dir: String,
+    dates: Vec<String>,
+    overwrite: bool,
+) -> Result<storage::ImportReport, String> {
+    let dir = diary_dir(&app)?;
+    let src = PathBuf::from(import_dir.trim());
+    if !src.is_dir() {
+        return Err("匯入路徑不是資料夾".to_string());
+    }
+
+    // Copy the key out so the session lock is not held across the whole import.
+    let key = {
+        let guard = session.lock().unwrap();
+        *guard.key()?
+    };
+
+    let emitter = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::import_entries_with_progress(&dir, &key, &src, &dates, overwrite, |done, total| {
+            use tauri::Emitter;
+            let _ = emitter.emit("import-progress", (done, total));
+        })
+    })
+    .await
+    .map_err(|e| format!("Import task failed: {e}"))?
+}
+
 /// Today's date in the user's local timezone, formatted as `YYYY-MM-DD`.
 #[tauri::command]
 fn today() -> String {
@@ -356,6 +449,9 @@ pub fn run() {
             delete_entry,
             list_entries,
             rebuild_index,
+            pick_import_dir,
+            scan_import,
+            run_import,
             today,
             diary_path
         ])

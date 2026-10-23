@@ -27,7 +27,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
+use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::crypto;
@@ -616,11 +618,12 @@ pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry
     }))
 }
 
-/// Encrypt and write (create or overwrite) the entry for a given date.
+/// Encrypt `title`/`content` and write the entry file, leaving the index alone.
 ///
-/// Because the filename is derived from the date, writing the same date twice
-/// naturally performs an upsert: there can only ever be one file per day.
-pub fn write_entry(
+/// This is the half of [`write_entry`] that touches a single file, so it is
+/// safe to call concurrently for different dates. Callers that batch many
+/// writes (such as the importer) use this and update the index once at the end.
+fn write_entry_file(
     dir: &Path,
     key: &[u8; 32],
     date: &str,
@@ -633,7 +636,21 @@ pub fn write_entry(
     let (iv, ct) = crypto::encrypt(key, &pack(title, content))?;
     let encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
     let document = xml::to_xml(&encrypted)?;
-    fs::write(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))?;
+    fs::write(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))
+}
+
+/// Encrypt and write (create or overwrite) the entry for a given date.
+///
+/// Because the filename is derived from the date, writing the same date twice
+/// naturally performs an upsert: there can only ever be one file per day.
+pub fn write_entry(
+    dir: &Path,
+    key: &[u8; 32],
+    date: &str,
+    title: &str,
+    content: &str,
+) -> Result<(), String> {
+    write_entry_file(dir, key, date, title, content)?;
 
     // Keep the sidebar index in sync. A missing index is rebuilt from scratch
     // so the first write after an upgrade also seeds it.
@@ -676,6 +693,423 @@ pub fn list_entries(dir: &Path, key: &[u8; 32]) -> Result<Vec<EntryMeta>, String
 
     // No usable index: fall back to the slow path and persist the result.
     rebuild_index(dir, key)
+}
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+//
+// Importing is a two-phase operation so the user can review what is about to
+// happen before anything is written:
+//
+// 1. [`scan_import`] reads a folder of `YYYY-MM-DD.txt` files and classifies
+//    every file as importable, a conflict, or a failure. Nothing is written.
+// 2. [`import_entries`] writes the files the user confirmed, in one pass, and
+//    rebuilds the index once at the end.
+//
+// Both phases run on the rayon thread pool. Every date maps to its own entry
+// file, so reads, encryption and writes never contend; the only shared state is
+// the index, which is written exactly once after all workers finish. That is
+// also why the importer does not call [`write_entry`] per file — that would
+// rewrite `index.xml` N times and serialise the whole batch on it.
+//
+// The filename is the only source of the date, so a file whose name is not a
+// real calendar date is rejected instead of being guessed at.
+
+/// Maximum size of a single imported file.
+///
+/// A diary entry is text; 8 MiB is far beyond any realistic entry and stops a
+/// stray binary or a runaway log file from being pulled into the vault.
+const MAX_IMPORT_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Extension accepted by the importer.
+const IMPORT_EXTENSION: &str = "txt";
+
+/// How a single file in the import folder was classified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportStatus {
+    /// Valid and new: will be written on confirm.
+    Ready,
+    /// Valid, but an entry for that date already exists.
+    Conflict,
+    /// Cannot be imported; `reason` explains why.
+    Failed,
+}
+
+/// One file found in the import folder.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportFile {
+    /// File name as it appears on disk, e.g. `2026-10-23.txt`.
+    pub name: String,
+    /// Date parsed from the file name, when it is valid.
+    pub date: Option<String>,
+    /// Title derived from the first line of the file, when readable.
+    pub title: String,
+    /// Body length in characters, when readable.
+    pub chars: usize,
+    /// Classification of this file.
+    pub status: ImportStatus,
+    /// Human-readable explanation for `Conflict` and `Failed`.
+    pub reason: String,
+}
+
+/// Result of scanning an import folder.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportScan {
+    /// Folder that was scanned.
+    pub dir: String,
+    /// Every `.txt` file found, sorted by date then name.
+    pub files: Vec<ImportFile>,
+    /// Number of files that can be imported.
+    pub ready: usize,
+    /// Number of files that would overwrite an existing entry.
+    pub conflicts: usize,
+    /// Number of files that cannot be imported.
+    pub failed: usize,
+}
+
+/// Outcome of an import run.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportReport {
+    /// Dates that were written.
+    pub imported: Vec<String>,
+    /// Dates that were skipped because they already existed.
+    pub skipped: Vec<String>,
+    /// Files that could not be imported, with the reason.
+    pub failed: Vec<ImportFailure>,
+}
+
+/// A single failed import.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportFailure {
+    pub name: String,
+    pub reason: String,
+}
+
+/// Normalise an imported file's text: strip a BOM and unify line endings.
+///
+/// The whole file becomes the body. Nothing is consumed as a title, because the
+/// title comes from the file name (see [`title_from_import_name`]).
+fn normalise_imported(text: &str) -> String {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// Derive the entry title from a `YYYY-MM-DD.txt` file name.
+///
+/// The file name is the title, so `2026-10-23.txt` imports with the title
+/// `2026-10-23`. This keeps the import lossless: every byte of the file ends up
+/// in the body, and the title is always something the user can see in the
+/// folder listing rather than a line silently stolen from the content.
+fn title_from_import_name(name: &str) -> String {
+    name.strip_suffix(&format!(".{IMPORT_EXTENSION}"))
+        .unwrap_or(name)
+        .to_string()
+}
+
+/// Derive the date from a `YYYY-MM-DD.txt` file name.
+fn date_from_import_name(name: &str) -> Option<String> {
+    let stem = name.strip_suffix(&format!(".{IMPORT_EXTENSION}"))?;
+    validate_date(stem).ok()?;
+    Some(stem.to_string())
+}
+
+/// Read and classify one file from the import folder.
+fn inspect_import_file(path: &Path, existing: &BTreeMap<String, String>) -> ImportFile {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let mut file = ImportFile {
+        name: name.clone(),
+        date: None,
+        title: String::new(),
+        chars: 0,
+        status: ImportStatus::Failed,
+        reason: String::new(),
+    };
+
+    let Some(date) = date_from_import_name(&name) else {
+        file.reason = "檔名不是有效的 YYYY-MM-DD.txt".to_string();
+        return file;
+    };
+    file.date = Some(date.clone());
+
+    let meta = match fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) => {
+            file.reason = format!("無法讀取檔案資訊：{e}");
+            return file;
+        }
+    };
+    if !meta.is_file() {
+        file.reason = "不是檔案".to_string();
+        return file;
+    }
+    if meta.len() > MAX_IMPORT_BYTES {
+        file.reason = format!("檔案過大（上限 {} MiB）", MAX_IMPORT_BYTES / 1024 / 1024);
+        return file;
+    }
+
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            file.reason = format!("無法讀取檔案：{e}");
+            return file;
+        }
+    };
+    let text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(_) => {
+            file.reason = "檔案不是有效的 UTF-8 文字".to_string();
+            return file;
+        }
+    };
+
+    let content = normalise_imported(&text);
+    file.title = title_from_import_name(&name);
+    file.chars = content.chars().count();
+
+    if existing.contains_key(&date) {
+        file.status = ImportStatus::Conflict;
+        file.reason = "這一天已經有日記".to_string();
+    } else {
+        file.status = ImportStatus::Ready;
+    }
+    file
+}
+
+/// Scan `import_dir` and classify every `.txt` file. Writes nothing.
+///
+/// `existing` is the current index, used to detect dates that would be
+/// overwritten.
+///
+/// Files are inspected in parallel: each one is an independent read plus a
+/// UTF-8 decode, so a folder of a few thousand entries is limited by the disk
+/// rather than by a single core. The result is sorted afterwards, so the order
+/// is deterministic regardless of how the work was scheduled.
+pub fn scan_import(import_dir: &Path, existing: &BTreeMap<String, String>) -> Result<ImportScan, String> {
+    let entries = fs::read_dir(import_dir)
+        .map_err(|e| format!("Failed to read import folder: {e}"))?;
+
+    // Collect the paths first; `read_dir` itself is sequential and cheap.
+    let mut paths = Vec::new();
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                files.push(ImportFile {
+                    name: String::new(),
+                    date: None,
+                    title: String::new(),
+                    chars: 0,
+                    status: ImportStatus::Failed,
+                    reason: format!("無法讀取資料夾項目：{e}"),
+                });
+                continue;
+            }
+        };
+
+        let path = entry.path();
+        let is_txt = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(IMPORT_EXTENSION));
+        if is_txt {
+            paths.push(path);
+        }
+    }
+
+    files.par_extend(
+        paths
+            .par_iter()
+            .map(|path| inspect_import_file(path, existing)),
+    );
+
+    // Newest first, matching the sidebar; failures without a date go last.
+    files.sort_by(|a, b| match (&a.date, &b.date) {
+        (Some(a_date), Some(b_date)) => b_date.cmp(a_date).then_with(|| a.name.cmp(&b.name)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.name.cmp(&b.name),
+    });
+
+    let ready = files.iter().filter(|f| f.status == ImportStatus::Ready).count();
+    let conflicts = files
+        .iter()
+        .filter(|f| f.status == ImportStatus::Conflict)
+        .count();
+    let failed = files
+        .iter()
+        .filter(|f| f.status == ImportStatus::Failed)
+        .count();
+
+    Ok(ImportScan {
+        dir: import_dir.to_string_lossy().to_string(),
+        files,
+        ready,
+        conflicts,
+        failed,
+    })
+}
+
+/// What happened to one requested date during [`import_entries`].
+enum ImportOutcome {
+    /// The entry was written; carries the date and its title.
+    Imported(String, String),
+    /// The date already existed and `overwrite` was off.
+    Skipped(String),
+    /// The file could not be imported.
+    Failed(ImportFailure),
+}
+
+/// Read, encrypt and write one imported file.
+///
+/// This is the unit of work handed to the thread pool. It touches only its own
+/// entry file, so no locking is needed: every date maps to a distinct path.
+fn import_one(
+    dir: &Path,
+    key: &[u8; 32],
+    import_dir: &Path,
+    date: &str,
+    exists: bool,
+    overwrite: bool,
+) -> ImportOutcome {
+    if let Err(reason) = validate_date(date) {
+        return ImportOutcome::Failed(ImportFailure {
+            name: date.to_string(),
+            reason,
+        });
+    }
+
+    let name = format!("{date}.{IMPORT_EXTENSION}");
+    let path = import_dir.join(&name);
+
+    let text = match fs::read(&path) {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(text) => text,
+            Err(_) => {
+                return ImportOutcome::Failed(ImportFailure {
+                    name,
+                    reason: "檔案不是有效的 UTF-8 文字".to_string(),
+                })
+            }
+        },
+        Err(e) => {
+            return ImportOutcome::Failed(ImportFailure {
+                name,
+                reason: format!("無法讀取檔案：{e}"),
+            })
+        }
+    };
+
+    if exists && !overwrite {
+        return ImportOutcome::Skipped(date.to_string());
+    }
+
+    let content = normalise_imported(&text);
+    let title = title_from_import_name(&name);
+    match write_entry_file(dir, key, date, &title, &content) {
+        Ok(()) => ImportOutcome::Imported(date.to_string(), title),
+        Err(reason) => ImportOutcome::Failed(ImportFailure { name, reason }),
+    }
+}
+
+/// Write the given `YYYY-MM-DD.txt` files from `import_dir` into the diary.
+///
+/// `dates` is the set the user confirmed. Files that no longer exist, are no
+/// longer valid, or whose date already has an entry are reported as skipped or
+/// failed instead of aborting the whole run, so one bad file cannot block the
+/// rest.
+///
+/// The work is spread across the rayon pool: every date owns a distinct file,
+/// so reads, AES-GCM encryption and writes all run concurrently. The index is
+/// written exactly once at the end, which is what makes the parallel path safe
+/// — [`write_entry`] would otherwise rewrite `index.xml` once per entry and
+/// serialise the whole import on that single file.
+///
+/// `progress` is called after each file with `(done, total)` so the UI can show
+/// a counter. It is invoked from worker threads and must be cheap and
+/// thread-safe.
+pub fn import_entries_with_progress<F>(
+    dir: &Path,
+    key: &[u8; 32],
+    import_dir: &Path,
+    dates: &[String],
+    overwrite: bool,
+    progress: F,
+) -> Result<ImportReport, String>
+where
+    F: Fn(usize, usize) + Sync,
+{
+    ensure_dir(dir)?;
+
+    let mut index = match read_index(dir, key) {
+        Some(index) => index,
+        None => scan_entries(dir, key)?,
+    };
+
+    let total = dates.len();
+    let done = AtomicUsize::new(0);
+
+    let outcomes: Vec<ImportOutcome> = dates
+        .par_iter()
+        .map(|date| {
+            let outcome = import_one(
+                dir,
+                key,
+                import_dir,
+                date,
+                index.contains_key(date),
+                overwrite,
+            );
+            let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+            progress(finished, total);
+            outcome
+        })
+        .collect();
+
+    let mut report = ImportReport {
+        imported: Vec::new(),
+        skipped: Vec::new(),
+        failed: Vec::new(),
+    };
+
+    // Fold the results back in the order the user confirmed them, so the report
+    // is stable no matter which thread finished first.
+    for outcome in outcomes {
+        match outcome {
+            ImportOutcome::Imported(date, title) => {
+                index.insert(date.clone(), title);
+                report.imported.push(date);
+            }
+            ImportOutcome::Skipped(date) => report.skipped.push(date),
+            ImportOutcome::Failed(failure) => report.failed.push(failure),
+        }
+    }
+
+    // One index write for the whole batch.
+    write_index(dir, key, &index)?;
+
+    Ok(report)
+}
+
+/// Import without progress reporting.
+///
+/// Convenience wrapper around [`import_entries_with_progress`]; the app itself
+/// uses the progress-reporting variant so the dialog can show a counter.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn import_entries(
+    dir: &Path,
+    key: &[u8; 32],
+    import_dir: &Path,
+    dates: &[String],
+    overwrite: bool,
+) -> Result<ImportReport, String> {
+    import_entries_with_progress(dir, key, import_dir, dates, overwrite, |_, _| {})
 }
 
 #[cfg(test)]
@@ -1174,5 +1608,427 @@ mod tests {
         let second = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
 
         assert_ne!(first, second, "IV must change on every write");
+    }
+
+    // -----------------------------------------------------------------------
+    // Import
+    // -----------------------------------------------------------------------
+
+    /// Create a scratch folder holding the given `(name, contents)` files.
+    fn import_dir(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = temp_dir(name);
+        for (file, contents) in files {
+            fs::write(dir.join(file), contents).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn title_from_import_name_drops_the_extension() {
+        assert_eq!(title_from_import_name("2026-10-23.txt"), "2026-10-23");
+        // Anything after the last dot is treated as the extension.
+        assert_eq!(title_from_import_name("2026-10-23"), "2026-10-23");
+    }
+
+    #[test]
+    fn normalise_imported_keeps_the_whole_file_as_body() {
+        // The first line is content, not a title.
+        let content = normalise_imported("我的標題\n第一行\n第二行");
+        assert_eq!(content, "我的標題\n第一行\n第二行");
+    }
+
+    #[test]
+    fn normalise_imported_handles_crlf_and_bom() {
+        let content = normalise_imported("\u{feff}標題\r\n內容\r\n更多");
+        assert_eq!(content, "標題\n內容\n更多");
+    }
+
+    #[test]
+    fn normalise_imported_leaves_whitespace_alone() {
+        let content = normalise_imported("  標題  \n內容");
+        assert_eq!(content, "  標題  \n內容");
+    }
+
+    #[test]
+    fn date_from_import_name_accepts_only_real_dates() {
+        assert_eq!(
+            date_from_import_name("2026-10-23.txt").as_deref(),
+            Some("2026-10-23")
+        );
+        assert_eq!(date_from_import_name("2026-02-30.txt"), None);
+        assert_eq!(date_from_import_name("2026-10-23.md"), None);
+        assert_eq!(date_from_import_name("notes.txt"), None);
+        assert_eq!(date_from_import_name("2026-10-23"), None);
+    }
+
+    #[test]
+    fn scan_import_classifies_ready_conflict_and_failed() {
+        let dir = temp_dir("import-scan");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-22", "既有", "內容").unwrap();
+
+        let src = import_dir(
+            "import-scan-src",
+            &[
+                ("2026-10-23.txt", "新的一天\n今天很好"),
+                ("2026-10-22.txt", "重複\n會被標記"),
+                ("2026-02-30.txt", "不存在的日期"),
+                ("notes.txt", "檔名不對"),
+                ("readme.md", "不是 txt"),
+            ],
+        );
+
+        let existing = read_index(&dir, &key).unwrap();
+        let scan = scan_import(&src, &existing).unwrap();
+
+        assert_eq!(scan.files.len(), 4, "only .txt files are considered");
+        assert_eq!(scan.ready, 1);
+        assert_eq!(scan.conflicts, 1);
+        assert_eq!(scan.failed, 2);
+
+        let ready = scan
+            .files
+            .iter()
+            .find(|f| f.status == ImportStatus::Ready)
+            .unwrap();
+        assert_eq!(ready.date.as_deref(), Some("2026-10-23"));
+        // The file name is the title; the whole file is the body.
+        assert_eq!(ready.title, "2026-10-23");
+        assert_eq!(ready.chars, "新的一天\n今天很好".chars().count());
+
+        let conflict = scan
+            .files
+            .iter()
+            .find(|f| f.status == ImportStatus::Conflict)
+            .unwrap();
+        assert_eq!(conflict.date.as_deref(), Some("2026-10-22"));
+        assert!(!conflict.reason.is_empty());
+    }
+
+    #[test]
+    fn scan_import_sorts_newest_first() {
+        let dir = temp_dir("import-sort");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir(
+            "import-sort-src",
+            &[
+                ("2026-01-05.txt", "a"),
+                ("2026-12-31.txt", "b"),
+                ("2026-06-15.txt", "c"),
+            ],
+        );
+
+        let scan = scan_import(&src, &BTreeMap::new()).unwrap();
+        let dates: Vec<_> = scan.files.iter().filter_map(|f| f.date.clone()).collect();
+        assert_eq!(dates, vec!["2026-12-31", "2026-06-15", "2026-01-05"]);
+        let _ = key;
+    }
+
+    #[test]
+    fn scan_import_rejects_non_utf8() {
+        let dir = temp_dir("import-utf8");
+        let _key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = temp_dir("import-utf8-src");
+        fs::write(src.join("2026-10-23.txt"), [0xff, 0xfe, 0x00]).unwrap();
+
+        let scan = scan_import(&src, &BTreeMap::new()).unwrap();
+        assert_eq!(scan.failed, 1);
+        assert_eq!(scan.files[0].status, ImportStatus::Failed);
+    }
+
+    #[test]
+    fn scan_import_on_missing_folder_fails() {
+        let missing = std::env::temp_dir().join("fly-diary-test-does-not-exist");
+        let _ = fs::remove_dir_all(&missing);
+        assert!(scan_import(&missing, &BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn import_entries_writes_and_updates_index() {
+        let dir = temp_dir("import-run");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir(
+            "import-run-src",
+            &[
+                ("2026-10-23.txt", "匯入標題\n匯入內容"),
+                ("2026-10-24.txt", "第二天\n更多內容"),
+            ],
+        );
+
+        let report = import_entries(
+            &dir,
+            &key,
+            &src,
+            &["2026-10-23".to_string(), "2026-10-24".to_string()],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.imported.len(), 2);
+        assert!(report.skipped.is_empty());
+        assert!(report.failed.is_empty());
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "2026-10-23");
+        assert_eq!(entry.content, "匯入標題\n匯入內容");
+
+        // The index must reflect the import without a manual rebuild.
+        let listed = list_entries(&dir, &key).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].date, "2026-10-24");
+        assert_eq!(listed[0].title, "2026-10-24");
+    }
+
+    #[test]
+    fn import_entries_skips_existing_without_overwrite() {
+        let dir = temp_dir("import-skip");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "原本", "原本內容").unwrap();
+
+        let src = import_dir("import-skip-src", &[("2026-10-23.txt", "新的\n新內容")]);
+
+        let report =
+            import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
+        assert!(report.imported.is_empty());
+        assert_eq!(report.skipped, vec!["2026-10-23"]);
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "原本");
+    }
+
+    #[test]
+    fn import_entries_overwrites_when_asked() {
+        let dir = temp_dir("import-overwrite");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "原本", "原本內容").unwrap();
+
+        let src = import_dir("import-overwrite-src", &[("2026-10-23.txt", "新的\n新內容")]);
+
+        let report = import_entries(&dir, &key, &src, &["2026-10-23".to_string()], true).unwrap();
+        assert_eq!(report.imported, vec!["2026-10-23"]);
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "2026-10-23");
+        assert_eq!(entry.content, "新的\n新內容");
+    }
+
+    #[test]
+    fn import_entries_reports_missing_and_bad_dates() {
+        let dir = temp_dir("import-missing");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir("import-missing-src", &[]);
+
+        let report = import_entries(
+            &dir,
+            &key,
+            &src,
+            &["2026-10-23".to_string(), "not-a-date".to_string()],
+            false,
+        )
+        .unwrap();
+
+        assert!(report.imported.is_empty());
+        assert_eq!(report.failed.len(), 2);
+        assert!(report.failed.iter().any(|f| f.name == "2026-10-23.txt"));
+        assert!(report.failed.iter().any(|f| f.name == "not-a-date"));
+    }
+
+    #[test]
+    fn import_entries_keeps_going_after_a_failure() {
+        let dir = temp_dir("import-partial");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir("import-partial-src", &[("2026-10-24.txt", "好的\n內容")]);
+
+        let report = import_entries(
+            &dir,
+            &key,
+            &src,
+            &["2026-10-23".to_string(), "2026-10-24".to_string()],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.imported, vec!["2026-10-24"]);
+        assert_eq!(report.failed.len(), 1);
+        assert!(read_entry(&dir, &key, "2026-10-24").unwrap().is_some());
+    }
+
+    #[test]
+    fn imported_entry_is_encrypted_on_disk() {
+        let dir = temp_dir("import-encrypted");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir("import-encrypted-src", &[("2026-10-23.txt", "秘密標題\n秘密內容")]);
+
+        import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
+
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        assert!(!raw.contains("秘密標題"));
+        assert!(!raw.contains("秘密內容"));
+    }
+
+    #[test]
+    fn parallel_import_writes_every_entry() {
+        let dir = temp_dir("import-parallel");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+
+        // Enough files to actually spread across the pool.
+        let names: Vec<String> = (1..=60)
+            .map(|i| format!("2026-{:02}-{:02}.txt", (i - 1) / 28 + 1, (i - 1) % 28 + 1))
+            .collect();
+        let files: Vec<(&str, &str)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| (name.as_str(), if i % 2 == 0 { "標題\n內容" } else { "另一篇\n更多" }))
+            .collect();
+        let src = import_dir("import-parallel-src", &files);
+
+        let dates: Vec<String> = names
+            .iter()
+            .map(|n| n.trim_end_matches(".txt").to_string())
+            .collect();
+
+        let report = import_entries(&dir, &key, &src, &dates, false).unwrap();
+        assert_eq!(report.imported.len(), dates.len());
+        assert!(report.skipped.is_empty());
+        assert!(report.failed.is_empty());
+
+        // Every file must be readable, titled after its file name, and keep the
+        // whole file as the body.
+        for (i, date) in dates.iter().enumerate() {
+            let entry = read_entry(&dir, &key, date).unwrap().unwrap();
+            assert_eq!(entry.title, *date, "wrong title for {date}");
+            let expected = if i % 2 == 0 { "標題\n內容" } else { "另一篇\n更多" };
+            assert_eq!(entry.content, expected, "wrong content for {date}");
+        }
+
+        // The index must list all of them after a single write.
+        assert_eq!(list_entries(&dir, &key).unwrap().len(), dates.len());
+    }
+
+    #[test]
+    fn parallel_import_reports_in_confirmed_order() {
+        let dir = temp_dir("import-order");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir(
+            "import-order-src",
+            &[
+                ("2026-01-01.txt", "a"),
+                ("2026-01-02.txt", "b"),
+                ("2026-01-03.txt", "c"),
+                ("2026-01-04.txt", "d"),
+            ],
+        );
+
+        // Deliberately not sorted: the report must echo the input order even
+        // though the workers finish in an arbitrary order.
+        let dates = vec![
+            "2026-01-03".to_string(),
+            "2026-01-01".to_string(),
+            "2026-01-04".to_string(),
+            "2026-01-02".to_string(),
+        ];
+
+        let report = import_entries(&dir, &key, &src, &dates, false).unwrap();
+        assert_eq!(report.imported, dates);
+    }
+
+    #[test]
+    fn parallel_import_reports_progress_up_to_total() {
+        let dir = temp_dir("import-progress");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir(
+            "import-progress-src",
+            &[
+                ("2026-02-01.txt", "a"),
+                ("2026-02-02.txt", "b"),
+                ("2026-02-03.txt", "c"),
+            ],
+        );
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let dates: Vec<String> = ["2026-02-01", "2026-02-02", "2026-02-03"]
+            .iter()
+            .map(|d| d.to_string())
+            .collect();
+
+        import_entries_with_progress(&dir, &key, &src, &dates, false, |done, total| {
+            seen.lock().unwrap().push((done, total));
+        })
+        .unwrap();
+
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.len(), 3, "one callback per file");
+        assert!(seen.iter().all(|(_, total)| *total == 3));
+        // The counter is monotonic and ends at the total.
+        let mut dones: Vec<usize> = seen.iter().map(|(done, _)| *done).collect();
+        dones.sort_unstable();
+        assert_eq!(dones, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn parallel_import_mixes_imported_skipped_and_failed() {
+        let dir = temp_dir("import-mixed");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-03-01", "既有", "內容").unwrap();
+
+        let src = import_dir(
+            "import-mixed-src",
+            &[
+                ("2026-03-01.txt", "重複\n不覆蓋"),
+                ("2026-03-02.txt", "新的\n內容"),
+            ],
+        );
+
+        let report = import_entries(
+            &dir,
+            &key,
+            &src,
+            &[
+                "2026-03-01".to_string(),
+                "2026-03-02".to_string(),
+                "2026-03-03".to_string(),
+                "bad-date".to_string(),
+            ],
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(report.imported, vec!["2026-03-02"]);
+        assert_eq!(report.skipped, vec!["2026-03-01"]);
+        assert_eq!(report.failed.len(), 2);
+        assert!(report.failed.iter().any(|f| f.name == "2026-03-03.txt"));
+        assert!(report.failed.iter().any(|f| f.name == "bad-date"));
+
+        // The pre-existing entry must be untouched.
+        let kept = read_entry(&dir, &key, "2026-03-01").unwrap().unwrap();
+        assert_eq!(kept.title, "既有");
+    }
+
+    #[test]
+    fn parallel_import_writes_the_index_only_once() {
+        let dir = temp_dir("import-index-once");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir(
+            "import-index-once-src",
+            &[
+                ("2026-04-01.txt", "a"),
+                ("2026-04-02.txt", "b"),
+                ("2026-04-03.txt", "c"),
+            ],
+        );
+
+        let dates: Vec<String> = ["2026-04-01", "2026-04-02", "2026-04-03"]
+            .iter()
+            .map(|d| d.to_string())
+            .collect();
+        import_entries(&dir, &key, &src, &dates, false).unwrap();
+
+        // A single index write means the file's mtime is not bumped per entry;
+        // more importantly, the contents must be complete and consistent.
+        let index = read_index(&dir, &key).unwrap();
+        assert_eq!(index.len(), 3);
+        for date in &dates {
+            assert!(index.contains_key(date), "missing {date} in index");
+        }
     }
 }

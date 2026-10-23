@@ -3,6 +3,7 @@
 // served as plain static files (no bundler), so bare module specifiers cannot
 // be resolved by the browser.
 const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event;
 
 // ---------------------------------------------------------------------------
 // State
@@ -81,6 +82,27 @@ const els = {
   deleteBtn: $("delete-btn"),
   lockBtn: $("lock-btn"),
   changeDirBtn: $("change-dir-btn"),
+  // Import dialog
+  importBtn: $("import-btn"),
+  importOverlay: $("import-overlay"),
+  importClose: $("import-close"),
+  importCancel: $("import-cancel"),
+  importConfirm: $("import-confirm"),
+  importDir: $("import-dir"),
+  importReady: $("import-ready"),
+  importConflicts: $("import-conflicts"),
+  importFailed: $("import-failed"),
+  importOverwriteRow: $("import-overwrite-row"),
+  importOverwrite: $("import-overwrite"),
+  importList: $("import-list"),
+  importProgress: $("import-progress"),
+  importProgressBar: $("import-progress-bar"),
+  importProgressCount: $("import-progress-count"),
+  importProgressTrack: document.querySelector(
+    "#import-progress .import-progress-track"
+  ),
+  importResult: $("import-result"),
+  importError: $("import-error"),
 };
 
 // ---------------------------------------------------------------------------
@@ -264,6 +286,271 @@ function moveCalendarFocus(days) {
 function pickCalendarDate(iso) {
   closeCalendar({ restoreFocus: true });
   selectDate(iso);
+}
+
+// ---------------------------------------------------------------------------
+// Import
+// ---------------------------------------------------------------------------
+
+/** Result of the last scan, or `null` when the dialog is closed. */
+let importScan = null;
+/** Whether the last import finished, so the footer switches to "close". */
+let importDone = false;
+
+const IMPORT_BADGES = {
+  ready: "可匯入",
+  conflict: "已存在",
+  failed: "失敗",
+};
+
+/** Build one row of the import preview list. */
+function createImportRow(file) {
+  const row = document.createElement("div");
+  row.className = `import-row ${file.status}`;
+  row.setAttribute("role", "listitem");
+
+  const date = document.createElement("span");
+  date.className = "row-date";
+  date.textContent = file.date || file.name;
+
+  const title = document.createElement("span");
+  title.className = "row-title" + (file.title ? "" : " empty");
+  title.textContent = file.title || "（無標題）";
+  title.title = file.title || "";
+
+  const badge = document.createElement("span");
+  badge.className = "row-badge";
+  badge.textContent = IMPORT_BADGES[file.status] || file.status;
+
+  row.append(date, title, badge);
+
+  // Conflicts and failures explain themselves on a second line.
+  if (file.reason) {
+    const reason = document.createElement("span");
+    reason.className = "row-reason";
+    reason.textContent = file.reason;
+    row.append(reason);
+  }
+
+  return row;
+}
+
+/** Render the scan result into the dialog. */
+function renderImportScan(scan) {
+  importScan = scan;
+  importDone = false;
+
+  els.importDir.textContent = scan.dir;
+  els.importReady.textContent = String(scan.ready);
+  els.importConflicts.textContent = String(scan.conflicts);
+  els.importFailed.textContent = String(scan.failed);
+
+  // The overwrite switch only makes sense when something would collide.
+  els.importOverwriteRow.hidden = scan.conflicts === 0;
+  els.importOverwrite.checked = false;
+
+  els.importResult.hidden = true;
+  els.importResult.replaceChildren();
+  els.importError.textContent = "";
+  hideImportProgress();
+
+  if (scan.files.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "import-row failed";
+    empty.textContent = "這個資料夾裡沒有 YYYY-MM-DD.txt 檔案";
+    els.importList.replaceChildren(empty);
+  } else {
+    const frag = document.createDocumentFragment();
+    for (const file of scan.files) frag.appendChild(createImportRow(file));
+    els.importList.replaceChildren(frag);
+  }
+
+  els.importConfirm.textContent = "匯入";
+  els.importConfirm.disabled = scan.ready === 0 && scan.conflicts === 0;
+  els.importCancel.textContent = "取消";
+}
+
+/** Show the dialog in a loading state while the folder is scanned. */
+function showImportLoading(dir) {
+  importScan = null;
+  importDone = false;
+  els.importDir.textContent = dir;
+  els.importReady.textContent = "0";
+  els.importConflicts.textContent = "0";
+  els.importFailed.textContent = "0";
+  els.importOverwriteRow.hidden = true;
+  els.importResult.hidden = true;
+  els.importError.textContent = "";
+  hideImportProgress();
+  els.importConfirm.disabled = true;
+  els.importConfirm.textContent = "匯入";
+  els.importCancel.textContent = "取消";
+
+  const loading = document.createElement("div");
+  loading.className = "import-row";
+  loading.textContent = "掃描中…";
+  els.importList.replaceChildren(loading);
+
+  els.importOverlay.hidden = false;
+}
+
+/**
+ * Show the progress bar at `done / total`.
+ *
+ * The bar is driven by the backend's `import-progress` event, which fires once
+ * per finished file. `total` is clamped to at least 1 so an empty batch cannot
+ * produce a division by zero.
+ */
+function setImportProgress(done, total) {
+  const safeTotal = Math.max(total, 1);
+  const percent = Math.min(100, Math.round((done / safeTotal) * 100));
+
+  els.importProgress.hidden = false;
+  els.importProgressBar.style.width = `${percent}%`;
+  els.importProgressCount.textContent = `${done} / ${total}`;
+  els.importProgressTrack.setAttribute("aria-valuenow", String(percent));
+}
+
+/** Hide the progress bar (before a scan, or once the report is shown). */
+function hideImportProgress() {
+  els.importProgress.hidden = true;
+  els.importProgressBar.style.width = "0%";
+  els.importProgressCount.textContent = "0 / 0";
+  els.importProgressTrack.setAttribute("aria-valuenow", "0");
+}
+
+function isImportOpen() {
+  return !els.importOverlay.hidden;
+}
+
+function closeImport() {
+  els.importOverlay.hidden = true;
+  importScan = null;
+  importDone = false;
+}
+
+/** Pick a folder, scan it, and show the preview. */
+async function startImport() {
+  let dir;
+  try {
+    dir = await invoke("pick_import_dir");
+  } catch (err) {
+    console.error("pick_import_dir failed:", err);
+    setStatus("無法開啟資料夾選擇器");
+    return;
+  }
+  if (!dir) return;
+
+  showImportLoading(dir);
+  try {
+    const scan = await invoke("scan_import", { importDir: dir });
+    renderImportScan(scan);
+  } catch (err) {
+    console.error("scan_import failed:", err);
+    els.importList.replaceChildren();
+    els.importError.textContent = typeof err === "string" ? err : "掃描失敗";
+  }
+}
+
+/** Write the confirmed dates and show the outcome in the same dialog. */
+async function confirmImport() {
+  if (!importScan) return;
+
+  const overwrite = els.importOverwrite.checked;
+  // Conflicts are only included when the user opted into overwriting.
+  const dates = importScan.files
+    .filter(
+      (f) => f.status === "ready" || (overwrite && f.status === "conflict")
+    )
+    .map((f) => f.date)
+    .filter(Boolean);
+
+  if (dates.length === 0) {
+    els.importError.textContent = "沒有可匯入的日記";
+    return;
+  }
+
+  els.importConfirm.disabled = true;
+  els.importConfirm.textContent = "匯入中…";
+  els.importError.textContent = "";
+  setImportProgress(0, dates.length);
+
+  // The backend imports on a thread pool and reports each finished file.
+  const onProgress = (event) => {
+    const { done, total } = event.payload || {};
+    if (typeof done !== "number" || typeof total !== "number") return;
+    setImportProgress(done, total);
+  };
+  let unlisten = null;
+  try {
+    unlisten = await listen("import-progress", onProgress);
+  } catch (err) {
+    // Progress is cosmetic; the import still works without it.
+    console.warn("import-progress listener failed:", err);
+  }
+
+  try {
+    const report = await invoke("run_import", {
+      importDir: importScan.dir,
+      dates,
+      overwrite,
+    });
+    renderImportReport(report);
+    await refreshList();
+  } catch (err) {
+    console.error("run_import failed:", err);
+    els.importError.textContent = typeof err === "string" ? err : "匯入失敗";
+    els.importConfirm.disabled = false;
+    els.importConfirm.textContent = "匯入";
+    hideImportProgress();
+  } finally {
+    if (typeof unlisten === "function") unlisten();
+  }
+}
+
+/** Replace the preview with the import outcome. */
+function renderImportReport(report) {
+  importDone = true;
+
+  const lines = [];
+  if (report.imported.length > 0) {
+    lines.push(`成功匯入 ${report.imported.length} 篇日記。`);
+  }
+  if (report.skipped.length > 0) {
+    lines.push(`略過 ${report.skipped.length} 篇已存在的日記。`);
+  }
+  if (report.failed.length > 0) {
+    lines.push(`有 ${report.failed.length} 個檔案匯入失敗：`);
+  }
+  if (lines.length === 0) {
+    lines.push("沒有任何變更。");
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const line of lines) {
+    const p = document.createElement("div");
+    p.className = "result-line";
+    p.textContent = line;
+    frag.appendChild(p);
+  }
+  for (const failure of report.failed) {
+    const p = document.createElement("div");
+    p.className = "result-fail";
+    p.textContent = `${failure.name}：${failure.reason}`;
+    frag.appendChild(p);
+  }
+
+  els.importResult.replaceChildren(frag);
+  els.importResult.hidden = false;
+  els.importList.replaceChildren();
+  hideImportProgress();
+
+  els.importConfirm.disabled = false;
+  els.importConfirm.textContent = "完成";
+  els.importCancel.textContent = "關閉";
+  els.importOverwriteRow.hidden = true;
+
+  setStatus(`已匯入 ${report.imported.length} 篇`, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -805,6 +1092,7 @@ async function changeDiaryDir() {
   allEntries = [];
   resetList();
   closeCalendar();
+  closeImport();
   renderDateLabel();
   els.title.value = "";
   els.content.value = "";
@@ -835,6 +1123,7 @@ async function lockNow() {
   allEntries = [];
   resetList();
   closeCalendar();
+  closeImport();
   renderDateLabel();
   els.title.value = "";
   els.content.value = "";
@@ -949,6 +1238,21 @@ els.deleteBtn.addEventListener("click", deleteCurrent);
 els.lockBtn.addEventListener("click", lockNow);
 els.changeDirBtn.addEventListener("click", changeDiaryDir);
 
+// Import dialog.
+els.importBtn.addEventListener("click", startImport);
+els.importClose.addEventListener("click", closeImport);
+els.importCancel.addEventListener("click", closeImport);
+els.importConfirm.addEventListener("click", () => {
+  // After a run the primary button just dismisses the result.
+  if (importDone) closeImport();
+  else confirmImport();
+});
+
+// Clicking the backdrop (but not the dialog itself) dismisses it.
+els.importOverlay.addEventListener("mousedown", (e) => {
+  if (e.target === els.importOverlay) closeImport();
+});
+
 els.search.addEventListener("input", () => {
   searchQuery = els.search.value;
   // A new filter changes the row count, so reset the scroll position.
@@ -969,6 +1273,12 @@ window.addEventListener("resize", () => renderVisibleRows(true));
 // Keyboard shortcuts.
 document.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
+
+  if (e.key === "Escape" && isImportOpen()) {
+    e.preventDefault();
+    closeImport();
+    return;
+  }
 
   if (e.key === "Escape" && isCalendarOpen()) {
     e.preventDefault();
