@@ -308,6 +308,33 @@ fn list_entries(
     storage::list_entries(&dir, guard.key()?)
 }
 
+/// List only the entries marked as favourites, newest first.
+#[tauri::command]
+fn list_favourites(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<EntryMeta>, String> {
+    let dir = diary_dir(&app)?;
+    let guard = session.lock().unwrap();
+    storage::list_favourites(&dir, guard.key()?)
+}
+
+/// Mark or unmark an entry as a favourite. Returns the stored flag.
+///
+/// The flag is part of the encrypted payload, so this rewrites the entry file;
+/// the frontend calls it only when the user toggles the bookmark.
+#[tauri::command]
+fn set_favourite(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    favourite: bool,
+) -> Result<bool, String> {
+    let dir = diary_dir(&app)?;
+    let guard = session.lock().unwrap();
+    storage::set_favourite(&dir, guard.key()?, &date, favourite)
+}
+
 /// Discard `index.xml` and rebuild it by scanning every entry file.
 ///
 /// The index is normally maintained automatically; this is an escape hatch for
@@ -365,11 +392,7 @@ fn scan_import(
 
     let guard = session.lock().unwrap();
     let key = guard.key()?;
-    let existing = storage::list_entries(&dir, key)?;
-    let existing: std::collections::BTreeMap<String, String> = existing
-        .into_iter()
-        .map(|meta| (meta.date, meta.title))
-        .collect();
+    let existing = storage::known_dates(&dir, key)?;
 
     storage::scan_import(&src, &existing)
 }
@@ -448,6 +471,8 @@ pub fn run() {
             save_entry,
             delete_entry,
             list_entries,
+            list_favourites,
+            set_favourite,
             rebuild_index,
             pick_import_dir,
             scan_import,

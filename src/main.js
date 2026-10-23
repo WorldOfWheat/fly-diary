@@ -35,6 +35,17 @@ let saveTimer = null;
 let allEntries = [];
 /** Search filter string. */
 let searchQuery = "";
+/**
+ * Which sidebar view is showing: `"all"` or `"favourites"`.
+ *
+ * Both views read the same `allEntries` array; the favourites view is just an
+ * extra filter, so switching never needs a second fetch or a second list.
+ */
+let currentView = "all";
+/** Whether the entry currently open in the editor is a favourite. */
+let currentFavourite = false;
+/** Set while a favourite toggle is in flight, to ignore double clicks. */
+let favouriteBusy = false;
 /** Guard so programmatic input updates don't trigger autosave. */
 let suppressInput = false;
 /** Whether the app has a settings file (i.e. the diary location is known). */
@@ -76,6 +87,10 @@ const els = {
   listScroll: $("entry-scroll"),
   listSpacer: $("entry-spacer"),
   search: $("search"),
+  viewAll: $("view-all"),
+  viewFavourites: $("view-favourites"),
+  favouriteBtn: $("favourite-btn"),
+  favouriteLabel: $("favourite-label"),
   datePicker: $("date-picker"),
   dateLabel: $("date-label"),
   dateMain: $("date-main"),
@@ -808,6 +823,7 @@ function refreshForLocale() {
   renderLockScreen();
   renderWeekdayHeaders();
   renderDateLabel();
+  renderFavouriteButton();
   updateWordCount();
   if (isCalendarOpen()) renderCalendar();
   if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
@@ -838,20 +854,33 @@ let renderedStart = -1;
 /** Index one past the last rendered row. */
 let renderedEnd = -1;
 
-/** Recompute `visibleEntries` from `allEntries` and the search query. */
+/**
+ * Recompute `visibleEntries` from `allEntries`, the active view and the search
+ * query.
+ *
+ * The view filter runs first: the favourites page is a subset of the same
+ * list, and searching inside it should only ever narrow that subset.
+ */
 function applyFilter() {
   const q = searchQuery.trim().toLowerCase();
+  const base =
+    currentView === "favourites"
+      ? allEntries.filter((e) => e.favourite)
+      : allEntries;
   visibleEntries = q
-    ? allEntries.filter(
+    ? base.filter(
         (e) => e.date.includes(q) || (e.title || "").toLowerCase().includes(q)
       )
-    : allEntries;
+    : base;
 }
 
 /** Build the DOM node for one entry row. */
 function createRow(entry, index) {
   const li = document.createElement("li");
-  li.className = "entry-item" + (entry.date === currentDate ? " active" : "");
+  li.className =
+    "entry-item" +
+    (entry.favourite ? " favourite" : "") +
+    (entry.date === currentDate ? " active" : "");
   li.dataset.date = entry.date;
   li.style.top = `${index * ROW_HEIGHT}px`;
 
@@ -910,9 +939,17 @@ function renderList() {
     renderedEnd = -1;
     const li = document.createElement("li");
     li.className = "list-empty";
-    li.textContent = searchQuery.trim()
-      ? t("sidebar.emptyFiltered")
-      : t("sidebar.empty");
+    if (searchQuery.trim()) {
+      li.textContent =
+        currentView === "favourites"
+          ? t("sidebar.emptyFavouritesFiltered")
+          : t("sidebar.emptyFiltered");
+    } else {
+      li.textContent =
+        currentView === "favourites"
+          ? t("sidebar.emptyFavourites")
+          : t("sidebar.empty");
+    }
     els.list.appendChild(li);
     return;
   }
@@ -979,6 +1016,96 @@ async function refreshList() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Favourites
+// ---------------------------------------------------------------------------
+
+/**
+ * Reflect `currentFavourite` on the bookmark button.
+ *
+ * `aria-pressed` is the single source of truth for the visual state (the CSS
+ * fills the star from it), so the label and the tooltip are the only things
+ * that need updating here.
+ */
+function renderFavouriteButton() {
+  if (!els.favouriteBtn) return;
+  els.favouriteBtn.setAttribute(
+    "aria-pressed",
+    currentFavourite ? "true" : "false"
+  );
+  els.favouriteBtn.title = currentFavourite
+    ? t("editor.unfavouriteTitle")
+    : t("editor.favouriteTitle");
+  if (els.favouriteLabel) {
+    els.favouriteLabel.textContent = currentFavourite
+      ? t("editor.favouriteOn")
+      : t("editor.favourite");
+  }
+}
+
+/** Switch the sidebar between the "all" and "favourites" views. */
+function setView(view) {
+  if (view !== "all" && view !== "favourites") return;
+  if (currentView === view) return;
+  currentView = view;
+
+  for (const [name, btn] of [
+    ["all", els.viewAll],
+    ["favourites", els.viewFavourites],
+  ]) {
+    if (!btn) continue;
+    const active = name === view;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+  }
+
+  // The row count changes, so the old scroll offset is meaningless.
+  els.listScroll.scrollTop = 0;
+  renderList();
+}
+
+/** Toggle the bookmark on the entry currently open in the editor. */
+async function toggleFavourite() {
+  if (!currentDate || favouriteBusy) return;
+  // Nothing to bookmark until the entry exists on disk.
+  if (!allEntries.some((e) => e.date === currentDate)) {
+    setStatus(t("status.favouriteFailed"));
+    return;
+  }
+
+  const next = !currentFavourite;
+  favouriteBusy = true;
+  els.favouriteBtn.disabled = true;
+  try {
+    const stored = await invoke("set_favourite", {
+      date: currentDate,
+      favourite: next,
+    });
+    currentFavourite = stored;
+    renderFavouriteButton();
+    setStatus(
+      stored ? t("status.favourited") : t("status.unfavourited"),
+      true
+    );
+
+    // Keep the cached metadata in step so the star and the favourites view
+    // update without a round trip.
+    const meta = allEntries.find((e) => e.date === currentDate);
+    if (meta) meta.favourite = stored;
+
+    // Un-favouriting while looking at the favourites page removes the row the
+    // user is reading, so the list has to be rebuilt.
+    if (currentView === "favourites") renderList();
+    else renderVisibleRows(true);
+  } catch (err) {
+    console.error("set_favourite failed:", err);
+    setStatus(t("status.favouriteFailed"));
+  } finally {
+    favouriteBusy = false;
+    els.favouriteBtn.disabled = false;
+  }
+}
+
 /** Load the entry for `date` into the editor. */
 async function selectDate(date) {
   // Flush any pending save for the previous date before switching.
@@ -1002,6 +1129,8 @@ async function selectDate(date) {
     suppressInput = false;
     savedTitle = title;
     savedContent = content;
+    currentFavourite = entry ? Boolean(entry.favourite) : false;
+    renderFavouriteButton();
     setStatus(entry ? t("status.loaded") : t("status.newEntry"));
   } catch (err) {
     console.error("get_entry failed:", err);
@@ -1009,6 +1138,8 @@ async function selectDate(date) {
   }
 
   els.deleteBtn.disabled = !allEntries.some((e) => e.date === date);
+  // A brand-new date has nothing to bookmark yet.
+  els.favouriteBtn.disabled = els.deleteBtn.disabled;
   updateWordCount();
   scrollDateIntoView(date);
   highlightActive();
@@ -1067,6 +1198,9 @@ async function deleteCurrent() {
     updateWordCount();
     setStatus(t("status.deleted"));
     els.deleteBtn.disabled = true;
+    els.favouriteBtn.disabled = true;
+    currentFavourite = false;
+    renderFavouriteButton();
     await refreshList();
   } catch (err) {
     console.error("delete_entry failed:", err);
@@ -1483,8 +1617,13 @@ els.newToday.addEventListener("click", async () => {
 });
 
 els.deleteBtn.addEventListener("click", deleteCurrent);
+els.favouriteBtn.addEventListener("click", toggleFavourite);
 els.lockBtn.addEventListener("click", lockNow);
 els.changeDirBtn.addEventListener("click", changeDiaryDir);
+
+// Sidebar view switch.
+els.viewAll.addEventListener("click", () => setView("all"));
+els.viewFavourites.addEventListener("click", () => setView("favourites"));
 
 // Import dialog.
 els.importBtn.addEventListener("click", startImport);
@@ -1549,6 +1688,9 @@ document.addEventListener("keydown", (e) => {
   } else if (mod && e.key.toLowerCase() === "t") {
     e.preventDefault();
     els.newToday.click();
+  } else if (mod && e.key.toLowerCase() === "d") {
+    e.preventDefault();
+    toggleFavourite();
   } else if (e.altKey && e.key === "ArrowLeft") {
     e.preventDefault();
     selectDate(shiftDate(currentDate, -1));
@@ -1584,6 +1726,10 @@ async function init() {
   // Restore the user's font size before anything is drawn, so the first paint
   // is already at the right scale.
   initFontScale();
+
+  // The bookmark button starts disabled: no entry is open yet.
+  renderFavouriteButton();
+  els.favouriteBtn.disabled = true;
 
   await loadKdfDefaults();
   try {

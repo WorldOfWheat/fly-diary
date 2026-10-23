@@ -56,6 +56,29 @@ const INDEX_RECORD_SEPARATOR: u8 = b'\n';
 /// a newline; the body may contain any number of them.
 const FIELD_SEPARATOR: u8 = b'\n';
 
+/// Marker that starts the optional favourite flag at the head of the payload.
+///
+/// Payload layout, version 3:
+///
+/// ```text
+/// \x01fav \n title \n content      (favourite)
+/// \x01-   \n title \n content      (not a favourite)
+/// title \n content                 (version 2, no flag)
+/// ```
+///
+/// The flag has to live inside the encrypted payload rather than only in the
+/// index: the index is a cache that gets rebuilt by scanning the entry files,
+/// so a flag stored only there would be lost on the next rebuild. `\x01` is a
+/// control character that never appears in a title (titles are single lines of
+/// user text) and is stripped from imported files, so it is unambiguous.
+const FAVOURITE_MARKER: u8 = 0x01;
+
+/// Value following [`FAVOURITE_MARKER`] when the entry is a favourite.
+const FAVOURITE_ON: u8 = b'1';
+
+/// Value following [`FAVOURITE_MARKER`] when the entry is not a favourite.
+const FAVOURITE_OFF: u8 = b'0';
+
 /// Metadata for a single diary entry, used by the sidebar list.
 #[derive(Debug, Clone, Serialize)]
 pub struct EntryMeta {
@@ -66,6 +89,8 @@ pub struct EntryMeta {
     pub title: String,
     /// File size in bytes.
     pub size: u64,
+    /// Whether the user marked this entry as a favourite.
+    pub favourite: bool,
 }
 
 /// A decrypted diary entry handed to the frontend.
@@ -74,6 +99,8 @@ pub struct Entry {
     pub date: String,
     pub title: String,
     pub content: String,
+    /// Whether the user marked this entry as a favourite.
+    pub favourite: bool,
 }
 
 /// Validate that `date` is a real calendar date in `YYYY-MM-DD` form.
@@ -431,28 +458,46 @@ fn index_path(dir: &Path) -> PathBuf {
     dir.join(INDEX_FILE)
 }
 
-/// Serialize `{date, title}` pairs into the plaintext index format.
+/// One index record: the title plus the favourite flag.
 ///
-/// One record per line, `date \t title`. Tabs and newlines in titles are
+/// The index is a cache of what the entry files already contain, so it mirrors
+/// the flag purely to avoid decrypting every entry when the favourites page is
+/// opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexRecord {
+    pub title: String,
+    pub favourite: bool,
+}
+
+/// Serialize index records into the plaintext index format.
+///
+/// One record per line, `date \t title \t fav`. Tabs and newlines in titles are
 /// flattened to spaces so the record separator stays unambiguous.
-fn pack_index(entries: &BTreeMap<String, String>) -> Vec<u8> {
+fn pack_index(entries: &BTreeMap<String, IndexRecord>) -> Vec<u8> {
     let mut out = Vec::new();
-    for (date, title) in entries {
-        let title = title.replace(['\t', '\r', '\n'], " ");
+    for (date, record) in entries {
+        let title = record.title.replace(['\t', '\r', '\n'], " ");
         out.extend_from_slice(date.as_bytes());
         out.push(INDEX_FIELD_SEPARATOR);
         out.extend_from_slice(title.as_bytes());
+        out.push(INDEX_FIELD_SEPARATOR);
+        out.push(if record.favourite {
+            FAVOURITE_ON
+        } else {
+            FAVOURITE_OFF
+        });
         out.push(INDEX_RECORD_SEPARATOR);
     }
     out
 }
 
-/// Parse the plaintext index format back into `{date, title}` pairs.
+/// Parse the plaintext index format back into records.
 ///
 /// Malformed lines are skipped rather than failing the whole index; a bad
 /// record is indistinguishable from a missing one and will be re-added on the
-/// next write.
-fn unpack_index(plain: &[u8]) -> BTreeMap<String, String> {
+/// next write. Two-field records (written before favourites existed) are
+/// accepted and read as "not a favourite".
+fn unpack_index(plain: &[u8]) -> BTreeMap<String, IndexRecord> {
     let mut entries = BTreeMap::new();
     for line in plain.split(|b| *b == INDEX_RECORD_SEPARATOR) {
         if line.is_empty() {
@@ -465,14 +510,33 @@ fn unpack_index(plain: &[u8]) -> BTreeMap<String, String> {
         if validate_date(&date).is_err() {
             continue;
         }
-        let title = String::from_utf8_lossy(&line[sep + 1..]).to_string();
-        entries.insert(date, title);
+
+        let rest = &line[sep + 1..];
+        let (title, favourite) = match rest.iter().rposition(|b| *b == INDEX_FIELD_SEPARATOR) {
+            // Three fields: the last one is the flag.
+            Some(flag_sep) => {
+                let flag = &rest[flag_sep + 1..];
+                let favourite = flag == [FAVOURITE_ON];
+                (
+                    String::from_utf8_lossy(&rest[..flag_sep]).to_string(),
+                    favourite,
+                )
+            }
+            // Two fields: an index written before favourites existed.
+            None => (String::from_utf8_lossy(rest).to_string(), false),
+        };
+
+        entries.insert(date, IndexRecord { title, favourite });
     }
     entries
 }
 
 /// Write the encrypted index for `entries`.
-fn write_index(dir: &Path, key: &[u8; 32], entries: &BTreeMap<String, String>) -> Result<(), String> {
+fn write_index(
+    dir: &Path,
+    key: &[u8; 32],
+    entries: &BTreeMap<String, IndexRecord>,
+) -> Result<(), String> {
     ensure_dir(dir)?;
     let (iv, ct) = crypto::encrypt(key, &pack_index(entries))?;
     let document = xml::to_xml(&EncryptedEntry::new(
@@ -485,7 +549,7 @@ fn write_index(dir: &Path, key: &[u8; 32], entries: &BTreeMap<String, String>) -
 
 /// Read and decrypt the index, returning `None` when it is missing or cannot
 /// be decrypted (wrong key, corrupt file, or written by another vault).
-fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, String>> {
+fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, IndexRecord>> {
     let text = fs::read_to_string(index_path(dir)).ok()?;
     let encrypted = xml::from_xml(&text).ok()?;
     let iv = crypto::b64_decode(&encrypted.iv).ok()?;
@@ -498,7 +562,7 @@ fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, String>> {
 ///
 /// This is the slow path: it is only used to build the index from scratch, or
 /// to repair it when it is missing or stale.
-fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, String>, String> {
+fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexRecord>, String> {
     ensure_dir(dir)?;
     let mut entries = BTreeMap::new();
 
@@ -532,8 +596,8 @@ fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, String>, 
         let Ok(plain) = crypto::decrypt(key, &iv, &ct) else {
             continue;
         };
-        let (title, _) = unpack(&plain, encrypted.legacy_title.as_deref());
-        entries.insert(date.to_string(), title);
+        let (title, _, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
+        entries.insert(date.to_string(), IndexRecord { title, favourite });
     }
 
     Ok(entries)
@@ -546,17 +610,18 @@ pub fn rebuild_index(dir: &Path, key: &[u8; 32]) -> Result<Vec<EntryMeta>, Strin
     Ok(to_meta(dir, &entries))
 }
 
-/// Convert `{date, title}` pairs into sidebar metadata, newest first.
-fn to_meta(dir: &Path, entries: &BTreeMap<String, String>) -> Vec<EntryMeta> {
+/// Convert index records into sidebar metadata, newest first.
+fn to_meta(dir: &Path, entries: &BTreeMap<String, IndexRecord>) -> Vec<EntryMeta> {
     entries
         .iter()
         .rev()
-        .map(|(date, title)| EntryMeta {
+        .map(|(date, record)| EntryMeta {
             date: date.clone(),
-            title: title.clone(),
+            title: record.title.clone(),
             size: fs::metadata(dir.join(format!("{date}.xml")))
                 .map(|m| m.len())
                 .unwrap_or(0),
+            favourite: record.favourite,
         })
         .collect()
 }
@@ -565,33 +630,66 @@ fn to_meta(dir: &Path, entries: &BTreeMap<String, String>) -> Vec<EntryMeta> {
 // Entries
 // ---------------------------------------------------------------------------
 
-/// Join the title and the body into the plaintext that gets encrypted.
+/// Join the title, the body and the favourite flag into the plaintext that
+/// gets encrypted.
 ///
 /// The title is normalised to a single line so that the first
-/// [`FIELD_SEPARATOR`] always marks the end of the title.
-fn pack(title: &str, content: &str) -> Vec<u8> {
+/// [`FIELD_SEPARATOR`] always marks the end of the title. The flag is written
+/// as a leading `\x01` + `1`/`0` line, which older versions of the app would
+/// read as part of the title — acceptable, because the only way to run an older
+/// build against a newer vault is to downgrade deliberately.
+fn pack(title: &str, content: &str, favourite: bool) -> Vec<u8> {
     let title = title.replace(['\r', '\n'], " ");
-    let mut plain = Vec::with_capacity(title.len() + 1 + content.len());
+    let mut plain = Vec::with_capacity(title.len() + content.len() + 4);
+    plain.push(FAVOURITE_MARKER);
+    plain.push(if favourite { FAVOURITE_ON } else { FAVOURITE_OFF });
+    plain.push(FIELD_SEPARATOR);
     plain.extend_from_slice(title.as_bytes());
     plain.push(FIELD_SEPARATOR);
     plain.extend_from_slice(content.as_bytes());
     plain
 }
 
-/// Split decrypted plaintext back into `(title, content)`.
+/// Split decrypted plaintext back into `(title, content, favourite)`.
+///
+/// Three payload layouts are understood:
+///
+/// * version 3 — `\x01` + flag + `\n` + title + `\n` + content
+/// * version 2 — title + `\n` + content (no flag, so not a favourite)
+/// * version 1 — body only, with the title stored in the clear
 ///
 /// Version 1 files only encrypted the body, so `legacy_title` is used as the
 /// title when the payload contains no separator.
-fn unpack(plain: &[u8], legacy_title: Option<&str>) -> (String, String) {
+fn unpack(plain: &[u8], legacy_title: Option<&str>) -> (String, String, bool) {
+    // Version 3: a leading marker byte followed by the flag and a newline.
+    if plain.first() == Some(&FAVOURITE_MARKER) && plain.get(2) == Some(&FIELD_SEPARATOR) {
+        let favourite = plain[1] == FAVOURITE_ON;
+        let rest = &plain[3..];
+        return match rest.iter().position(|b| *b == FIELD_SEPARATOR) {
+            Some(idx) => (
+                String::from_utf8_lossy(&rest[..idx]).to_string(),
+                String::from_utf8_lossy(&rest[idx + 1..]).to_string(),
+                favourite,
+            ),
+            // A flag with no title separator: treat the rest as the body.
+            None => (
+                String::new(),
+                String::from_utf8_lossy(rest).to_string(),
+                favourite,
+            ),
+        };
+    }
+
     match plain.iter().position(|b| *b == FIELD_SEPARATOR) {
         Some(idx) => {
             let title = String::from_utf8_lossy(&plain[..idx]).to_string();
             let content = String::from_utf8_lossy(&plain[idx + 1..]).to_string();
-            (title, content)
+            (title, content, false)
         }
         None => (
             legacy_title.unwrap_or_default().to_string(),
             String::from_utf8_lossy(plain).to_string(),
+            false,
         ),
     }
 }
@@ -609,16 +707,18 @@ pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry
     let iv = crypto::b64_decode(&encrypted.iv)?;
     let ct = crypto::b64_decode(&encrypted.payload)?;
     let plain = crypto::decrypt(key, &iv, &ct)?;
-    let (title, content) = unpack(&plain, encrypted.legacy_title.as_deref());
+    let (title, content, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
 
     Ok(Some(Entry {
         date: date.to_string(),
         title,
         content,
+        favourite,
     }))
 }
 
-/// Encrypt `title`/`content` and write the entry file, leaving the index alone.
+/// Encrypt `title`/`content`/`favourite` and write the entry file, leaving the
+/// index alone.
 ///
 /// This is the half of [`write_entry`] that touches a single file, so it is
 /// safe to call concurrently for different dates. Callers that batch many
@@ -629,11 +729,12 @@ fn write_entry_file(
     date: &str,
     title: &str,
     content: &str,
+    favourite: bool,
 ) -> Result<(), String> {
     ensure_dir(dir)?;
     let path = entry_path(dir, date)?;
 
-    let (iv, ct) = crypto::encrypt(key, &pack(title, content))?;
+    let (iv, ct) = crypto::encrypt(key, &pack(title, content, favourite))?;
     let encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
     let document = xml::to_xml(&encrypted)?;
     fs::write(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))
@@ -643,6 +744,10 @@ fn write_entry_file(
 ///
 /// Because the filename is derived from the date, writing the same date twice
 /// naturally performs an upsert: there can only ever be one file per day.
+///
+/// The favourite flag is *preserved* across saves: the editor autosaves the
+/// title and body constantly, and it has no business clearing a bookmark the
+/// user set. Use [`set_favourite`] to change it.
 pub fn write_entry(
     dir: &Path,
     key: &[u8; 32],
@@ -650,13 +755,56 @@ pub fn write_entry(
     title: &str,
     content: &str,
 ) -> Result<(), String> {
-    write_entry_file(dir, key, date, title, content)?;
+    // Read the existing flag before overwriting the file. A missing entry is a
+    // new one, which starts out unfavourited.
+    let favourite = read_entry(dir, key, date)?
+        .map(|entry| entry.favourite)
+        .unwrap_or(false);
+
+    write_entry_file(dir, key, date, title, content, favourite)?;
 
     // Keep the sidebar index in sync. A missing index is rebuilt from scratch
     // so the first write after an upgrade also seeds it.
     let mut index = read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
-    index.insert(date.to_string(), title.to_string());
+    index.insert(
+        date.to_string(),
+        IndexRecord {
+            title: title.to_string(),
+            favourite,
+        },
+    );
     write_index(dir, key, &index)
+}
+
+/// Mark or unmark an entry as a favourite.
+///
+/// The flag lives inside the encrypted payload, so this rewrites the entry file
+/// (re-encrypting the title and body with a fresh IV) and then updates the
+/// index. Returns the flag that was actually stored, which is `false` when the
+/// entry does not exist.
+pub fn set_favourite(
+    dir: &Path,
+    key: &[u8; 32],
+    date: &str,
+    favourite: bool,
+) -> Result<bool, String> {
+    let Some(entry) = read_entry(dir, key, date)? else {
+        return Ok(false);
+    };
+
+    write_entry_file(dir, key, date, &entry.title, &entry.content, favourite)?;
+
+    let mut index = read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
+    index.insert(
+        date.to_string(),
+        IndexRecord {
+            title: entry.title,
+            favourite,
+        },
+    );
+    write_index(dir, key, &index)?;
+
+    Ok(favourite)
 }
 
 /// Delete the entry for a given date. Missing files are treated as success.
@@ -693,6 +841,15 @@ pub fn list_entries(dir: &Path, key: &[u8; 32]) -> Result<Vec<EntryMeta>, String
 
     // No usable index: fall back to the slow path and persist the result.
     rebuild_index(dir, key)
+}
+
+/// List only the entries the user marked as favourites, newest first.
+///
+/// This is a filter over the same index [`list_entries`] uses, so it costs one
+/// decryption rather than one per entry.
+pub fn list_favourites(dir: &Path, key: &[u8; 32]) -> Result<Vec<EntryMeta>, String> {
+    let all = list_entries(dir, key)?;
+    Ok(all.into_iter().filter(|meta| meta.favourite).collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -816,7 +973,10 @@ fn date_from_import_name(name: &str) -> Option<String> {
 }
 
 /// Read and classify one file from the import folder.
-fn inspect_import_file(path: &Path, existing: &BTreeMap<String, String>) -> ImportFile {
+///
+/// `existing` only needs the set of dates that already have an entry, so it is
+/// passed as the index's key type rather than a plain `String` map.
+fn inspect_import_file(path: &Path, existing: &BTreeMap<String, IndexRecord>) -> ImportFile {
     let name = path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -881,6 +1041,18 @@ fn inspect_import_file(path: &Path, existing: &BTreeMap<String, String>) -> Impo
     file
 }
 
+/// The set of dates that already have an entry, for import conflict detection.
+///
+/// The importer only needs to know *which* dates exist, not their titles, so
+/// this keeps the index's internal record type out of the command layer.
+pub fn known_dates(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexRecord>, String> {
+    ensure_dir(dir)?;
+    match read_index(dir, key) {
+        Some(index) => Ok(index),
+        None => scan_entries(dir, key),
+    }
+}
+
 /// Scan `import_dir` and classify every `.txt` file. Writes nothing.
 ///
 /// `existing` is the current index, used to detect dates that would be
@@ -890,7 +1062,10 @@ fn inspect_import_file(path: &Path, existing: &BTreeMap<String, String>) -> Impo
 /// UTF-8 decode, so a folder of a few thousand entries is limited by the disk
 /// rather than by a single core. The result is sorted afterwards, so the order
 /// is deterministic regardless of how the work was scheduled.
-pub fn scan_import(import_dir: &Path, existing: &BTreeMap<String, String>) -> Result<ImportScan, String> {
+pub fn scan_import(
+    import_dir: &Path,
+    existing: &BTreeMap<String, IndexRecord>,
+) -> Result<ImportScan, String> {
     let entries = fs::read_dir(import_dir)
         .map_err(|e| format!("Failed to read import folder: {e}"))?;
 
@@ -1012,7 +1187,9 @@ fn import_one(
 
     let content = normalise_imported(&text);
     let title = title_from_import_name(&name);
-    match write_entry_file(dir, key, date, &title, &content) {
+    // Imported entries start out unfavourited; the user can bookmark them
+    // afterwards from the editor.
+    match write_entry_file(dir, key, date, &title, &content, false) {
         Ok(()) => ImportOutcome::Imported(date.to_string(), title),
         Err(reason) => ImportOutcome::Failed(ImportFailure { name, reason }),
     }
@@ -1083,7 +1260,13 @@ where
     for outcome in outcomes {
         match outcome {
             ImportOutcome::Imported(date, title) => {
-                index.insert(date.clone(), title);
+                index.insert(
+                    date.clone(),
+                    IndexRecord {
+                        title,
+                        favourite: false,
+                    },
+                );
                 report.imported.push(date);
             }
             ImportOutcome::Skipped(date) => report.skipped.push(date),
@@ -2030,5 +2213,197 @@ mod tests {
         for date in &dates {
             assert!(index.contains_key(date), "missing {date} in index");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Favourites
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn new_entries_are_not_favourites() {
+        let dir = temp_dir("fav-default");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert!(!entry.favourite);
+
+        let list = list_entries(&dir, &key).unwrap();
+        assert!(!list[0].favourite);
+        assert!(list_favourites(&dir, &key).unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_favourite_roundtrips_through_the_file_and_the_index() {
+        let dir = temp_dir("fav-set");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "標題", "內容").unwrap();
+
+        assert!(set_favourite(&dir, &key, "2026-10-23", true).unwrap());
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert!(entry.favourite);
+        assert_eq!(entry.title, "標題", "the title must survive the rewrite");
+        assert_eq!(entry.content, "內容", "the body must survive the rewrite");
+
+        // The index mirrors the flag, so the favourites page needs no scan.
+        let list = list_entries(&dir, &key).unwrap();
+        assert!(list[0].favourite);
+        let favourites = list_favourites(&dir, &key).unwrap();
+        assert_eq!(favourites.len(), 1);
+        assert_eq!(favourites[0].date, "2026-10-23");
+
+        // And it can be turned back off.
+        assert!(!set_favourite(&dir, &key, "2026-10-23", false).unwrap());
+        assert!(list_favourites(&dir, &key).unwrap().is_empty());
+        assert!(!read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().favourite);
+    }
+
+    #[test]
+    fn favourite_flag_is_encrypted_on_disk() {
+        let dir = temp_dir("fav-encrypted");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+        set_favourite(&dir, &key, "2026-10-23", true).unwrap();
+
+        // The marker byte lives inside the ciphertext, so it must not appear in
+        // the base64 payload or anywhere else in the document.
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        assert!(!raw.contains('\u{1}'), "flag marker must be encrypted");
+        assert!(!raw.contains("favourite"));
+    }
+
+    #[test]
+    fn saving_an_entry_preserves_its_favourite_flag() {
+        let dir = temp_dir("fav-preserve");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "舊", "舊內容").unwrap();
+        set_favourite(&dir, &key, "2026-10-23", true).unwrap();
+
+        // Autosave rewrites the title and body; the bookmark must survive.
+        write_entry(&dir, &key, "2026-10-23", "新", "新內容").unwrap();
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "新");
+        assert_eq!(entry.content, "新內容");
+        assert!(entry.favourite, "autosave must not clear the bookmark");
+        assert_eq!(list_favourites(&dir, &key).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_favourite_on_a_missing_entry_is_a_no_op() {
+        let dir = temp_dir("fav-missing");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+
+        assert!(!set_favourite(&dir, &key, "2026-10-23", true).unwrap());
+        assert!(read_entry(&dir, &key, "2026-10-23").unwrap().is_none());
+        assert!(!dir.join("2026-10-23.xml").exists());
+    }
+
+    #[test]
+    fn set_favourite_rejects_bad_dates() {
+        let dir = temp_dir("fav-bad-date");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        assert!(set_favourite(&dir, &key, "../../etc/passwd", true).is_err());
+    }
+
+    #[test]
+    fn list_favourites_is_sorted_newest_first() {
+        let dir = temp_dir("fav-sort");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        for date in ["2026-01-05", "2026-10-23", "2025-12-31"] {
+            write_entry(&dir, &key, date, date, "c").unwrap();
+        }
+        set_favourite(&dir, &key, "2026-01-05", true).unwrap();
+        set_favourite(&dir, &key, "2025-12-31", true).unwrap();
+
+        let dates: Vec<String> = list_favourites(&dir, &key)
+            .unwrap()
+            .into_iter()
+            .map(|meta| meta.date)
+            .collect();
+        assert_eq!(dates, vec!["2026-01-05", "2025-12-31"]);
+    }
+
+    #[test]
+    fn favourite_survives_an_index_rebuild() {
+        let dir = temp_dir("fav-rebuild");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+        set_favourite(&dir, &key, "2026-10-23", true).unwrap();
+
+        // The index is only a cache: the flag must come back from the entry
+        // file itself, or a rebuild would silently drop every bookmark.
+        fs::remove_file(dir.join(INDEX_FILE)).unwrap();
+        let rebuilt = rebuild_index(&dir, &key).unwrap();
+        assert!(rebuilt[0].favourite);
+        assert_eq!(list_favourites(&dir, &key).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn version_2_payload_reads_as_not_favourite() {
+        let dir = temp_dir("fav-legacy-v2");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+
+        // Hand-build a version 2 payload: title + newline + body, no flag.
+        let (iv, ct) = crypto::encrypt(&key, b"old title\nold body").unwrap();
+        let document = xml::to_xml(&EncryptedEntry::new(
+            "2026-10-23",
+            crypto::b64_encode(&iv),
+            crypto::b64_encode(&ct),
+        ))
+        .unwrap();
+        fs::write(dir.join("2026-10-23.xml"), document).unwrap();
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "old title");
+        assert_eq!(entry.content, "old body");
+        assert!(!entry.favourite);
+    }
+
+    #[test]
+    fn index_without_a_flag_field_is_still_readable() {
+        // An index written before favourites existed has `date \t title` lines.
+        let plain = b"2026-10-23\told title\n2026-10-22\tother\n";
+        let index = unpack_index(plain);
+
+        assert_eq!(index.len(), 2);
+        assert_eq!(index["2026-10-23"].title, "old title");
+        assert!(!index["2026-10-23"].favourite);
+        assert!(!index["2026-10-22"].favourite);
+    }
+
+    #[test]
+    fn index_roundtrips_the_favourite_flag() {
+        let mut index = BTreeMap::new();
+        index.insert(
+            "2026-10-23".to_string(),
+            IndexRecord {
+                title: "有收藏".to_string(),
+                favourite: true,
+            },
+        );
+        index.insert(
+            "2026-10-22".to_string(),
+            IndexRecord {
+                title: "沒收藏".to_string(),
+                favourite: false,
+            },
+        );
+
+        let parsed = unpack_index(&pack_index(&index));
+        assert_eq!(parsed, index);
+    }
+
+    #[test]
+    fn imported_entries_are_not_favourites() {
+        let dir = temp_dir("fav-import");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let src = import_dir("fav-import-src", &[("2026-10-23.txt", "內容")]);
+
+        import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
+
+        assert!(!read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().favourite);
+        assert!(list_favourites(&dir, &key).unwrap().is_empty());
     }
 }

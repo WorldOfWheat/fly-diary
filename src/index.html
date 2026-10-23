@@ -74,6 +74,17 @@
                     今天
                 </button>
             </header>
+            <!-- View switch: the same list, filtered to favourites or not.
+                 Both views share the virtual scroller, so switching is just a
+                 re-filter rather than a second list to keep in sync. -->
+            <div class="view-switch" role="tablist" data-i18n-aria-label="sidebar.viewFavouritesTitle"
+                aria-label="收藏">
+                <button id="view-all" class="view-tab is-active" type="button" role="tab" aria-selected="true"
+                    data-i18n="sidebar.viewAll" data-i18n-title="sidebar.viewAllTitle" title="顯示所有日記">全部</button>
+                <button id="view-favourites" class="view-tab" type="button" role="tab" aria-selected="false"
+                    data-i18n="sidebar.viewFavourites" data-i18n-title="sidebar.viewFavouritesTitle"
+                    title="只顯示收藏的日記">收藏</button>
+            </div>
             <div class="search-wrap">
                 <input id="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期或標題…"
                     autocomplete="off" />
@@ -156,6 +167,15 @@
                 </div>
                 <div class="status">
                     <span id="status" class="status-text"></span>
+                    <!-- Bookmark toggle. `aria-pressed` carries the state so
+                         screen readers announce it without a separate label. -->
+                    <button id="favourite-btn" class="btn-favourite" type="button" aria-pressed="false"
+                        data-i18n-title="editor.favouriteTitle" title="加入收藏 (Ctrl/Cmd+D)">
+                        <svg class="star" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 3.5l2.6 5.6 6.1.8-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.9l6.1-.8z" />
+                        </svg>
+                        <span id="favourite-label" data-i18n="editor.favourite">收藏</span>
+                    </button>
                     <button id="delete-btn" class="btn-danger" data-i18n="common.delete"
                         data-i18n-title="editor.deleteTitle" title="刪除這一天的日記">刪除</button>
                 </div>

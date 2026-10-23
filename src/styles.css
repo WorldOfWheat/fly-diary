@@ -39,6 +39,12 @@
   --warn: #b8860b;
   --warn-text: #8a6508;
 
+  /* Favourite highlight: a bright, high-visibility wash used on bookmarked
+     rows in the sidebar. */
+  --favourite-bg: #fff3a8;
+  --favourite-bg-hover: #ffe97a;
+  --favourite-edge: #f0c419;
+
   /* ---------- Typography ---------- */
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
     "PingFang TC", "Microsoft JhengHei", sans-serif;
@@ -51,8 +57,14 @@
   /* Sidebar width: grows with the window but never eats the editor. */
   --sidebar-w: clamp(15rem, 22vw, 21rem);
 
-  /* Virtual-scroll row height. Read by main.js via getComputedStyle. */
+  /* Virtual-scroll row pitch. Read by main.js via getComputedStyle: rows are
+     absolutely positioned at `index * --row-h`, so this is the distance from
+     one row's top to the next, not the painted height. */
   --row-h: 3.25rem;
+
+  /* Breathing room between rows. The painted box is `--row-h - --row-gap`, so
+     the gap lives inside the pitch and the scroll math stays exact. */
+  --row-gap: 0.25rem;
 
   /* Editor measure: long lines are hard to read, so cap the text column and
      centre it once the window gets wide. */
@@ -360,6 +372,37 @@ summary:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* Segmented control that switches the sidebar between "all" and "favourites".
+   Both tabs drive the same virtual scroller, so this is purely a filter. */
+.view-switch {
+  display: flex;
+  gap: 0.125rem;
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.125rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.view-tab {
+  flex: 1;
+  padding: 0.3125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: calc(var(--radius) - 0.125rem);
+}
+
+.view-tab:hover {
+  color: var(--text);
+}
+
+.view-tab.is-active {
+  color: var(--text);
+  background: var(--sidebar-bg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
 .search-wrap {
   padding: 0 0.75rem 0.5rem;
 }
@@ -403,14 +446,15 @@ summary:focus-visible {
   list-style: none;
 }
 
-/* Rows are absolutely positioned by `renderList()`; the fixed height keeps the
-   scroll math exact. Keep `--row-h` in sync with the height below. */
+/* Rows are absolutely positioned by `renderList()` at `index * --row-h`. The
+   painted box is one gap shorter than that pitch, which is what separates the
+   rows visually without breaking the scroll math. */
 .entry-item {
   position: absolute;
   left: 0.5rem;
   right: 0.5rem;
-  height: var(--row-h);
-  padding: 0.5625rem 0.625rem;
+  height: calc(var(--row-h) - var(--row-gap));
+  padding: 0.4375rem 0.625rem;
   overflow: hidden;
   border-radius: var(--radius);
   cursor: pointer;
@@ -449,6 +493,26 @@ summary:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Favourited rows get a bright highlight instead of an icon, so the bookmark
+   is readable at a glance while scanning the list. The inset bar on the left
+   keeps the state visible even when the row is also the active one. */
+.entry-item.favourite {
+  background: var(--favourite-bg);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge);
+}
+
+.entry-item.favourite:hover {
+  background: var(--favourite-bg-hover);
+}
+
+/* The active row keeps its panel colour but retains the left bar, so the
+   current entry is still distinguishable from the other favourites. */
+.entry-item.favourite.active {
+  background: var(--panel);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge),
+    0 1px 2px rgba(0, 0, 0, 0.06);
 }
 
 .entry-item .entry-preview.empty {
@@ -807,6 +871,49 @@ summary:focus-visible {
 
 .status-text.saved {
   color: var(--accent);
+}
+
+/* Bookmark toggle in the editor status bar. The star is outlined while the
+   entry is not a favourite and filled once it is, so the state is readable
+   without relying on colour alone. */
+.btn-favourite {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+
+.btn-favourite:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn-favourite .star {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  transition: fill 0.12s ease, stroke 0.12s ease;
+}
+
+.btn-favourite[aria-pressed="true"] {
+  color: var(--warn-text);
+}
+
+.btn-favourite[aria-pressed="true"] .star {
+  fill: var(--warn);
+  stroke: var(--warn);
+}
+
+.btn-favourite:disabled {
+  opacity: 0.35;
+  cursor: default;
+  border-color: transparent;
 }
 
 /* The title and the textarea share one centred column so the writing area
