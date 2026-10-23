@@ -9,7 +9,54 @@
 </head>
 
 <body>
-    <div class="app">
+    <!-- Lock screen: shown until the vault is unlocked. -->
+    <div id="lock-screen" class="lock-screen">
+        <form id="lock-form" class="lock-card" autocomplete="off">
+            <h1 class="lock-title">Fly Diary</h1>
+            <p id="lock-subtitle" class="lock-subtitle">請輸入密碼以解鎖日記</p>
+
+            <!-- First run only: choose where the encrypted diary is stored. -->
+            <div id="path-field" class="lock-field" hidden>
+                <label class="lock-label" for="diary-dir">日記儲存資料夾</label>
+                <div class="lock-path-row">
+                    <input id="diary-dir" class="lock-input" type="text" placeholder="/home/user/Documents/diary"
+                        spellcheck="false" autocomplete="off" />
+                    <button id="browse-dir" class="btn-browse" type="button" title="選擇資料夾">瀏覽…</button>
+                </div>
+                <p class="lock-hint">此路徑會寫入設定檔，之後每次啟動都從這裡讀取日記。</p>
+            </div>
+
+            <input id="passphrase" class="lock-input" type="password" placeholder="密碼"
+                autocomplete="current-password" />
+            <input id="passphrase-confirm" class="lock-input" type="password" placeholder="再次輸入密碼"
+                autocomplete="new-password" hidden />
+
+            <!-- First run only: Argon2id cost parameters. -->
+            <details id="advanced-field" class="lock-advanced" hidden>
+                <summary class="lock-advanced-summary">進階選項（金鑰派生參數）</summary>
+                <p class="lock-hint">
+                    密碼會經由 Argon2id 派生主金鑰，再由主金鑰包裝日記金鑰。
+                    提高參數會讓暴力破解更困難，但解鎖也會變慢。
+                </p>
+                <div class="lock-advanced-grid">
+                    <label class="lock-label" for="kdf-memory">記憶體 (MiB)</label>
+                    <input id="kdf-memory" class="lock-input" type="number" step="1" min="8" max="1024" />
+                    <label class="lock-label" for="kdf-iterations">迭代次數</label>
+                    <input id="kdf-iterations" class="lock-input" type="number" step="1" min="1" max="16" />
+                    <label class="lock-label" for="kdf-parallelism">平行度</label>
+                    <input id="kdf-parallelism" class="lock-input" type="number" step="1" min="1" max="16" />
+                </div>
+                <p id="kdf-estimate" class="lock-hint"></p>
+                <button id="kdf-reset" class="btn-browse" type="button">恢復預設值</button>
+            </details>
+
+            <p id="lock-error" class="lock-error"></p>
+
+            <button id="lock-submit" class="btn-primary lock-submit" type="submit">解鎖</button>
+        </form>
+    </div>
+
+    <div class="app" id="app" hidden>
         <aside class="sidebar">
             <header class="sidebar-header">
                 <h1>Fly Diary</h1>
@@ -18,11 +65,13 @@
                 </button>
             </header>
             <div class="search-wrap">
-                <input id="search" type="search" placeholder="搜尋日期或內容…" autocomplete="off" />
+                <input id="search" type="search" placeholder="搜尋日期或標題…" autocomplete="off" />
             </div>
             <ul id="entry-list" class="entry-list"></ul>
             <footer class="sidebar-footer">
                 <span id="diary-path" class="path" title="日記儲存位置"></span>
+                <button id="change-dir-btn" class="btn-lock" title="變更日記儲存資料夾">路徑</button>
+                <button id="lock-btn" class="btn-lock" title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
             </footer>
         </aside>
 
@@ -39,13 +88,17 @@
                 </div>
             </header>
 
+            <div class="title-wrap">
+                <input id="title" class="title-input" type="text" placeholder="標題" maxlength="200" />
+            </div>
+
             <div class="editor-body">
                 <textarea id="content" placeholder="今天過得如何？" spellcheck="false"></textarea>
             </div>
 
             <footer class="editor-footer">
                 <span id="word-count" class="word-count"></span>
-                <span class="hint">Markdown 格式 · 自動儲存</span>
+                <span class="hint">Markdown 格式 · AES-256-GCM 加密 · 自動儲存</span>
             </footer>
         </main>
     </div>
