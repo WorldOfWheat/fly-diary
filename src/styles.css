@@ -1,4 +1,32 @@
+/* ===========================================================================
+   Fly Diary — stylesheet
+
+   Scaling model
+   -------------
+   Every size in this file is expressed in `rem`, and `html` carries a
+   `font-size` that is derived from the viewport. That gives us three things at
+   once:
+
+   1. The whole UI scales with the window, so a maximised 2560px display does
+      not show a 900px-sized app marooned in the middle of the screen.
+   2. The user's OS/browser font-size preference is respected, because `rem`
+      is relative to the root font size and we only ever *clamp* it.
+   3. Accessibility zoom still works: the `clamp()` bounds stop the layout from
+      collapsing on tiny windows or ballooning on huge ones.
+
+   On top of the fluid base there is a user-controlled multiplier,
+   `--font-scale`, driven by the A−/A+ buttons in the editor footer. Because
+   every size is in `rem`, bumping the root font size scales the entire UI —
+   text, padding, icons, the calendar — in one step, and the virtual-scroll row
+   height follows automatically.
+
+   The one place that cannot use `rem` is the virtual-scroll row height, which
+   JavaScript needs as a number. It is published as `--row-h` and read back with
+   `getComputedStyle`, so CSS stays the single source of truth.
+   =========================================================================== */
+
 :root {
+  /* ---------- Palette ---------- */
   --bg: #f7f7f5;
   --panel: #ffffff;
   --sidebar-bg: #f0efec;
@@ -8,10 +36,37 @@
   --accent: #4a7c59;
   --accent-hover: #3d6849;
   --danger: #b4544a;
-  --radius: 8px;
+  --warn: #b8860b;
+  --warn-text: #8a6508;
+
+  /* ---------- Typography ---------- */
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
     "PingFang TC", "Microsoft JhengHei", sans-serif;
   --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* ---------- Metrics (all rem, so they follow the root size) ---------- */
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* Sidebar width: grows with the window but never eats the editor. */
+  --sidebar-w: clamp(15rem, 22vw, 21rem);
+
+  /* Virtual-scroll row height. Read by main.js via getComputedStyle. */
+  --row-h: 3.25rem;
+
+  /* Editor measure: long lines are hard to read, so cap the text column and
+     centre it once the window gets wide. */
+  --measure: 46rem;
+}
+
+/* Fluid root size. 0.9375rem (15px) at 900px wide, growing to 1.0625rem
+   (17px) at 1600px, never below 0.875rem (14px) or above 1.125rem (18px).
+   `--font-scale` (0.8–1.6) is the user's own multiplier, set from the footer
+   control and persisted in localStorage. */
+html {
+  --font-scale: 1;
+  font-size: calc(clamp(0.875rem, 0.78rem + 0.28vw, 1.125rem) * var(--font-scale));
+  height: 100%;
 }
 
 * {
@@ -20,23 +75,56 @@
   padding: 0;
 }
 
-html,
 body {
   height: 100%;
-}
-
-body {
   font-family: var(--font);
+  font-size: 1rem;
   color: var(--text);
   background: var(--bg);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---------- Shared primitives ---------- */
+
+/* Every text input in the app shares this look. */
+.lock-input,
+#search,
+.title-input,
+#content {
+  font-family: inherit;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease,
+    border-color 0.12s ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- App shell ---------- */
+
 .app {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   height: 100vh;
+  height: 100dvh;
 }
 
 .app[hidden] {
@@ -48,11 +136,13 @@ body {
 .lock-screen {
   position: fixed;
   inset: 0;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 1rem;
   background: var(--bg);
-  z-index: 10;
+  overflow-y: auto;
 }
 
 .lock-screen[hidden] {
@@ -62,41 +152,76 @@ body {
 .lock-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: 380px;
-  max-width: calc(100vw - 32px);
-  padding: 32px 28px;
+  gap: 0.625rem;
+  width: 24rem;
+  max-width: 100%;
+  padding: 2rem 1.75rem;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.08);
+}
+
+/* Title and language switch share a row. The switch is pinned to the right so
+   the title stays optically centred in the card. */
+.lock-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .lock-title {
-  font-size: 20px;
+  grid-column: 2;
+  font-size: 1.25rem;
   font-weight: 600;
   text-align: center;
   letter-spacing: 0.02em;
 }
 
+/* Language switch: a small pill showing the *other* language. */
+.lang-toggle {
+  grid-column: 3;
+  justify-self: end;
+  min-width: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.lang-toggle:hover {
+  color: var(--accent);
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.lang-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .lock-subtitle {
-  font-size: 12px;
+  margin-bottom: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
   color: var(--text-muted);
   text-align: center;
-  margin-bottom: 6px;
-  line-height: 1.5;
 }
 
 .lock-input {
   width: 100%;
-  padding: 9px 12px;
-  font-size: 14px;
-  font-family: inherit;
-  color: var(--text);
+  padding: 0.5625rem 0.75rem;
+  font-size: 0.875rem;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  outline: none;
 }
 
 .lock-input:focus {
@@ -106,7 +231,7 @@ body {
 .lock-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0.375rem;
 }
 
 .lock-field[hidden] {
@@ -114,7 +239,7 @@ body {
 }
 
 .lock-label {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   color: var(--text-muted);
   letter-spacing: 0.02em;
@@ -122,46 +247,44 @@ body {
 
 .lock-path-row {
   display: flex;
-  gap: 6px;
+  gap: 0.375rem;
 }
 
 .lock-path-row .lock-input {
   flex: 1;
   min-width: 0;
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .btn-browse {
   flex: none;
-  padding: 0 12px;
-  font-size: 12px;
-  font-family: inherit;
+  padding: 0 0.75rem;
+  font-size: 0.75rem;
   color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  cursor: pointer;
   white-space: nowrap;
 }
 
 .btn-browse:hover {
-  border-color: var(--accent);
   color: var(--accent);
+  border-color: var(--accent);
 }
 
 .lock-hint {
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 1.5;
   color: var(--text-muted);
 }
 
 /* Advanced KDF options (first run only). */
 .lock-advanced {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 10px;
-  background: var(--bg);
 }
 
 .lock-advanced[hidden] {
@@ -169,7 +292,7 @@ body {
 }
 
 .lock-advanced-summary {
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-weight: 600;
   color: var(--text-muted);
   cursor: pointer;
@@ -182,27 +305,27 @@ body {
 
 .lock-advanced-grid {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  gap: 6px 10px;
-  margin: 8px 0;
+  gap: 0.375rem 0.625rem;
+  margin: 0.5rem 0;
 }
 
 .lock-advanced-grid .lock-input {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 0.75rem;
 }
 
 .lock-error {
-  min-height: 16px;
-  font-size: 12px;
+  min-height: 1rem;
+  font-size: 0.75rem;
   color: var(--danger);
   text-align: center;
 }
 
 .lock-submit {
-  padding: 9px 12px;
-  font-size: 13px;
+  padding: 0.5625rem 0.75rem;
+  font-size: 0.8125rem;
 }
 
 .lock-submit:disabled {
@@ -215,38 +338,39 @@ body {
 .sidebar {
   display: flex;
   flex-direction: column;
+  min-height: 0;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
-  min-height: 0;
 }
 
 .sidebar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 16px 12px;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0.75rem;
 }
 
 .sidebar-header h1 {
-  font-size: 16px;
+  font-size: 1rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .search-wrap {
-  padding: 0 12px 8px;
+  padding: 0 0.75rem 0.5rem;
 }
 
 #search {
   width: 100%;
-  padding: 7px 10px;
-  font-size: 13px;
-  font-family: inherit;
-  color: var(--text);
+  padding: 0.4375rem 0.625rem;
+  font-size: 0.8125rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  outline: none;
 }
 
 #search:focus {
@@ -257,11 +381,11 @@ body {
    so the native scrollbar behaves normally, while `entry-list` only holds the
    handful of rows currently visible. */
 .entry-scroll {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  min-height: 0;
   position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .entry-spacer {
@@ -274,23 +398,22 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  list-style: none;
-  padding: 4px 8px 8px;
   margin: 0;
+  padding: 0.25rem 0.5rem 0.5rem;
+  list-style: none;
 }
 
 /* Rows are absolutely positioned by `renderList()`; the fixed height keeps the
-   scroll math exact. */
+   scroll math exact. Keep `--row-h` in sync with the height below. */
 .entry-item {
   position: absolute;
-  left: 8px;
-  right: 8px;
-  height: 52px;
-  box-sizing: border-box;
-  padding: 9px 10px;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: var(--row-h);
+  padding: 0.5625rem 0.625rem;
+  overflow: hidden;
   border-radius: var(--radius);
   cursor: pointer;
-  overflow: hidden;
   transition: background 0.12s ease;
 }
 
@@ -304,23 +427,25 @@ body {
 }
 
 .entry-item .entry-date {
-  font-size: 13px;
-  font-weight: 600;
   display: flex;
-  justify-content: space-between;
   align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
 }
 
 .entry-item .entry-weekday {
-  font-size: 11px;
+  flex: none;
+  font-size: 0.6875rem;
   font-weight: 400;
   color: var(--text-muted);
 }
 
 .entry-item .entry-preview {
-  font-size: 12px;
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
-  margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -335,27 +460,26 @@ body {
    it needs `position: static` to flow normally. */
 .list-empty {
   position: static;
-  padding: 24px 12px;
-  text-align: center;
-  font-size: 12px;
+  padding: 1.5rem 0.75rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
+  text-align: center;
 }
 
 .sidebar-footer {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--border);
 }
 
 .btn-lock {
   flex: none;
-  font-size: 11px;
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.6875rem;
   color: var(--text-muted);
-  background: transparent;
   border: 1px solid var(--border);
-  padding: 3px 8px;
 }
 
 .btn-lock:hover {
@@ -365,8 +489,9 @@ body {
 
 .path {
   display: block;
-  font-size: 10px;
+  min-width: 0;
   font-family: var(--mono);
+  font-size: 0.625rem;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -380,16 +505,17 @@ body {
 .editor {
   display: flex;
   flex-direction: column;
-  background: var(--panel);
   min-width: 0;
   min-height: 0;
+  background: var(--panel);
 }
 
 .editor-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--border);
 }
 
@@ -398,26 +524,26 @@ body {
 .date-nav {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 0.25rem;
+  min-width: 0;
 }
 
 /* Round step buttons with an inline chevron. */
 .date-step {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 1.875rem;
+  height: 1.875rem;
   padding: 0;
   color: var(--text-muted);
-  background: transparent;
   border-radius: 50%;
-  flex: none;
 }
 
 .date-step svg {
-  width: 16px;
-  height: 16px;
+  width: 1rem;
+  height: 1rem;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -434,25 +560,20 @@ body {
   background: rgba(0, 0, 0, 0.09);
 }
 
-.date-step:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 /* The visible pill. Clicking it opens our own calendar; the native input is
    only a hidden value holder because its popup is drawn by the OS. */
 .date-display {
   position: relative;
   display: flex;
   align-items: center;
+  min-width: 0;
 }
 
 .date-label {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 5px 12px;
-  background: transparent;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.75rem;
   border: 1px solid transparent;
   border-radius: 999px;
   white-space: nowrap;
@@ -463,13 +584,8 @@ body {
   border-color: var(--border);
 }
 
-.date-label:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .date-main {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
   color: var(--text);
   letter-spacing: 0.01em;
@@ -477,7 +593,7 @@ body {
 }
 
 .date-sub {
-  font-size: 12px;
+  font-size: 0.75rem;
   font-weight: 400;
   color: var(--text-muted);
 }
@@ -488,9 +604,9 @@ body {
   position: absolute;
   width: 1px;
   height: 1px;
+  padding: 0;
   opacity: 0;
   border: none;
-  padding: 0;
   pointer-events: none;
 }
 
@@ -498,15 +614,15 @@ body {
 
 .calendar {
   position: absolute;
-  top: calc(100% + 6px);
+  top: calc(100% + 0.375rem);
   left: 0;
   z-index: 20;
-  width: 268px;
-  padding: 10px;
+  width: 16.75rem;
+  padding: 0.625rem;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
   animation: calendar-in 0.12s ease-out;
 }
 
@@ -528,26 +644,25 @@ body {
 .calendar-head {
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin-bottom: 6px;
+  gap: 0.125rem;
+  margin-bottom: 0.375rem;
 }
 
 .cal-step {
   display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 1.625rem;
+  height: 1.625rem;
   padding: 0;
   color: var(--text-muted);
-  background: transparent;
   border-radius: 50%;
-  flex: none;
 }
 
 .cal-step svg {
-  width: 14px;
-  height: 14px;
+  width: 0.875rem;
+  height: 0.875rem;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -560,19 +675,13 @@ body {
   background: rgba(0, 0, 0, 0.05);
 }
 
-.cal-step:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .cal-title {
   flex: 1;
-  padding: 3px 6px;
-  font-size: 13px;
+  padding: 0.1875rem 0.375rem;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text);
-  background: transparent;
-  border-radius: 6px;
+  border-radius: 0.375rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -580,25 +689,20 @@ body {
   background: rgba(0, 0, 0, 0.04);
 }
 
-.cal-title:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 .cal-weekdays,
 .cal-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 2px;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.125rem;
 }
 
 .cal-weekdays {
-  margin-bottom: 2px;
+  margin-bottom: 0.125rem;
 }
 
 .cal-weekdays span {
-  padding: 2px 0;
-  font-size: 11px;
+  padding: 0.125rem 0;
+  font-size: 0.6875rem;
   font-weight: 500;
   color: var(--text-muted);
   text-align: center;
@@ -609,12 +713,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 32px;
+  height: 2rem;
   padding: 0;
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--text);
-  background: transparent;
-  border-radius: 8px;
+  border-radius: 0.5rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -639,9 +742,9 @@ body {
 }
 
 .cal-day.selected {
+  font-weight: 600;
   color: #fff;
   background: var(--accent);
-  font-weight: 600;
 }
 
 .cal-day.selected:hover {
@@ -652,13 +755,13 @@ body {
 .cal-day.has-entry::after {
   content: "";
   position: absolute;
-  bottom: 4px;
+  bottom: 0.25rem;
   left: 50%;
-  width: 4px;
-  height: 4px;
-  margin-left: -2px;
-  border-radius: 50%;
+  width: 0.25rem;
+  height: 0.25rem;
+  margin-left: -0.125rem;
   background: var(--accent);
+  border-radius: 50%;
 }
 
 .cal-day.selected.has-entry::after {
@@ -668,17 +771,16 @@ body {
 .calendar-foot {
   display: flex;
   justify-content: center;
-  margin-top: 6px;
-  padding-top: 6px;
+  margin-top: 0.375rem;
+  padding-top: 0.375rem;
   border-top: 1px solid var(--border);
 }
 
 .cal-today {
-  padding: 4px 14px;
-  font-size: 12px;
+  padding: 0.25rem 0.875rem;
+  font-size: 0.75rem;
   font-weight: 500;
   color: var(--accent);
-  background: transparent;
   border-radius: 999px;
 }
 
@@ -686,21 +788,19 @@ body {
   background: rgba(74, 124, 89, 0.1);
 }
 
-.cal-today:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+/* ---------- Editor body ---------- */
 
 .status {
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 12px;
+  gap: 0.75rem;
 }
 
 .status-text {
-  font-size: 12px;
+  min-width: 3.75rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
-  min-width: 60px;
   text-align: right;
   transition: opacity 0.2s ease;
 }
@@ -709,27 +809,31 @@ body {
   color: var(--accent);
 }
 
+/* The title and the textarea share one centred column so the writing area
+   stays readable on wide screens instead of stretching edge to edge. */
+.title-wrap,
+.editor-body {
+  width: 100%;
+  max-width: calc(var(--measure) + 3.5rem);
+  margin-inline: auto;
+}
+
 .title-wrap {
-  padding: 18px 28px 0;
+  padding: 1.125rem 1.75rem 0;
 }
 
 .title-input {
   width: 100%;
-  font-family: inherit;
-  font-size: 22px;
+  padding: 0.25rem 0 0.5rem;
+  font-size: 1.375rem;
   font-weight: 600;
-  color: var(--text);
-  background: transparent;
-  border: none;
   border-bottom: 1px solid transparent;
-  outline: none;
-  padding: 4px 0 8px;
 }
 
 .title-input::placeholder {
+  font-weight: 400;
   color: var(--text-muted);
   opacity: 0.5;
-  font-weight: 400;
 }
 
 .title-input:focus {
@@ -737,23 +841,19 @@ body {
 }
 
 .editor-body {
-  flex: 1;
   display: flex;
+  flex: 1;
   min-height: 0;
 }
 
 #content {
   flex: 1;
   width: 100%;
-  resize: none;
-  border: none;
-  outline: none;
-  padding: 24px 28px;
+  padding: 1.5rem 1.75rem;
   font-family: var(--mono);
-  font-size: 15px;
+  font-size: 0.9375rem;
   line-height: 1.75;
-  color: var(--text);
-  background: transparent;
+  resize: none;
   tab-size: 2;
 }
 
@@ -766,28 +866,85 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 20px;
+  gap: 0.75rem;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
   border-top: 1px solid var(--border);
-  font-size: 11px;
+}
+
+/* The footer holds a live counter, a static hint and the font-size control.
+   The counter must not reflow the hint as the digits change, so it gets
+   tabular figures; the hint is the only flexible item and truncates first. */
+.word-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* ---------- Font size control ---------- */
+
+.font-size {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.0625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.font-step,
+.font-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--text-muted);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.font-step:hover,
+.font-value:hover {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.font-value {
+  min-width: 2.5rem;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* At the ends of the range the button is inert but still readable. */
+.font-step:disabled {
+  opacity: 0.3;
+  cursor: default;
+  background: transparent;
   color: var(--text-muted);
 }
 
 /* ---------- Buttons ---------- */
 
-button {
-  font-family: inherit;
-  cursor: pointer;
-  border: none;
-  border-radius: var(--radius);
-  transition: background 0.12s ease, color 0.12s ease;
-}
-
 .btn-primary {
-  font-size: 12px;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
   font-weight: 600;
   color: #fff;
   background: var(--accent);
-  padding: 6px 12px;
 }
 
 .btn-primary:hover {
@@ -795,27 +952,25 @@ button {
 }
 
 .btn-icon {
-  font-size: 18px;
-  line-height: 1;
-  color: var(--text-muted);
-  background: transparent;
-  width: 30px;
-  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: var(--text-muted);
 }
 
 .btn-icon:hover {
-  background: rgba(0, 0, 0, 0.05);
   color: var(--text);
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .btn-danger {
-  font-size: 12px;
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
   color: var(--danger);
-  background: transparent;
-  padding: 5px 10px;
   border: 1px solid transparent;
 }
 
@@ -838,7 +993,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 1.5rem;
   background: rgba(30, 29, 27, 0.32);
   animation: overlay-in 0.12s ease-out;
 }
@@ -859,38 +1014,37 @@ button {
 .modal {
   display: flex;
   flex-direction: column;
-  width: 560px;
+  width: 35rem;
   max-width: 100%;
   max-height: 100%;
+  overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.2);
-  overflow: hidden;
+  border-radius: var(--radius-lg);
+  box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.2);
 }
 
 .modal-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
+  gap: 0.75rem;
+  padding: 0.875rem 1.125rem;
   border-bottom: 1px solid var(--border);
 }
 
 .modal-title {
-  font-size: 15px;
+  font-size: 0.9375rem;
   font-weight: 600;
 }
 
 .modal-close {
   flex: none;
-  width: 26px;
-  height: 26px;
-  font-size: 18px;
+  width: 1.625rem;
+  height: 1.625rem;
+  font-size: 1.125rem;
   line-height: 1;
   color: var(--text-muted);
-  background: transparent;
   border-radius: 50%;
 }
 
@@ -902,50 +1056,51 @@ button {
 .modal-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 18px;
-  overflow-y: auto;
+  gap: 0.625rem;
   min-height: 0;
+  padding: 0.875rem 1.125rem;
+  overflow-y: auto;
 }
 
 .modal-foot {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 18px;
+  gap: 0.5rem;
+  padding: 0.75rem 1.125rem;
   border-top: 1px solid var(--border);
 }
 
 .modal-foot .btn-browse,
 .modal-foot .btn-primary {
-  padding: 6px 16px;
-  font-size: 12px;
+  padding: 0.375rem 1rem;
+  font-size: 0.75rem;
   font-weight: 600;
   border-radius: var(--radius);
 }
 
 .import-dir {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--text-muted);
   word-break: break-all;
 }
 
 .import-summary {
   display: flex;
-  gap: 14px;
-  padding: 8px 10px;
+  flex-wrap: wrap;
+  gap: 0.875rem;
+  padding: 0.5rem 0.625rem;
   background: var(--bg);
   border-radius: var(--radius);
 }
 
 .import-stat {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--text-muted);
 }
 
 .import-stat b {
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -954,7 +1109,7 @@ button {
 }
 
 .import-stat.conflict b {
-  color: #b8860b;
+  color: var(--warn);
 }
 
 .import-stat.failed b {
@@ -964,8 +1119,8 @@ button {
 .import-overwrite {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: 0.375rem;
+  font-size: 0.75rem;
   color: var(--text);
   cursor: pointer;
   user-select: none;
@@ -983,22 +1138,23 @@ button {
 .import-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  max-height: 320px;
+  gap: 0.125rem;
+  /* Scales with the window instead of a fixed 320px. */
+  max-height: min(20rem, 45vh);
+  padding: 0.25rem;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 4px;
 }
 
 .import-row {
   display: grid;
-  grid-template-columns: 92px 1fr auto;
+  grid-template-columns: 5.75rem minmax(0, 1fr) auto;
   align-items: center;
-  gap: 10px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  font-size: 12px;
+  gap: 0.625rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 0.375rem;
 }
 
 .import-row:hover {
@@ -1007,7 +1163,7 @@ button {
 
 .import-row .row-date {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1019,17 +1175,17 @@ button {
 }
 
 .import-row .row-title.empty {
-  color: var(--text-muted);
   font-style: italic;
+  color: var(--text-muted);
 }
 
 .import-row .row-badge {
   flex: none;
-  padding: 1px 7px;
-  font-size: 10px;
+  padding: 0.0625rem 0.4375rem;
+  font-size: 0.625rem;
   font-weight: 600;
-  border-radius: 999px;
   white-space: nowrap;
+  border-radius: 999px;
 }
 
 .import-row.ready .row-badge {
@@ -1038,7 +1194,7 @@ button {
 }
 
 .import-row.conflict .row-badge {
-  color: #8a6508;
+  color: var(--warn-text);
   background: rgba(184, 134, 11, 0.14);
 }
 
@@ -1053,7 +1209,7 @@ button {
 
 .import-row .row-reason {
   grid-column: 2 / -1;
-  font-size: 11px;
+  font-size: 0.6875rem;
   color: var(--text-muted);
 }
 
@@ -1066,7 +1222,7 @@ button {
 .import-progress {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 0.3125rem;
 }
 
 .import-progress[hidden] {
@@ -1077,19 +1233,20 @@ button {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  font-size: 12px;
+  gap: 0.5rem;
+  font-size: 0.75rem;
   color: var(--text-muted);
 }
 
 .import-progress-count {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 0.6875rem;
   font-variant-numeric: tabular-nums;
   color: var(--text);
 }
 
 .import-progress-track {
-  height: 6px;
+  height: 0.375rem;
   overflow: hidden;
   background: var(--border);
   border-radius: 999px;
@@ -1103,16 +1260,9 @@ button {
   transition: width 0.15s linear;
 }
 
-/* Respect users who asked the OS to reduce motion. */
-@media (prefers-reduced-motion: reduce) {
-  .import-progress-bar {
-    transition: none;
-  }
-}
-
 .import-result {
-  padding: 8px 10px;
-  font-size: 12px;
+  padding: 0.5rem 0.625rem;
+  font-size: 0.75rem;
   line-height: 1.6;
   background: var(--bg);
   border-radius: var(--radius);
@@ -1132,21 +1282,130 @@ button {
 
 .import-error {
   flex: 1;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--danger);
 }
 
 /* ---------- Scrollbar ---------- */
 
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 0.5rem;
 }
 
 ::-webkit-scrollbar-thumb {
   background: rgba(0, 0, 0, 0.15);
-  border-radius: 4px;
+  border-radius: 0.25rem;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.25);
+}
+
+/* ===========================================================================
+   Responsive adjustments
+
+   The fluid root size handles most of the scaling. These breakpoints only fix
+   the things that cannot scale linearly: the two-column shell has to collapse,
+   and the sidebar has to give up width before the editor becomes unusable.
+   =========================================================================== */
+
+/* Narrow window: shrink the sidebar so the editor keeps a workable column. */
+@media (max-width: 900px) {
+  :root {
+    --sidebar-w: clamp(12rem, 30vw, 15rem);
+    --measure: 100%;
+  }
+
+  .editor-header {
+    padding: 0.625rem 0.875rem;
+  }
+
+  .title-wrap {
+    padding: 0.875rem 1rem 0;
+  }
+
+  #content {
+    padding: 1rem;
+  }
+
+  .date-sub {
+    display: none;
+  }
+}
+
+/* Very narrow window: stack the sidebar above the editor. The sidebar becomes
+   a fixed-height strip so the editor still gets the rest of the window. */
+@media (max-width: 640px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 40vh) minmax(0, 1fr);
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-header {
+    padding: 0.625rem 0.75rem 0.375rem;
+  }
+
+  .modal-overlay {
+    padding: 0.5rem;
+  }
+
+  .modal {
+    width: 100%;
+  }
+
+  .import-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .import-row .row-date {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Short window (e.g. a laptop with the window dragged small): reclaim vertical
+   space from the chrome so the textarea keeps a usable height. */
+@media (max-height: 560px) {
+  .lock-card {
+    padding: 1.25rem 1.25rem;
+  }
+
+  .title-wrap {
+    padding-top: 0.5rem;
+  }
+
+  #content {
+    padding-top: 0.75rem;
+  }
+
+  .import-list {
+    max-height: 30vh;
+  }
+}
+
+/* Wide window: let the sidebar breathe a little, but keep the text column
+   capped by `--measure` so lines never get uncomfortably long. */
+@media (min-width: 1600px) {
+  :root {
+    --sidebar-w: 21rem;
+  }
+}
+
+/* Respect users who asked the OS to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .import-progress-bar {
+    transition: none;
+  }
 }

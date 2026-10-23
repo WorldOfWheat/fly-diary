@@ -5,6 +5,20 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
+// Relative specifiers *do* work without a bundler, so the i18n layer is a
+// normal ES module next to this file.
+import {
+  t,
+  initLocale,
+  toggleLocale,
+  onLocaleChange,
+  nextLocaleShort,
+  formatDate,
+  formatMonth,
+  formatWeekday,
+  weekdayName,
+} from "./i18n.js";
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -41,6 +55,7 @@ const els = {
   // Lock screen
   lockScreen: $("lock-screen"),
   lockForm: $("lock-form"),
+  langToggle: $("lang-toggle"),
   lockSubtitle: $("lock-subtitle"),
   lockError: $("lock-error"),
   lockSubmit: $("lock-submit"),
@@ -69,12 +84,16 @@ const els = {
   calPrev: $("cal-prev"),
   calNext: $("cal-next"),
   calTitle: $("cal-title"),
+  calWeekdays: $("cal-weekdays"),
   calGrid: $("cal-grid"),
   calToday: $("cal-today"),
   title: $("title"),
   content: $("content"),
   status: $("status"),
   wordCount: $("word-count"),
+  fontSmaller: $("font-smaller"),
+  fontLarger: $("font-larger"),
+  fontReset: $("font-reset"),
   diaryPath: $("diary-path"),
   prevDay: $("prev-day"),
   nextDay: $("next-day"),
@@ -130,24 +149,22 @@ function shiftDate(iso, days) {
   return toISODate(d);
 }
 
-const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
-
+/** `2026-10-23` → `週五` / `Fri`. */
 function weekdayOf(iso) {
-  return `週${WEEKDAYS[fromISODate(iso).getDay()]}`;
+  return formatWeekday(iso);
 }
 
-/** `2026-10-23` → `2026 年 10 月 23 日`. */
+/** `2026-10-23` → `2026 年 10 月 23 日` / `10/23/2026`. */
 function longDateOf(iso) {
-  const [y, m, d] = iso.split("-").map(Number);
-  return `${y} 年 ${m} 月 ${d} 日`;
+  return formatDate(iso);
 }
 
-/** Relative label for the header subtitle: 今天 / 昨天 / 明天 / 週五. */
+/** Relative label for the header subtitle: today / yesterday / tomorrow / weekday. */
 function relativeDayOf(iso) {
   const today = toISODate(new Date());
-  if (iso === today) return "今天";
-  if (iso === shiftDate(today, -1)) return "昨天";
-  if (iso === shiftDate(today, 1)) return "明天";
+  if (iso === today) return t("date.today");
+  if (iso === shiftDate(today, -1)) return t("date.yesterday");
+  if (iso === shiftDate(today, 1)) return t("date.tomorrow");
   return weekdayOf(iso);
 }
 
@@ -183,10 +200,23 @@ function entryDateSet() {
   return new Set(allEntries.map((e) => e.date));
 }
 
+/** Fill the weekday header row. Monday-first, matching the grid below. */
+function renderWeekdayHeaders() {
+  if (!els.calWeekdays) return;
+  const frag = document.createDocumentFragment();
+  // `getDay()` is Sunday-based; the grid starts on Monday, so walk 1..6 then 0.
+  for (let i = 1; i <= 7; i += 1) {
+    const span = document.createElement("span");
+    span.textContent = weekdayName(i % 7);
+    frag.appendChild(span);
+  }
+  els.calWeekdays.replaceChildren(frag);
+}
+
 /** Build the 6×7 grid of day buttons for `calendarMonth`. */
 function renderCalendar() {
   const [year, month] = calendarMonth.split("-").map(Number);
-  els.calTitle.textContent = `${year} 年 ${month} 月`;
+  els.calTitle.textContent = formatMonth(calendarMonth);
 
   // Monday-first grid: JS `getDay()` is Sunday-based, so shift by 6.
   const first = new Date(year, month - 1, 1);
@@ -297,10 +327,11 @@ let importScan = null;
 /** Whether the last import finished, so the footer switches to "close". */
 let importDone = false;
 
-const IMPORT_BADGES = {
-  ready: "可匯入",
-  conflict: "已存在",
-  failed: "失敗",
+/** Badge label for each import status, resolved at render time. */
+const IMPORT_BADGE_KEYS = {
+  ready: "import.statReady",
+  conflict: "import.statConflict",
+  failed: "import.statFailed",
 };
 
 /** Build one row of the import preview list. */
@@ -315,12 +346,13 @@ function createImportRow(file) {
 
   const title = document.createElement("span");
   title.className = "row-title" + (file.title ? "" : " empty");
-  title.textContent = file.title || "（無標題）";
+  title.textContent = file.title || t("common.untitled");
   title.title = file.title || "";
 
   const badge = document.createElement("span");
   badge.className = "row-badge";
-  badge.textContent = IMPORT_BADGES[file.status] || file.status;
+  const badgeKey = IMPORT_BADGE_KEYS[file.status];
+  badge.textContent = badgeKey ? t(badgeKey) : file.status;
 
   row.append(date, title, badge);
 
@@ -357,7 +389,7 @@ function renderImportScan(scan) {
   if (scan.files.length === 0) {
     const empty = document.createElement("div");
     empty.className = "import-row failed";
-    empty.textContent = "這個資料夾裡沒有 YYYY-MM-DD.txt 檔案";
+    empty.textContent = t("import.emptyFolder");
     els.importList.replaceChildren(empty);
   } else {
     const frag = document.createDocumentFragment();
@@ -365,9 +397,9 @@ function renderImportScan(scan) {
     els.importList.replaceChildren(frag);
   }
 
-  els.importConfirm.textContent = "匯入";
+  els.importConfirm.textContent = t("sidebar.import");
   els.importConfirm.disabled = scan.ready === 0 && scan.conflicts === 0;
-  els.importCancel.textContent = "取消";
+  els.importCancel.textContent = t("common.cancel");
 }
 
 /** Show the dialog in a loading state while the folder is scanned. */
@@ -383,12 +415,12 @@ function showImportLoading(dir) {
   els.importError.textContent = "";
   hideImportProgress();
   els.importConfirm.disabled = true;
-  els.importConfirm.textContent = "匯入";
-  els.importCancel.textContent = "取消";
+  els.importConfirm.textContent = t("sidebar.import");
+  els.importCancel.textContent = t("common.cancel");
 
   const loading = document.createElement("div");
   loading.className = "import-row";
-  loading.textContent = "掃描中…";
+  loading.textContent = t("import.scanning");
   els.importList.replaceChildren(loading);
 
   els.importOverlay.hidden = false;
@@ -436,7 +468,7 @@ async function startImport() {
     dir = await invoke("pick_import_dir");
   } catch (err) {
     console.error("pick_import_dir failed:", err);
-    setStatus("無法開啟資料夾選擇器");
+    setStatus(t("import.errPicker"));
     return;
   }
   if (!dir) return;
@@ -448,7 +480,8 @@ async function startImport() {
   } catch (err) {
     console.error("scan_import failed:", err);
     els.importList.replaceChildren();
-    els.importError.textContent = typeof err === "string" ? err : "掃描失敗";
+    els.importError.textContent =
+      typeof err === "string" ? err : t("import.errScan");
   }
 }
 
@@ -466,12 +499,12 @@ async function confirmImport() {
     .filter(Boolean);
 
   if (dates.length === 0) {
-    els.importError.textContent = "沒有可匯入的日記";
+    els.importError.textContent = t("import.errNothing");
     return;
   }
 
   els.importConfirm.disabled = true;
-  els.importConfirm.textContent = "匯入中…";
+  els.importConfirm.textContent = t("import.progress");
   els.importError.textContent = "";
   setImportProgress(0, dates.length);
 
@@ -499,9 +532,10 @@ async function confirmImport() {
     await refreshList();
   } catch (err) {
     console.error("run_import failed:", err);
-    els.importError.textContent = typeof err === "string" ? err : "匯入失敗";
+    els.importError.textContent =
+      typeof err === "string" ? err : t("import.errImport");
     els.importConfirm.disabled = false;
-    els.importConfirm.textContent = "匯入";
+    els.importConfirm.textContent = t("sidebar.import");
     hideImportProgress();
   } finally {
     if (typeof unlisten === "function") unlisten();
@@ -514,16 +548,16 @@ function renderImportReport(report) {
 
   const lines = [];
   if (report.imported.length > 0) {
-    lines.push(`成功匯入 ${report.imported.length} 篇日記。`);
+    lines.push(t("import.reportImported", { count: report.imported.length }));
   }
   if (report.skipped.length > 0) {
-    lines.push(`略過 ${report.skipped.length} 篇已存在的日記。`);
+    lines.push(t("import.reportSkipped", { count: report.skipped.length }));
   }
   if (report.failed.length > 0) {
-    lines.push(`有 ${report.failed.length} 個檔案匯入失敗：`);
+    lines.push(t("import.reportFailed", { count: report.failed.length }));
   }
   if (lines.length === 0) {
-    lines.push("沒有任何變更。");
+    lines.push(t("import.reportNoChange"));
   }
 
   const frag = document.createDocumentFragment();
@@ -546,11 +580,11 @@ function renderImportReport(report) {
   hideImportProgress();
 
   els.importConfirm.disabled = false;
-  els.importConfirm.textContent = "完成";
-  els.importCancel.textContent = "關閉";
+  els.importConfirm.textContent = t("common.done");
+  els.importCancel.textContent = t("common.close");
   els.importOverwriteRow.hidden = true;
 
-  setStatus(`已匯入 ${report.imported.length} 篇`, true);
+  setStatus(t("import.statusImported", { count: report.imported.length }), true);
 }
 
 // ---------------------------------------------------------------------------
@@ -566,7 +600,7 @@ function updateWordCount() {
   const text = els.content.value;
   const chars = text.replace(/\s/g, "").length;
   const lines = text ? text.split("\n").length : 0;
-  els.wordCount.textContent = `${chars} 字 · ${lines} 行`;
+  els.wordCount.textContent = t("editor.wordCount", { chars, lines });
 }
 
 // ---------------------------------------------------------------------------
@@ -578,10 +612,224 @@ function updateWordCount() {
 // the full list height and only the rows inside the viewport (plus a small
 // overscan) are rendered, absolutely positioned at `index * ROW_HEIGHT`.
 
-/** Height of one row in CSS pixels; must match `.entry-item` in styles.css. */
-const ROW_HEIGHT = 52;
+/**
+ * Height of one row in CSS pixels.
+ *
+ * The stylesheet is the source of truth: `.entry-item` is `height: var(--row-h)`
+ * and the root font size is fluid, so the row height changes with the window.
+ * We read the resolved value once at startup and again whenever the root size
+ * changes (see `watchRowHeight`), instead of hard-coding a number that would
+ * silently drift out of sync with the CSS.
+ */
+let ROW_HEIGHT = 52;
 /** Extra rows rendered above and below the viewport to hide scroll seams. */
 const OVERSCAN = 6;
+
+/** Read `--row-h` from the document and return it in CSS pixels. */
+function measureRowHeight() {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--row-h")
+    .trim();
+  if (!raw) return ROW_HEIGHT;
+
+  // `--row-h` is authored in rem, so resolve it against the root font size.
+  const rem = parseFloat(
+    getComputedStyle(document.documentElement).fontSize
+  ) || 16;
+  const value = raw.endsWith("rem")
+    ? parseFloat(raw) * rem
+    : parseFloat(raw);
+
+  return Number.isFinite(value) && value > 0 ? value : ROW_HEIGHT;
+}
+
+/**
+ * Keep `ROW_HEIGHT` in sync with the stylesheet.
+ *
+ * The root font size is a `clamp()` over the viewport width, so resizing the
+ * window changes the row height. When that happens the spacer and every
+ * rendered row are stale, so we re-measure and redraw.
+ */
+function watchRowHeight() {
+  const sync = () => {
+    const next = measureRowHeight();
+    if (Math.abs(next - ROW_HEIGHT) < 0.5) return;
+    ROW_HEIGHT = next;
+    if (visibleEntries.length > 0) renderList();
+  };
+
+  sync();
+  window.addEventListener("resize", sync);
+}
+
+// ---------------------------------------------------------------------------
+// Font size
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole UI is sized in `rem`, so the user's font preference is a single
+ * multiplier on the root font size. `--font-scale` is applied by the
+ * stylesheet; here we only own the value, the persistence and the label.
+ */
+const FONT_SCALE_KEY = "fly-diary:font-scale";
+const FONT_SCALE_MIN = 0.8;
+const FONT_SCALE_MAX = 1.6;
+const FONT_SCALE_STEP = 0.1;
+
+/** Current multiplier, always within [FONT_SCALE_MIN, FONT_SCALE_MAX]. */
+let fontScale = 1;
+
+/** Clamp and round to one decimal so repeated steps never drift. */
+function clampFontScale(value) {
+  const clamped = Math.min(FONT_SCALE_MAX, Math.max(FONT_SCALE_MIN, value));
+  return Math.round(clamped * 10) / 10;
+}
+
+/** Apply `fontScale` to the document and refresh the control's label. */
+function applyFontScale() {
+  document.documentElement.style.setProperty("--font-scale", String(fontScale));
+
+  if (els.fontReset) {
+    els.fontReset.textContent = `${Math.round(fontScale * 100)}%`;
+    els.fontReset.title = t("font.reset");
+  }
+  if (els.fontSmaller) {
+    els.fontSmaller.disabled = fontScale <= FONT_SCALE_MIN;
+  }
+  if (els.fontLarger) {
+    els.fontLarger.disabled = fontScale >= FONT_SCALE_MAX;
+  }
+
+  // The row height is derived from the root font size, so the virtual-scroll
+  // spacer and the rendered rows have to be recomputed.
+  const next = measureRowHeight();
+  if (Math.abs(next - ROW_HEIGHT) >= 0.5) {
+    ROW_HEIGHT = next;
+    if (visibleEntries.length > 0) renderList();
+  }
+}
+
+/** Change the scale by `delta` steps and persist the result. */
+function stepFontScale(delta) {
+  const next = clampFontScale(fontScale + delta);
+  if (next === fontScale) return;
+  fontScale = next;
+  applyFontScale();
+  try {
+    localStorage.setItem(FONT_SCALE_KEY, String(fontScale));
+  } catch {
+    // Private mode or a locked-down webview: the setting just won't persist.
+  }
+}
+
+/** Restore the scale saved by a previous session, if any. */
+function loadFontScale() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(FONT_SCALE_KEY);
+  } catch {
+    stored = null;
+  }
+
+  const parsed = stored === null ? NaN : Number.parseFloat(stored);
+  fontScale = Number.isFinite(parsed) ? clampFontScale(parsed) : 1;
+  applyFontScale();
+}
+
+/** Reset to 100% and forget the stored preference. */
+function resetFontScale() {
+  if (fontScale === 1) return;
+  fontScale = 1;
+  applyFontScale();
+  try {
+    localStorage.removeItem(FONT_SCALE_KEY);
+  } catch {
+    // Ignore: nothing to clean up if storage is unavailable.
+  }
+}
+
+/** Wire the footer buttons and the keyboard shortcuts. */
+function initFontScale() {
+  loadFontScale();
+
+  els.fontSmaller?.addEventListener("click", () =>
+    stepFontScale(-FONT_SCALE_STEP)
+  );
+  els.fontLarger?.addEventListener("click", () =>
+    stepFontScale(FONT_SCALE_STEP)
+  );
+  els.fontReset?.addEventListener("click", resetFontScale);
+
+  // Ctrl/Cmd +/-/0. These are the same chords browsers use for page zoom, so
+  // we take them over deliberately: in a desktop webview page zoom would scale
+  // the chrome too and fight the fluid layout.
+  window.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+
+    if (event.key === "=" || event.key === "+") {
+      event.preventDefault();
+      stepFontScale(FONT_SCALE_STEP);
+    } else if (event.key === "-" || event.key === "_") {
+      event.preventDefault();
+      stepFontScale(-FONT_SCALE_STEP);
+    } else if (event.key === "0") {
+      event.preventDefault();
+      resetFontScale();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Language
+// ---------------------------------------------------------------------------
+//
+// `i18n.js` owns the dictionaries and translates the static markup. Everything
+// this file builds at runtime — the date pill, the calendar grid, the status
+// line, the import list — has to be redrawn when the language changes, which
+// is what `refreshForLocale` does.
+
+/** Update the toggle button's label and tooltip for the active language. */
+function renderLangToggle() {
+  if (!els.langToggle) return;
+  els.langToggle.textContent = nextLocaleShort();
+  els.langToggle.title = t("lang.switchTitle");
+  els.langToggle.setAttribute("aria-label", t("lang.switch"));
+}
+
+/**
+ * Redraw every string this module generated itself.
+ *
+ * Called once at startup and again after each language switch. It is safe to
+ * call while locked: the app section is hidden, so the redraws are cheap and
+ * invisible, and the lock screen is re-rendered from `renderLockScreen`.
+ */
+function refreshForLocale() {
+  renderLangToggle();
+  renderLockScreen();
+  renderWeekdayHeaders();
+  renderDateLabel();
+  updateWordCount();
+  if (isCalendarOpen()) renderCalendar();
+  if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
+
+  // The import dialog is rebuilt from the last scan so its badges and buttons
+  // follow the new language. A finished report is left alone: it is a record of
+  // what happened, and re-rendering it would need the report object again.
+  if (importScan && !importDone) renderImportScan(importScan);
+}
+
+/** Wire the language toggle. */
+function initLocaleSwitch() {
+  initLocale();
+  renderLangToggle();
+
+  els.langToggle?.addEventListener("click", () => {
+    toggleLocale();
+  });
+
+  // `i18n.js` has already re-translated the markup by the time this fires.
+  onLocaleChange(() => refreshForLocale());
+}
 
 /** Entries currently passing the search filter, newest first. */
 let visibleEntries = [];
@@ -618,7 +866,7 @@ function createRow(entry, index) {
 
   const preview = document.createElement("div");
   preview.className = "entry-preview" + (entry.title ? "" : " empty");
-  preview.textContent = entry.title || "（無標題）";
+  preview.textContent = entry.title || t("common.untitled");
 
   li.append(dateRow, preview);
   li.addEventListener("click", () => selectDate(entry.date));
@@ -662,7 +910,9 @@ function renderList() {
     renderedEnd = -1;
     const li = document.createElement("li");
     li.className = "list-empty";
-    li.textContent = searchQuery.trim() ? "沒有符合的日記" : "還沒有任何日記";
+    li.textContent = searchQuery.trim()
+      ? t("sidebar.emptyFiltered")
+      : t("sidebar.empty");
     els.list.appendChild(li);
     return;
   }
@@ -725,7 +975,7 @@ async function refreshList() {
     console.error("list_entries failed:", err);
     allEntries = [];
     renderList();
-    setStatus("讀取失敗");
+    setStatus(t("status.listFailed"));
   }
 }
 
@@ -752,10 +1002,10 @@ async function selectDate(date) {
     suppressInput = false;
     savedTitle = title;
     savedContent = content;
-    setStatus(entry ? "已載入" : "新日記");
+    setStatus(entry ? t("status.loaded") : t("status.newEntry"));
   } catch (err) {
     console.error("get_entry failed:", err);
-    setStatus("載入失敗");
+    setStatus(t("status.loadFailed"));
   }
 
   els.deleteBtn.disabled = !allEntries.some((e) => e.date === date);
@@ -771,27 +1021,27 @@ async function saveNow() {
   const title = els.title.value;
   const content = els.content.value;
   if (title === savedTitle && content === savedContent) {
-    setStatus("已儲存", true);
+    setStatus(t("status.saved"), true);
     return;
   }
 
-  setStatus("儲存中…");
+  setStatus(t("status.saving"));
   try {
     await invoke("save_entry", { date: currentDate, title, content });
     savedTitle = title;
     savedContent = content;
-    setStatus("已儲存", true);
+    setStatus(t("status.saved"), true);
     await refreshList();
     els.deleteBtn.disabled = content.trim() === "" && title.trim() === "";
   } catch (err) {
     console.error("save_entry failed:", err);
-    setStatus("儲存失敗");
+    setStatus(t("status.saveFailed"));
   }
 }
 
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
-  setStatus("編輯中…");
+  setStatus(t("status.editing"));
   saveTimer = setTimeout(async () => {
     saveTimer = null;
     await saveNow();
@@ -802,10 +1052,7 @@ async function deleteCurrent() {
   if (!currentDate) return;
   const hasData =
     els.content.value.trim() !== "" || els.title.value.trim() !== "";
-  if (
-    hasData &&
-    !confirm(`確定要刪除 ${currentDate} 的日記嗎？此操作無法復原。`)
-  ) {
+  if (hasData && !confirm(t("delete.confirm", { date: currentDate }))) {
     return;
   }
 
@@ -818,12 +1065,12 @@ async function deleteCurrent() {
     savedTitle = "";
     savedContent = "";
     updateWordCount();
-    setStatus("已刪除");
+    setStatus(t("status.deleted"));
     els.deleteBtn.disabled = true;
     await refreshList();
   } catch (err) {
     console.error("delete_entry failed:", err);
-    setStatus("刪除失敗");
+    setStatus(t("status.deleteFailed"));
   }
 }
 
@@ -895,7 +1142,9 @@ function updateKdfEstimate() {
     return;
   }
   const seconds = (memoryKib / 1024) * iterations * 0.02;
-  els.kdfEstimate.textContent = `預估解鎖時間：約 ${seconds.toFixed(2)} 秒`;
+  els.kdfEstimate.textContent = t("lock.kdfEstimate", {
+    seconds: seconds.toFixed(2),
+  });
 }
 
 /** Apply the lock screen layout for the current setup state. */
@@ -908,27 +1157,26 @@ function renderLockScreen() {
   if (vaultInitialized) {
     // A vault exists at the selected location: ask for the passphrase only.
     els.lockSubtitle.textContent = configured
-      ? "請輸入密碼以解鎖日記"
-      : "此資料夾已有加密日記，請輸入密碼解鎖";
+      ? t("lock.subtitle.unlock")
+      : t("lock.subtitle.existing");
     els.passphraseConfirm.hidden = true;
-    els.passphrase.placeholder = "密碼";
+    els.passphrase.placeholder = t("lock.passphrase");
     els.passphrase.autocomplete = "current-password";
-    els.lockSubmit.textContent = "解鎖";
+    els.lockSubmit.textContent = t("lock.submitUnlock");
   } else if (configured) {
     // Configured folder but no vault yet (e.g. an empty folder was picked).
-    els.lockSubtitle.textContent = "此資料夾尚未建立加密日記，請設定一組密碼";
+    els.lockSubtitle.textContent = t("lock.subtitle.newInFolder");
     els.passphraseConfirm.hidden = false;
-    els.passphrase.placeholder = "設定密碼";
+    els.passphrase.placeholder = t("lock.passphraseSet");
     els.passphrase.autocomplete = "new-password";
-    els.lockSubmit.textContent = "建立加密日記";
+    els.lockSubmit.textContent = t("lock.submitCreate");
   } else {
     // First run: pick a folder, then choose a passphrase.
-    els.lockSubtitle.textContent =
-      "第一次使用：選擇日記儲存位置，並設定一組密碼來加密日記";
+    els.lockSubtitle.textContent = t("lock.subtitle.firstRun");
     els.passphraseConfirm.hidden = false;
-    els.passphrase.placeholder = "設定密碼";
+    els.passphrase.placeholder = t("lock.passphraseSet");
     els.passphrase.autocomplete = "new-password";
-    els.lockSubmit.textContent = "建立加密日記";
+    els.lockSubmit.textContent = t("lock.submitCreate");
   }
 }
 
@@ -1001,7 +1249,7 @@ async function handleUnlockSubmit(event) {
 
   const passphrase = els.passphrase.value;
   if (!passphrase) {
-    els.lockError.textContent = "請輸入密碼";
+    els.lockError.textContent = t("lock.errNoPassphrase");
     return;
   }
 
@@ -1009,11 +1257,11 @@ async function handleUnlockSubmit(event) {
   if (creating) {
     const confirmValue = els.passphraseConfirm.value;
     if (passphrase.length < 6) {
-      els.lockError.textContent = "密碼至少需要 6 個字元";
+      els.lockError.textContent = t("lock.errTooShort");
       return;
     }
     if (passphrase !== confirmValue) {
-      els.lockError.textContent = "兩次輸入的密碼不一致";
+      els.lockError.textContent = t("lock.errMismatch");
       return;
     }
   }
@@ -1023,7 +1271,7 @@ async function handleUnlockSubmit(event) {
     if (!configured) {
       const dir = els.diaryDir.value.trim();
       if (!dir) {
-        els.lockError.textContent = "請選擇日記儲存資料夾";
+        els.lockError.textContent = t("lock.errNoDir");
         return;
       }
       // Re-check right before committing: the folder may already hold a vault.
@@ -1041,7 +1289,7 @@ async function handleUnlockSubmit(event) {
         !Number.isFinite(kdf.iterations) ||
         !Number.isFinite(kdf.parallelism)
       ) {
-        els.lockError.textContent = "進階參數必須是數字";
+        els.lockError.textContent = t("lock.errKdfNaN");
         return;
       }
       await invoke("create_vault", { passphrase, kdf });
@@ -1051,7 +1299,7 @@ async function handleUnlockSubmit(event) {
   } catch (err) {
     console.error("unlock failed:", err);
     els.lockError.textContent =
-      typeof err === "string" ? err : "解鎖失敗，請再試一次";
+      typeof err === "string" ? err : t("lock.errUnlockFailed");
     els.passphrase.select();
   } finally {
     els.lockSubmit.disabled = false;
@@ -1069,7 +1317,7 @@ async function browseForDir() {
     }
   } catch (err) {
     console.error("pick_diary_dir failed:", err);
-    els.lockError.textContent = "無法開啟資料夾選擇器";
+    els.lockError.textContent = t("lock.errPicker");
   }
 }
 
@@ -1325,6 +1573,18 @@ window.addEventListener("beforeunload", () => {
 // ---------------------------------------------------------------------------
 
 async function init() {
+  // Pick the language first: every other render below reads translated
+  // strings, so the dictionaries have to be active before anything is drawn.
+  initLocaleSwitch();
+
+  // The row height is derived from the fluid root font size, so it has to be
+  // measured before the first list render and re-measured on resize.
+  watchRowHeight();
+
+  // Restore the user's font size before anything is drawn, so the first paint
+  // is already at the right scale.
+  initFontScale();
+
   await loadKdfDefaults();
   try {
     await loadSettings();
@@ -1338,7 +1598,7 @@ async function init() {
     console.error("settings load failed:", err);
     configured = false;
     vaultInitialized = false;
-    els.lockError.textContent = "無法讀取設定檔";
+    els.lockError.textContent = t("lock.errSettings");
   }
 
   showLockScreen();

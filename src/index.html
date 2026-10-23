@@ -12,47 +12,56 @@
     <!-- Lock screen: shown until the vault is unlocked. -->
     <div id="lock-screen" class="lock-screen">
         <form id="lock-form" class="lock-card" autocomplete="off">
-            <h1 class="lock-title">Fly Diary</h1>
-            <p id="lock-subtitle" class="lock-subtitle">請輸入密碼以解鎖日記</p>
+            <div class="lock-head">
+                <h1 class="lock-title">Fly Diary</h1>
+                <!-- Language switch. Lives on the lock screen too, because a
+                     user who cannot read the setup form needs it before they
+                     can get any further. -->
+                <button id="lang-toggle" class="lang-toggle" type="button" data-i18n-title="lang.switchTitle"
+                    data-i18n-aria-label="lang.switch">EN</button>
+            </div>
+            <p id="lock-subtitle" class="lock-subtitle" data-i18n="lock.subtitle.unlock">請輸入密碼以解鎖日記</p>
 
             <!-- First run only: choose where the encrypted diary is stored. -->
             <div id="path-field" class="lock-field" hidden>
-                <label class="lock-label" for="diary-dir">日記儲存資料夾</label>
+                <label class="lock-label" for="diary-dir" data-i18n="lock.pathLabel">日記儲存資料夾</label>
                 <div class="lock-path-row">
-                    <input id="diary-dir" class="lock-input" type="text" placeholder="/home/user/Documents/diary"
-                        spellcheck="false" autocomplete="off" />
-                    <button id="browse-dir" class="btn-browse" type="button" title="選擇資料夾">瀏覽…</button>
+                    <input id="diary-dir" class="lock-input" type="text" data-i18n-placeholder="lock.pathPlaceholder"
+                        placeholder="/home/user/Documents/diary" spellcheck="false" autocomplete="off" />
+                    <button id="browse-dir" class="btn-browse" type="button" data-i18n="lock.browse"
+                        data-i18n-title="lock.browseTitle" title="選擇資料夾">瀏覽…</button>
                 </div>
-                <p class="lock-hint">此路徑會寫入設定檔，之後每次啟動都從這裡讀取日記。</p>
+                <p class="lock-hint" data-i18n="lock.pathHint">此路徑會寫入設定檔，之後每次啟動都從這裡讀取日記。</p>
             </div>
 
-            <input id="passphrase" class="lock-input" type="password" placeholder="密碼"
-                autocomplete="current-password" />
-            <input id="passphrase-confirm" class="lock-input" type="password" placeholder="再次輸入密碼"
-                autocomplete="new-password" hidden />
+            <input id="passphrase" class="lock-input" type="password" data-i18n-placeholder="lock.passphrase"
+                placeholder="密碼" autocomplete="current-password" />
+            <input id="passphrase-confirm" class="lock-input" type="password"
+                data-i18n-placeholder="lock.passphraseConfirm" placeholder="再次輸入密碼" autocomplete="new-password"
+                hidden />
 
             <!-- First run only: Argon2id cost parameters. -->
             <details id="advanced-field" class="lock-advanced" hidden>
-                <summary class="lock-advanced-summary">進階選項（金鑰派生參數）</summary>
-                <p class="lock-hint">
+                <summary class="lock-advanced-summary" data-i18n="lock.advanced">進階選項（金鑰派生參數）</summary>
+                <p class="lock-hint" data-i18n="lock.advancedHint">
                     密碼會經由 Argon2id 派生主金鑰，再由主金鑰包裝日記金鑰。
                     提高參數會讓暴力破解更困難，但解鎖也會變慢。
                 </p>
                 <div class="lock-advanced-grid">
-                    <label class="lock-label" for="kdf-memory">記憶體 (MiB)</label>
+                    <label class="lock-label" for="kdf-memory" data-i18n="lock.kdfMemory">記憶體 (MiB)</label>
                     <input id="kdf-memory" class="lock-input" type="number" step="1" min="8" max="1024" />
-                    <label class="lock-label" for="kdf-iterations">迭代次數</label>
+                    <label class="lock-label" for="kdf-iterations" data-i18n="lock.kdfIterations">迭代次數</label>
                     <input id="kdf-iterations" class="lock-input" type="number" step="1" min="1" max="16" />
-                    <label class="lock-label" for="kdf-parallelism">平行度</label>
+                    <label class="lock-label" for="kdf-parallelism" data-i18n="lock.kdfParallelism">平行度</label>
                     <input id="kdf-parallelism" class="lock-input" type="number" step="1" min="1" max="16" />
                 </div>
                 <p id="kdf-estimate" class="lock-hint"></p>
-                <button id="kdf-reset" class="btn-browse" type="button">恢復預設值</button>
+                <button id="kdf-reset" class="btn-browse" type="button" data-i18n="lock.kdfReset">恢復預設值</button>
             </details>
 
             <p id="lock-error" class="lock-error"></p>
 
-            <button id="lock-submit" class="btn-primary lock-submit" type="submit">解鎖</button>
+            <button id="lock-submit" class="btn-primary lock-submit" type="submit" data-i18n="lock.submitUnlock">解鎖</button>
         </form>
     </div>
 
@@ -60,12 +69,14 @@
         <aside class="sidebar">
             <header class="sidebar-header">
                 <h1>Fly Diary</h1>
-                <button id="new-today" class="btn-primary" title="前往今天 (Ctrl/Cmd+T)">
+                <button id="new-today" class="btn-primary" data-i18n="sidebar.newToday"
+                    data-i18n-title="sidebar.newTodayTitle" title="前往今天 (Ctrl/Cmd+T)">
                     今天
                 </button>
             </header>
             <div class="search-wrap">
-                <input id="search" type="search" placeholder="搜尋日期或標題…" autocomplete="off" />
+                <input id="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期或標題…"
+                    autocomplete="off" />
             </div>
             <!-- Virtual scrolling: only the rows inside the viewport are in
                  the DOM. `entry-spacer` reserves the full scroll height and
@@ -76,17 +87,21 @@
                 </div>
             </div>
             <footer class="sidebar-footer">
-                <span id="diary-path" class="path" title="日記儲存位置"></span>
-                <button id="import-btn" class="btn-lock" title="從資料夾匯入日記">匯入</button>
-                <button id="change-dir-btn" class="btn-lock" title="變更日記儲存資料夾">路徑</button>
-                <button id="lock-btn" class="btn-lock" title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
+                <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
+                <button id="import-btn" class="btn-lock" data-i18n="sidebar.import" data-i18n-title="sidebar.importTitle"
+                    title="從資料夾匯入日記">匯入</button>
+                <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
+                    data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
+                <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
+                    title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
             </footer>
         </aside>
 
         <main class="editor">
             <header class="editor-header">
                 <div class="date-nav">
-                    <button id="prev-day" class="date-step" title="前一天 (Alt+←)" aria-label="前一天">
+                    <button id="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
+                        data-i18n-aria-label="editor.prevDay" title="前一天 (Alt+←)" aria-label="前一天">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M15 5l-7 7 7 7" />
                         </svg>
@@ -97,45 +112,43 @@
                          cannot be styled, so it is only kept as a hidden value
                          holder. -->
                     <div class="date-display">
-                        <button
-                            id="date-label"
-                            class="date-label"
-                            type="button"
-                            title="選擇日期"
-                            aria-haspopup="dialog"
-                            aria-expanded="false"
-                            aria-controls="calendar"
-                        >
+                        <button id="date-label" class="date-label" type="button" data-i18n-title="editor.pickDate"
+                            title="選擇日期" aria-haspopup="dialog" aria-expanded="false" aria-controls="calendar">
                             <span id="date-main" class="date-main">—</span>
                             <span id="date-sub" class="date-sub"></span>
                         </button>
                         <input id="date-picker" class="date-native" type="date" tabindex="-1" aria-hidden="true" />
 
-                        <div id="calendar" class="calendar" role="dialog" aria-label="選擇日期" hidden>
+                        <div id="calendar" class="calendar" role="dialog" data-i18n-aria-label="editor.pickDate"
+                            aria-label="選擇日期" hidden>
                             <div class="calendar-head">
-                                <button id="cal-prev" class="cal-step" type="button" title="上個月" aria-label="上個月">
+                                <button id="cal-prev" class="cal-step" type="button" data-i18n-title="editor.calPrev"
+                                    data-i18n-aria-label="editor.calPrev" title="上個月" aria-label="上個月">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M15 5l-7 7 7 7" />
                                     </svg>
                                 </button>
-                                <button id="cal-title" class="cal-title" type="button" title="回到今天">—</button>
-                                <button id="cal-next" class="cal-step" type="button" title="下個月" aria-label="下個月">
+                                <button id="cal-title" class="cal-title" type="button"
+                                    data-i18n-title="editor.calBackToToday" title="回到今天">—</button>
+                                <button id="cal-next" class="cal-step" type="button" data-i18n-title="editor.calNext"
+                                    data-i18n-aria-label="editor.calNext" title="下個月" aria-label="下個月">
                                     <svg viewBox="0 0 24 24" aria-hidden="true">
                                         <path d="M9 5l7 7-7 7" />
                                     </svg>
                                 </button>
                             </div>
-                            <div class="cal-weekdays" aria-hidden="true">
-                                <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
-                            </div>
+                            <!-- Weekday headers are generated by main.js so they
+                                 follow the active language. -->
+                            <div id="cal-weekdays" class="cal-weekdays" aria-hidden="true"></div>
                             <div id="cal-grid" class="cal-grid" role="grid"></div>
                             <div class="calendar-foot">
-                                <button id="cal-today" class="cal-today" type="button">今天</button>
+                                <button id="cal-today" class="cal-today" type="button" data-i18n="common.today">今天</button>
                             </div>
                         </div>
                     </div>
 
-                    <button id="next-day" class="date-step" title="後一天 (Alt+→)" aria-label="後一天">
+                    <button id="next-day" class="date-step" data-i18n-title="editor.nextDayTitle"
+                        data-i18n-aria-label="editor.nextDay" title="後一天 (Alt+→)" aria-label="後一天">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M9 5l7 7-7 7" />
                         </svg>
@@ -143,21 +156,34 @@
                 </div>
                 <div class="status">
                     <span id="status" class="status-text"></span>
-                    <button id="delete-btn" class="btn-danger" title="刪除這一天的日記">刪除</button>
+                    <button id="delete-btn" class="btn-danger" data-i18n="common.delete"
+                        data-i18n-title="editor.deleteTitle" title="刪除這一天的日記">刪除</button>
                 </div>
             </header>
 
             <div class="title-wrap">
-                <input id="title" class="title-input" type="text" placeholder="標題" maxlength="200" />
+                <input id="title" class="title-input" type="text" data-i18n-placeholder="editor.titlePlaceholder"
+                    placeholder="標題" maxlength="200" />
             </div>
 
             <div class="editor-body">
-                <textarea id="content" placeholder="今天過得如何？" spellcheck="false"></textarea>
+                <textarea id="content" data-i18n-placeholder="editor.contentPlaceholder" placeholder="今天過得如何？"
+                    spellcheck="false"></textarea>
             </div>
 
             <footer class="editor-footer">
                 <span id="word-count" class="word-count"></span>
-                <span class="hint">Markdown 格式 · AES-256-GCM 加密 · 自動儲存</span>
+                <span class="hint" data-i18n="editor.hint">Markdown 格式 · AES-256-GCM 加密 · 自動儲存</span>
+                <!-- Font size control. The whole UI is sized in rem, so changing
+                     the root font size scales everything at once. -->
+                <div class="font-size" role="group" data-i18n-aria-label="font.group" aria-label="字體大小">
+                    <button id="font-smaller" class="font-step" type="button" data-i18n-title="font.smallerTitle"
+                        data-i18n-aria-label="font.smaller" title="縮小字體 (Ctrl/Cmd+-)" aria-label="縮小字體">A−</button>
+                    <button id="font-reset" class="font-value" type="button" data-i18n-title="font.reset"
+                        data-i18n-aria-label="font.reset" title="重設字體大小" aria-label="重設字體大小">100%</button>
+                    <button id="font-larger" class="font-step" type="button" data-i18n-title="font.largerTitle"
+                        data-i18n-aria-label="font.larger" title="放大字體 (Ctrl/Cmd++)" aria-label="放大字體">A+</button>
+                </div>
             </footer>
         </main>
     </div>
@@ -167,22 +193,26 @@
     <div id="import-overlay" class="modal-overlay" hidden>
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
             <header class="modal-head">
-                <h2 id="import-title" class="modal-title">匯入日記</h2>
-                <button id="import-close" class="modal-close" type="button" title="關閉" aria-label="關閉">×</button>
+                <h2 id="import-title" class="modal-title" data-i18n="import.title">匯入日記</h2>
+                <button id="import-close" class="modal-close" type="button" data-i18n-title="common.close"
+                    data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
             <div class="modal-body">
                 <p id="import-dir" class="import-dir"></p>
 
                 <div id="import-summary" class="import-summary">
-                    <span class="import-stat ready"><b id="import-ready">0</b> 可匯入</span>
-                    <span class="import-stat conflict"><b id="import-conflicts">0</b> 已存在</span>
-                    <span class="import-stat failed"><b id="import-failed">0</b> 失敗</span>
+                    <span class="import-stat ready"><b id="import-ready">0</b> <span
+                            data-i18n="import.statReady">可匯入</span></span>
+                    <span class="import-stat conflict"><b id="import-conflicts">0</b> <span
+                            data-i18n="import.statConflict">已存在</span></span>
+                    <span class="import-stat failed"><b id="import-failed">0</b> <span
+                            data-i18n="import.statFailed">失敗</span></span>
                 </div>
 
                 <label id="import-overwrite-row" class="import-overwrite" hidden>
                     <input id="import-overwrite" type="checkbox" />
-                    <span>覆蓋已存在的日記</span>
+                    <span data-i18n="import.overwrite">覆蓋已存在的日記</span>
                 </label>
 
                 <div id="import-list" class="import-list" role="list"></div>
@@ -191,17 +221,11 @@
                      driven by the `import-progress` event from the backend. -->
                 <div id="import-progress" class="import-progress" hidden>
                     <div class="import-progress-head">
-                        <span id="import-progress-label">匯入中…</span>
+                        <span id="import-progress-label" data-i18n="import.progress">匯入中…</span>
                         <span id="import-progress-count" class="import-progress-count">0 / 0</span>
                     </div>
-                    <div
-                        class="import-progress-track"
-                        role="progressbar"
-                        aria-labelledby="import-progress-label"
-                        aria-valuemin="0"
-                        aria-valuemax="100"
-                        aria-valuenow="0"
-                    >
+                    <div class="import-progress-track" role="progressbar" aria-labelledby="import-progress-label"
+                        aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                         <div id="import-progress-bar" class="import-progress-bar"></div>
                     </div>
                 </div>
@@ -211,8 +235,8 @@
 
             <footer class="modal-foot">
                 <span id="import-error" class="import-error"></span>
-                <button id="import-cancel" class="btn-browse" type="button">取消</button>
-                <button id="import-confirm" class="btn-primary" type="button">匯入</button>
+                <button id="import-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
+                <button id="import-confirm" class="btn-primary" type="button" data-i18n="sidebar.import">匯入</button>
             </footer>
         </div>
     </div>
