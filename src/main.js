@@ -5,8 +5,8 @@
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-// Relative specifiers *do* work without a bundler, so the i18n layer is a
-// normal ES module next to this file.
+// Relative specifiers *do* work without a bundler, so the i18n layer and the
+// pure helpers under `lib/` are normal ES modules next to this file.
 import {
   t,
   initLocale,
@@ -18,6 +18,20 @@ import {
   formatWeekday,
   weekdayName,
 } from "./i18n.js";
+import {
+  toISODate,
+  fromISODate,
+  shiftDate,
+  monthStartOf,
+  shiftMonth,
+  calendarGrid,
+} from "./lib/dates.js";
+import {
+  computeStreaks,
+  monthlyBuckets,
+  weekdayBuckets,
+  barFractions,
+} from "./lib/stats.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -172,27 +186,10 @@ const els = {
 // ---------------------------------------------------------------------------
 // Date helpers (local timezone, no UTC drift)
 // ---------------------------------------------------------------------------
-
-/** Format a Date as `YYYY-MM-DD` in local time. */
-function toISODate(d) {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-/** Parse `YYYY-MM-DD` into a local Date at midnight. */
-function fromISODate(s) {
-  const [y, m, d] = s.split("-").map(Number);
-  return new Date(y, m - 1, d);
-}
-
-/** Shift an ISO date string by `days`. */
-function shiftDate(iso, days) {
-  const d = fromISODate(iso);
-  d.setDate(d.getDate() + days);
-  return toISODate(d);
-}
+//
+// `toISODate` / `fromISODate` / `shiftDate` / `monthStartOf` / `shiftMonth` /
+// `calendarGrid` live in `lib/dates.js` so they can be unit-tested without a
+// DOM. The two wrappers below stay here because they need the active locale.
 
 /** `2026-10-23` → `週五` / `Fri`. */
 function weekdayOf(iso) {
@@ -228,18 +225,6 @@ function renderDateLabel() {
 // Calendar popup
 // ---------------------------------------------------------------------------
 
-/** `2026-10-23` → `2026-10-01`. */
-function monthStartOf(iso) {
-  return `${iso.slice(0, 7)}-01`;
-}
-
-/** Shift a `YYYY-MM-01` string by `months`, clamped to the 1st. */
-function shiftMonth(monthStart, months) {
-  const [y, m] = monthStart.split("-").map(Number);
-  const d = new Date(y, m - 1 + months, 1);
-  return toISODate(d);
-}
-
 /** Dates that already have an entry, for the little dot in the grid. */
 function entryDateSet() {
   return new Set(allEntries.map((e) => e.date));
@@ -260,25 +245,15 @@ function renderWeekdayHeaders() {
 
 /** Build the 6×7 grid of day buttons for `calendarMonth`. */
 function renderCalendar() {
-  const [year, month] = calendarMonth.split("-").map(Number);
+  const month = Number(calendarMonth.slice(5, 7));
   els.calTitle.textContent = formatMonth(calendarMonth);
-
-  // Monday-first grid: JS `getDay()` is Sunday-based, so shift by 6.
-  const first = new Date(year, month - 1, 1);
-  const lead = (first.getDay() + 6) % 7;
-  const start = new Date(year, month - 1, 1 - lead);
 
   const today = toISODate(new Date());
   const withEntries = entryDateSet();
 
   const frag = document.createDocumentFragment();
-  for (let i = 0; i < 42; i += 1) {
-    const d = new Date(
-      start.getFullYear(),
-      start.getMonth(),
-      start.getDate() + i
-    );
-    const iso = toISODate(d);
+  for (const iso of calendarGrid(calendarMonth)) {
+    const d = fromISODate(iso);
 
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1829,90 +1804,26 @@ function isStatsOpen() {
 }
 
 /**
- * Longest and current run of consecutive days.
- *
- * Dates are compared as local calendar days, matching the rest of the app: the
- * diary decides "today" in local time, so a UTC-based streak would disagree
- * with the entry list around midnight.
- */
-function computeStreaks(entries) {
-  if (entries.length === 0) return { current: 0, longest: 0 };
-
-  const days = entries
-    .map((e) => fromISODate(e.date).getTime())
-    .sort((a, b) => a - b);
-
-  let longest = 1;
-  let run = 1;
-  for (let i = 1; i < days.length; i++) {
-    // `Math.round` absorbs the one-hour drift on daylight-saving boundaries.
-    const diff = Math.round((days[i] - days[i - 1]) / 86400000);
-    run = diff === 1 ? run + 1 : 1;
-    if (run > longest) longest = run;
-  }
-
-  // The current streak counts back from today. A day that has not been written
-  // yet must not break it, so start from yesterday when today is empty.
-  const written = new Set(entries.map((e) => e.date));
-  let cursor = toISODate(new Date());
-  if (!written.has(cursor)) cursor = shiftDate(cursor, -1);
-
-  let current = 0;
-  while (written.has(cursor)) {
-    current++;
-    cursor = shiftDate(cursor, -1);
-  }
-
-  return { current, longest };
-}
-
-/** Bucket entries into the last `count` months, oldest first. */
-function monthlyBuckets(entries, count) {
-  const today = new Date();
-  const buckets = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
-    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    buckets.push({ key, month: d.getMonth() + 1, count: 0 });
-  }
-
-  const byKey = new Map(buckets.map((b) => [b.key, b]));
-  for (const entry of entries) {
-    const bucket = byKey.get(entry.date.slice(0, 7));
-    if (bucket) bucket.count++;
-  }
-  return buckets;
-}
-
-/** Count entries per weekday, Sunday first to match `weekdayName()`. */
-function weekdayBuckets(entries) {
-  const counts = [0, 0, 0, 0, 0, 0, 0];
-  for (const entry of entries) {
-    counts[fromISODate(entry.date).getDay()]++;
-  }
-  return counts;
-}
-
-/**
  * Render one bar chart.
  *
  * `items` is `[{ label, count, title }]`. Heights are relative to the tallest
  * bucket so a quiet month still shows a readable shape; an all-zero chart
- * falls back to a flat row of stubs.
+ * falls back to a flat row of stubs. The maths lives in `lib/stats.js`; this
+ * function only touches the DOM.
  */
 function renderBarChart(container, items, extraClass) {
   container.replaceChildren();
   container.className = "stats-chart" + (extraClass ? ` ${extraClass}` : "");
 
-  const max = Math.max(...items.map((item) => item.count), 0);
-  for (const item of items) {
+  const fractions = barFractions(items.map((item) => item.count));
+  items.forEach((item, index) => {
     const bar = document.createElement("div");
     bar.className = "stats-bar";
     bar.title = item.title;
 
     const fill = document.createElement("div");
     fill.className = "stats-bar-fill" + (item.count === 0 ? " empty" : "");
-    fill.style.setProperty("--v", max === 0 ? 0 : item.count / max);
+    fill.style.setProperty("--v", fractions[index]);
 
     const label = document.createElement("span");
     label.className = "stats-bar-label";
@@ -1920,7 +1831,7 @@ function renderBarChart(container, items, extraClass) {
 
     bar.append(fill, label);
     container.append(bar);
-  }
+  });
 }
 
 /** Fill the dialog from `allEntries`. */

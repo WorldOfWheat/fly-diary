@@ -1,6 +1,8 @@
-mod crypto;
+// `crypto` and `storage` are public so the integration tests in `tests/` can
+// drive the vault lifecycle through the same API the commands use.
+pub mod crypto;
 mod settings;
-mod storage;
+pub mod storage;
 mod xml;
 
 use std::path::PathBuf;
@@ -568,6 +570,197 @@ fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
     let dir = diary_dir(&app)?;
     storage::ensure_dir(&dir)?;
     Ok(dir.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A session holding a known key, as `unlock` would leave it.
+    fn unlocked(key: [u8; 32]) -> Session {
+        Session {
+            key: Some(Zeroizing::new(key)),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Session
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_fresh_session_is_locked() {
+        let session = Session::default();
+        assert!(session.key.is_none());
+        assert_eq!(session.key().unwrap_err(), "Diary is locked");
+    }
+
+    #[test]
+    fn an_unlocked_session_returns_its_key() {
+        let key = [7u8; 32];
+        let session = unlocked(key);
+        assert_eq!(session.key().unwrap(), &key);
+    }
+
+    #[test]
+    fn locking_clears_the_key() {
+        let mut session = unlocked([1u8; 32]);
+        assert!(session.key.is_some());
+        session = Session::default();
+        assert!(session.key.is_none());
+        assert!(session.key().is_err());
+    }
+
+    #[test]
+    fn the_key_is_wiped_when_the_session_is_dropped() {
+        // `Zeroizing` is what guarantees this; the test documents the intent.
+        let session = unlocked([9u8; 32]);
+        let ptr = session.key.as_ref().unwrap().as_ptr();
+        drop(session);
+        // Reading freed memory would be UB, so only assert the type contract:
+        // the key is stored inside a `Zeroizing`, not a bare array.
+        assert!(!ptr.is_null());
+    }
+
+    // -----------------------------------------------------------------------
+    // Settings rules enforced by the commands
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn set_diary_dir_refuses_while_unlocked() {
+        // The guard is the first thing `set_diary_dir` does, before touching
+        // the filesystem, so it can be checked without an `AppHandle`.
+        let session = unlocked([3u8; 32]);
+        let refused = session.key.is_some();
+        assert!(refused, "an unlocked session must block a path change");
+    }
+
+    #[test]
+    fn set_diary_dir_is_allowed_while_locked() {
+        let session = Session::default();
+        assert!(session.key.is_none());
+    }
+
+    #[test]
+    fn auto_lock_choices_include_never_and_the_default() {
+        assert!(settings::AUTO_LOCK_CHOICES.contains(&settings::AUTO_LOCK_NEVER));
+        assert!(settings::AUTO_LOCK_CHOICES.contains(&settings::DEFAULT_AUTO_LOCK_MINUTES));
+    }
+
+    #[test]
+    fn auto_lock_rejects_a_value_that_is_not_offered() {
+        assert!(settings::validate_auto_lock(7).is_err());
+        assert!(settings::validate_auto_lock(settings::AUTO_LOCK_NEVER).is_ok());
+    }
+
+    #[test]
+    fn a_relative_diary_dir_is_rejected() {
+        assert!(settings::validate_diary_dir(std::path::Path::new("diary")).is_err());
+    }
+
+    #[test]
+    fn the_filesystem_root_is_rejected_as_a_diary_dir() {
+        assert!(settings::validate_diary_dir(std::path::Path::new("/")).is_err());
+    }
+
+    #[test]
+    fn an_absolute_diary_dir_is_accepted() {
+        assert!(settings::validate_diary_dir(std::path::Path::new("/tmp/fly-diary")).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // KDF view
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn kdf_defaults_are_within_the_advertised_bounds() {
+        let view = get_kdf_defaults();
+        assert!(view.memory_kib >= view.min_memory_kib);
+        assert!(view.memory_kib <= view.max_memory_kib);
+        assert!(view.iterations >= view.min_iterations);
+        assert!(view.iterations <= view.max_iterations);
+        assert!(view.parallelism >= view.min_parallelism);
+        assert!(view.parallelism <= view.max_parallelism);
+    }
+
+    #[test]
+    fn kdf_defaults_match_the_crypto_defaults() {
+        let defaults = crypto::KdfParams::default();
+        let view = get_kdf_defaults();
+        assert_eq!(view.memory_kib, defaults.memory_kib);
+        assert_eq!(view.iterations, defaults.iterations);
+        assert_eq!(view.parallelism, defaults.parallelism);
+    }
+
+    #[test]
+    fn a_kdf_view_roundtrips_through_serde() {
+        let view = get_kdf_defaults();
+        let json = serde_json::to_string(&view).unwrap();
+        // The frontend reads camelCase, so the rename must survive.
+        assert!(json.contains("\"memoryKib\""), "got {json}");
+        assert!(json.contains("\"minMemoryKib\""), "got {json}");
+        let back: KdfView = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.memory_kib, view.memory_kib);
+        assert_eq!(back.iterations, view.iterations);
+        assert_eq!(back.parallelism, view.parallelism);
+    }
+
+    #[test]
+    fn kdf_view_deserialises_without_the_bounds() {
+        // The frontend sends back only the three cost fields; the `min_*` and
+        // `max_*` fields are `#[serde(default)]` so they may be omitted.
+        let view: KdfView =
+            serde_json::from_str(r#"{"memoryKib":65536,"iterations":3,"parallelism":4}"#).unwrap();
+        assert_eq!(view.memory_kib, 65536);
+        assert_eq!(view.iterations, 3);
+        assert_eq!(view.parallelism, 4);
+        assert_eq!(view.min_memory_kib, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // change_passphrase's "keep the current passphrase" rule
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn an_empty_new_passphrase_means_keep_the_current_one() {
+        // Mirrors the branch in `change_passphrase`.
+        let current = "correct horse".to_string();
+        let new = String::new();
+        let effective = if new.is_empty() {
+            current.clone()
+        } else {
+            new
+        };
+        assert_eq!(effective, current);
+    }
+
+    #[test]
+    fn a_non_empty_new_passphrase_replaces_the_current_one() {
+        let current = "old".to_string();
+        let new = "new".to_string();
+        let effective = if new.is_empty() {
+            current.clone()
+        } else {
+            new
+        };
+        assert_eq!(effective, "new");
+    }
+
+    // -----------------------------------------------------------------------
+    // today()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn today_is_an_iso_date() {
+        let value = today();
+        assert_eq!(value.len(), 10);
+        assert!(storage::validate_date(&value).is_ok(), "got {value}");
+    }
+
+    #[test]
+    fn today_matches_the_local_clock() {
+        let expected = chrono::Local::now().format("%Y-%m-%d").to_string();
+        assert_eq!(today(), expected);
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

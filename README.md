@@ -294,10 +294,32 @@ npm run dev
 ### 4. 執行測試
 
 ```bash
-cargo test --manifest-path src-tauri/Cargo.toml
+./test.sh              # 前端 + Rust 測試，並印出兩邊的 coverage
+./test.sh --no-cov     # 只跑測試，不量測覆蓋率
 ```
 
-涵蓋加解密 roundtrip、錯誤密碼、密文竄改偵測、XML 序列化與日期驗證。
+也可以分開執行：
+
+```bash
+npm test               # 前端（node --test）
+npm run test:rust      # Rust（cargo test）
+npm run coverage       # 前端 + Rust coverage
+```
+
+前端測試放在 `tests/`，用 Node 內建的 test runner，不需要額外安裝套件；受測的純函式在
+`src/lib/dates.js` 與 `src/lib/stats.js`，`src/i18n.js` 另有字典完整性檢查（兩份字典的
+key 必須一致、`index.html` 與 `main.js` 用到的 key 必須存在）。
+
+Rust 測試分兩層：`src-tauri/src/*.rs` 內的單元測試，以及 `src-tauri/tests/vault_lifecycle.rs`
+的整合測試（建立 vault → 寫入 → 上鎖 → 解鎖 → 讀回 → 改密碼）。涵蓋加解密 roundtrip、
+錯誤密碼、密文竄改偵測、XML 序列化、日期驗證、索引重建與匯入流程。
+
+Rust coverage 需要 `cargo-llvm-cov`：
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
 
 ### 5. 打包
 
@@ -313,7 +335,14 @@ fly-diary/
 │   ├── index.html          # 解鎖畫面 + 編輯器（文字以 data-i18n 標記）
 │   ├── main.js             # UI 邏輯、自動儲存、invoke 呼叫
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
+│   ├── lib/
+│   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
+│   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   └── styles.css
+├── tests/                  # 前端測試（node --test）
+│   ├── dates.test.js
+│   ├── stats.test.js
+│   └── i18n.test.js
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
 │   ├── build.rs
@@ -321,6 +350,8 @@ fly-diary/
 │   ├── capabilities/
 │   │   └── default.json
 │   ├── icons/
+│   ├── tests/
+│   │   └── vault_lifecycle.rs  # 整合測試：建立→寫入→上鎖→解鎖→讀回
 │   └── src/
 │       ├── main.rs         # 進入點
 │       ├── lib.rs          # Tauri commands + 解鎖 session 狀態
@@ -328,6 +359,7 @@ fly-diary/
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM 加解密
 │       ├── xml.rs          # XML 序列化 / 解析
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
+├── test.sh                 # 一次跑完兩邊測試與 coverage
 ├── package.json
 └── README.md
 ```
