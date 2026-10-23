@@ -26,6 +26,8 @@ let suppressInput = false;
 let configured = false;
 /** Whether the vault has been created before (first run shows confirm field). */
 let vaultInitialized = false;
+/** First day of the month currently shown in the calendar popup, `YYYY-MM-01`. */
+let calendarMonth = "";
 
 const AUTOSAVE_DELAY = 800;
 
@@ -59,6 +61,15 @@ const els = {
   listSpacer: $("entry-spacer"),
   search: $("search"),
   datePicker: $("date-picker"),
+  dateLabel: $("date-label"),
+  dateMain: $("date-main"),
+  dateSub: $("date-sub"),
+  calendar: $("calendar"),
+  calPrev: $("cal-prev"),
+  calNext: $("cal-next"),
+  calTitle: $("cal-title"),
+  calGrid: $("cal-grid"),
+  calToday: $("cal-today"),
   title: $("title"),
   content: $("content"),
   status: $("status"),
@@ -101,6 +112,158 @@ const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六"];
 
 function weekdayOf(iso) {
   return `週${WEEKDAYS[fromISODate(iso).getDay()]}`;
+}
+
+/** `2026-10-23` → `2026 年 10 月 23 日`. */
+function longDateOf(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${y} 年 ${m} 月 ${d} 日`;
+}
+
+/** Relative label for the header subtitle: 今天 / 昨天 / 明天 / 週五. */
+function relativeDayOf(iso) {
+  const today = toISODate(new Date());
+  if (iso === today) return "今天";
+  if (iso === shiftDate(today, -1)) return "昨天";
+  if (iso === shiftDate(today, 1)) return "明天";
+  return weekdayOf(iso);
+}
+
+/** Refresh the visible date pill. */
+function renderDateLabel() {
+  if (!currentDate) {
+    els.dateMain.textContent = "—";
+    els.dateSub.textContent = "";
+    return;
+  }
+  els.dateMain.textContent = longDateOf(currentDate);
+  els.dateSub.textContent = relativeDayOf(currentDate);
+}
+
+// ---------------------------------------------------------------------------
+// Calendar popup
+// ---------------------------------------------------------------------------
+
+/** `2026-10-23` → `2026-10-01`. */
+function monthStartOf(iso) {
+  return `${iso.slice(0, 7)}-01`;
+}
+
+/** Shift a `YYYY-MM-01` string by `months`, clamped to the 1st. */
+function shiftMonth(monthStart, months) {
+  const [y, m] = monthStart.split("-").map(Number);
+  const d = new Date(y, m - 1 + months, 1);
+  return toISODate(d);
+}
+
+/** Dates that already have an entry, for the little dot in the grid. */
+function entryDateSet() {
+  return new Set(allEntries.map((e) => e.date));
+}
+
+/** Build the 6×7 grid of day buttons for `calendarMonth`. */
+function renderCalendar() {
+  const [year, month] = calendarMonth.split("-").map(Number);
+  els.calTitle.textContent = `${year} 年 ${month} 月`;
+
+  // Monday-first grid: JS `getDay()` is Sunday-based, so shift by 6.
+  const first = new Date(year, month - 1, 1);
+  const lead = (first.getDay() + 6) % 7;
+  const start = new Date(year, month - 1, 1 - lead);
+
+  const today = toISODate(new Date());
+  const withEntries = entryDateSet();
+
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < 42; i += 1) {
+    const d = new Date(
+      start.getFullYear(),
+      start.getMonth(),
+      start.getDate() + i
+    );
+    const iso = toISODate(d);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "cal-day";
+    btn.dataset.date = iso;
+    btn.textContent = String(d.getDate());
+    btn.setAttribute("role", "gridcell");
+    btn.setAttribute("aria-label", longDateOf(iso));
+
+    if (d.getMonth() !== month - 1) btn.classList.add("outside");
+    if (iso === today) btn.classList.add("today");
+    if (iso === currentDate) {
+      btn.classList.add("selected");
+      btn.setAttribute("aria-selected", "true");
+    }
+    if (withEntries.has(iso)) btn.classList.add("has-entry");
+
+    frag.appendChild(btn);
+  }
+  els.calGrid.replaceChildren(frag);
+}
+
+function isCalendarOpen() {
+  return !els.calendar.hidden;
+}
+
+function openCalendar() {
+  // Always open on the month of the selected date.
+  calendarMonth = monthStartOf(currentDate || toISODate(new Date()));
+  renderCalendar();
+  els.calendar.hidden = false;
+  els.dateLabel.setAttribute("aria-expanded", "true");
+
+  // Focus the selected day so arrow keys work immediately.
+  const target =
+    els.calGrid.querySelector(".cal-day.selected") ||
+    els.calGrid.querySelector(".cal-day.today") ||
+    els.calGrid.querySelector(".cal-day");
+  if (target) target.focus();
+}
+
+function closeCalendar({ restoreFocus = false } = {}) {
+  if (!isCalendarOpen()) return;
+  els.calendar.hidden = true;
+  els.dateLabel.setAttribute("aria-expanded", "false");
+  if (restoreFocus) els.dateLabel.focus();
+}
+
+function toggleCalendar() {
+  if (isCalendarOpen()) closeCalendar({ restoreFocus: true });
+  else openCalendar();
+}
+
+/** Move the calendar view by `months` without changing the selected date. */
+function stepCalendarMonth(months) {
+  calendarMonth = shiftMonth(calendarMonth, months);
+  renderCalendar();
+}
+
+/** Move focus to the day `days` away from the currently focused cell. */
+function moveCalendarFocus(days) {
+  const cells = [...els.calGrid.querySelectorAll(".cal-day")];
+  const index = cells.indexOf(document.activeElement);
+  if (index < 0) return;
+
+  const next = cells[index + days];
+  if (next) {
+    next.focus();
+    return;
+  }
+
+  // Ran off the grid: flip the month and land on the matching edge.
+  stepCalendarMonth(days > 0 ? 1 : -1);
+  const fresh = [...els.calGrid.querySelectorAll(".cal-day")];
+  const edge = days > 0 ? fresh[0] : fresh[fresh.length - 1];
+  if (edge) edge.focus();
+}
+
+/** Pick a date from the calendar and close it. */
+function pickCalendarDate(iso) {
+  closeCalendar({ restoreFocus: true });
+  selectDate(iso);
 }
 
 // ---------------------------------------------------------------------------
@@ -201,6 +364,10 @@ function renderVisibleRows(force = false) {
 function renderList() {
   applyFilter();
 
+  // The calendar marks days that already have an entry, so it has to follow
+  // the list. Only redraw while it is actually open.
+  if (isCalendarOpen()) renderCalendar();
+
   if (visibleEntries.length === 0) {
     els.listSpacer.style.height = "0px";
     els.list.replaceChildren();
@@ -208,9 +375,7 @@ function renderList() {
     renderedEnd = -1;
     const li = document.createElement("li");
     li.className = "list-empty";
-    li.textContent = searchQuery.trim()
-      ? "沒有符合的日記"
-      : "還沒有任何日記";
+    li.textContent = searchQuery.trim() ? "沒有符合的日記" : "還沒有任何日記";
     els.list.appendChild(li);
     return;
   }
@@ -288,6 +453,7 @@ async function selectDate(date) {
 
   currentDate = date;
   els.datePicker.value = date;
+  renderDateLabel();
 
   try {
     const entry = await invoke("get_entry", { date });
@@ -638,6 +804,8 @@ async function changeDiaryDir() {
   savedContent = "";
   allEntries = [];
   resetList();
+  closeCalendar();
+  renderDateLabel();
   els.title.value = "";
   els.content.value = "";
 
@@ -666,6 +834,8 @@ async function lockNow() {
   savedContent = "";
   allEntries = [];
   resetList();
+  closeCalendar();
+  renderDateLabel();
   els.title.value = "";
   els.content.value = "";
 
@@ -712,8 +882,55 @@ els.content.addEventListener("input", () => {
   scheduleSave();
 });
 
-els.datePicker.addEventListener("change", () => {
-  if (els.datePicker.value) selectDate(els.datePicker.value);
+// The native input is hidden and only mirrors the selected date, so it never
+// fires `change` from user interaction. The calendar below is the real UI.
+els.dateLabel.addEventListener("click", toggleCalendar);
+
+els.calPrev.addEventListener("click", () => stepCalendarMonth(-1));
+els.calNext.addEventListener("click", () => stepCalendarMonth(1));
+
+// Clicking the month title jumps back to the month of the selected date.
+els.calTitle.addEventListener("click", () => {
+  calendarMonth = monthStartOf(currentDate || toISODate(new Date()));
+  renderCalendar();
+});
+
+els.calToday.addEventListener("click", async () => {
+  const today = await invoke("today");
+  pickCalendarDate(today);
+});
+
+els.calGrid.addEventListener("click", (e) => {
+  const cell = e.target.closest(".cal-day");
+  if (cell) pickCalendarDate(cell.dataset.date);
+});
+
+// Arrow keys move the focus ring, PageUp/PageDown flip the month.
+els.calGrid.addEventListener("keydown", (e) => {
+  const moves = {
+    ArrowLeft: -1,
+    ArrowRight: 1,
+    ArrowUp: -7,
+    ArrowDown: 7,
+  };
+  if (e.key in moves) {
+    e.preventDefault();
+    moveCalendarFocus(moves[e.key]);
+  } else if (e.key === "PageUp") {
+    e.preventDefault();
+    stepCalendarMonth(-1);
+  } else if (e.key === "PageDown") {
+    e.preventDefault();
+    stepCalendarMonth(1);
+  }
+});
+
+// Clicking anywhere outside the popup dismisses it.
+document.addEventListener("mousedown", (e) => {
+  if (!isCalendarOpen()) return;
+  if (els.calendar.contains(e.target) || els.dateLabel.contains(e.target))
+    return;
+  closeCalendar();
 });
 
 els.prevDay.addEventListener("click", () =>
@@ -752,6 +969,12 @@ window.addEventListener("resize", () => renderVisibleRows(true));
 // Keyboard shortcuts.
 document.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
+
+  if (e.key === "Escape" && isCalendarOpen()) {
+    e.preventDefault();
+    closeCalendar({ restoreFocus: true });
+    return;
+  }
 
   if (mod && e.key.toLowerCase() === "l") {
     e.preventDefault();

@@ -85,9 +85,60 @@
         <main class="editor">
             <header class="editor-header">
                 <div class="date-nav">
-                    <button id="prev-day" class="btn-icon" title="前一天 (Alt+←)">‹</button>
-                    <input id="date-picker" type="date" />
-                    <button id="next-day" class="btn-icon" title="後一天 (Alt+→)">›</button>
+                    <button id="prev-day" class="date-step" title="前一天 (Alt+←)" aria-label="前一天">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M15 5l-7 7 7 7" />
+                        </svg>
+                    </button>
+
+                    <!-- The date pill opens our own calendar. The native
+                         <input type="date"> popup is rendered by the OS and
+                         cannot be styled, so it is only kept as a hidden value
+                         holder. -->
+                    <div class="date-display">
+                        <button
+                            id="date-label"
+                            class="date-label"
+                            type="button"
+                            title="選擇日期"
+                            aria-haspopup="dialog"
+                            aria-expanded="false"
+                            aria-controls="calendar"
+                        >
+                            <span id="date-main" class="date-main">—</span>
+                            <span id="date-sub" class="date-sub"></span>
+                        </button>
+                        <input id="date-picker" class="date-native" type="date" tabindex="-1" aria-hidden="true" />
+
+                        <div id="calendar" class="calendar" role="dialog" aria-label="選擇日期" hidden>
+                            <div class="calendar-head">
+                                <button id="cal-prev" class="cal-step" type="button" title="上個月" aria-label="上個月">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M15 5l-7 7 7 7" />
+                                    </svg>
+                                </button>
+                                <button id="cal-title" class="cal-title" type="button" title="回到今天">—</button>
+                                <button id="cal-next" class="cal-step" type="button" title="下個月" aria-label="下個月">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                        <path d="M9 5l7 7-7 7" />
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="cal-weekdays" aria-hidden="true">
+                                <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+                            </div>
+                            <div id="cal-grid" class="cal-grid" role="grid"></div>
+                            <div class="calendar-foot">
+                                <button id="cal-today" class="cal-today" type="button">今天</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button id="next-day" class="date-step" title="後一天 (Alt+→)" aria-label="後一天">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M9 5l7 7-7 7" />
+                        </svg>
+                    </button>
                 </div>
                 <div class="status">
                     <span id="status" class="status-text"></span>
