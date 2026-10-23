@@ -67,7 +67,14 @@
             <div class="search-wrap">
                 <input id="search" type="search" placeholder="搜尋日期或標題…" autocomplete="off" />
             </div>
-            <ul id="entry-list" class="entry-list"></ul>
+            <!-- Virtual scrolling: only the rows inside the viewport are in
+                 the DOM. `entry-spacer` reserves the full scroll height and
+                 `entry-list` is absolutely positioned inside it. -->
+            <div id="entry-scroll" class="entry-scroll">
+                <div id="entry-spacer" class="entry-spacer">
+                    <ul id="entry-list" class="entry-list"></ul>
+                </div>
+            </div>
             <footer class="sidebar-footer">
                 <span id="diary-path" class="path" title="日記儲存位置"></span>
                 <button id="change-dir-btn" class="btn-lock" title="變更日記儲存資料夾">路徑</button>

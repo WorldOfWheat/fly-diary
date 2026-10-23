@@ -287,9 +287,14 @@ fn save_entry(
 }
 
 #[tauri::command]
-fn delete_entry(app: tauri::AppHandle, date: String) -> Result<(), String> {
+fn delete_entry(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+) -> Result<(), String> {
     let dir = diary_dir(&app)?;
-    storage::delete_entry(&dir, &date)
+    let guard = session.lock().unwrap();
+    storage::delete_entry(&dir, guard.key()?, &date)
 }
 
 /// List entries. Titles are encrypted, so the diary must be unlocked.
@@ -301,6 +306,20 @@ fn list_entries(
     let dir = diary_dir(&app)?;
     let guard = session.lock().unwrap();
     storage::list_entries(&dir, guard.key()?)
+}
+
+/// Discard `index.xml` and rebuild it by scanning every entry file.
+///
+/// The index is normally maintained automatically; this is an escape hatch for
+/// a corrupted index or for files copied into the folder behind the app's back.
+#[tauri::command]
+fn rebuild_index(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<EntryMeta>, String> {
+    let dir = diary_dir(&app)?;
+    let guard = session.lock().unwrap();
+    storage::rebuild_index(&dir, guard.key()?)
 }
 
 /// Today's date in the user's local timezone, formatted as `YYYY-MM-DD`.
@@ -336,6 +355,7 @@ pub fn run() {
             save_entry,
             delete_entry,
             list_entries,
+            rebuild_index,
             today,
             diary_path
         ])

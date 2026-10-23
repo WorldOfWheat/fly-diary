@@ -55,6 +55,8 @@ const els = {
   // App
   app: $("app"),
   list: $("entry-list"),
+  listScroll: $("entry-scroll"),
+  listSpacer: $("entry-spacer"),
   search: $("search"),
   datePicker: $("date-picker"),
   title: $("title"),
@@ -118,55 +120,138 @@ function updateWordCount() {
 }
 
 // ---------------------------------------------------------------------------
-// Rendering
+// Rendering (virtual scrolling)
 // ---------------------------------------------------------------------------
+//
+// A diary with thousands of entries would otherwise create thousands of DOM
+// nodes on every keystroke-triggered refresh. Instead the spacer is sized to
+// the full list height and only the rows inside the viewport (plus a small
+// overscan) are rendered, absolutely positioned at `index * ROW_HEIGHT`.
 
-function renderList() {
+/** Height of one row in CSS pixels; must match `.entry-item` in styles.css. */
+const ROW_HEIGHT = 52;
+/** Extra rows rendered above and below the viewport to hide scroll seams. */
+const OVERSCAN = 6;
+
+/** Entries currently passing the search filter, newest first. */
+let visibleEntries = [];
+/** Index of the first rendered row, used to skip redundant re-renders. */
+let renderedStart = -1;
+/** Index one past the last rendered row. */
+let renderedEnd = -1;
+
+/** Recompute `visibleEntries` from `allEntries` and the search query. */
+function applyFilter() {
   const q = searchQuery.trim().toLowerCase();
-  const filtered = q
+  visibleEntries = q
     ? allEntries.filter(
         (e) => e.date.includes(q) || (e.title || "").toLowerCase().includes(q)
       )
     : allEntries;
+}
 
-  els.list.innerHTML = "";
+/** Build the DOM node for one entry row. */
+function createRow(entry, index) {
+  const li = document.createElement("li");
+  li.className = "entry-item" + (entry.date === currentDate ? " active" : "");
+  li.dataset.date = entry.date;
+  li.style.top = `${index * ROW_HEIGHT}px`;
 
-  if (filtered.length === 0) {
+  const dateRow = document.createElement("div");
+  dateRow.className = "entry-date";
+  const dateText = document.createElement("span");
+  dateText.textContent = entry.date;
+  const weekday = document.createElement("span");
+  weekday.className = "entry-weekday";
+  weekday.textContent = weekdayOf(entry.date);
+  dateRow.append(dateText, weekday);
+
+  const preview = document.createElement("div");
+  preview.className = "entry-preview" + (entry.title ? "" : " empty");
+  preview.textContent = entry.title || "（無標題）";
+
+  li.append(dateRow, preview);
+  li.addEventListener("click", () => selectDate(entry.date));
+  return li;
+}
+
+/** Render only the rows that intersect the viewport. */
+function renderVisibleRows(force = false) {
+  const total = visibleEntries.length;
+  const viewport = els.listScroll.clientHeight || 0;
+  const scrollTop = els.listScroll.scrollTop;
+
+  let start = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
+  if (start < 0) start = 0;
+  let end = Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN;
+  if (end > total) end = total;
+
+  if (!force && start === renderedStart && end === renderedEnd) return;
+  renderedStart = start;
+  renderedEnd = end;
+
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < end; i += 1) {
+    frag.appendChild(createRow(visibleEntries[i], i));
+  }
+  els.list.replaceChildren(frag);
+}
+
+/** Full re-render: refilter, resize the spacer, then draw the viewport. */
+function renderList() {
+  applyFilter();
+
+  if (visibleEntries.length === 0) {
+    els.listSpacer.style.height = "0px";
+    els.list.replaceChildren();
+    renderedStart = -1;
+    renderedEnd = -1;
     const li = document.createElement("li");
     li.className = "list-empty";
-    li.textContent = q ? "沒有符合的日記" : "還沒有任何日記";
+    li.textContent = searchQuery.trim()
+      ? "沒有符合的日記"
+      : "還沒有任何日記";
     els.list.appendChild(li);
     return;
   }
 
-  for (const entry of filtered) {
-    const li = document.createElement("li");
-    li.className = "entry-item" + (entry.date === currentDate ? " active" : "");
-    li.dataset.date = entry.date;
-
-    const dateRow = document.createElement("div");
-    dateRow.className = "entry-date";
-    const dateText = document.createElement("span");
-    dateText.textContent = entry.date;
-    const weekday = document.createElement("span");
-    weekday.className = "entry-weekday";
-    weekday.textContent = weekdayOf(entry.date);
-    dateRow.append(dateText, weekday);
-
-    const preview = document.createElement("div");
-    preview.className = "entry-preview" + (entry.title ? "" : " empty");
-    preview.textContent = entry.title || "（無標題）";
-
-    li.append(dateRow, preview);
-    li.addEventListener("click", () => selectDate(entry.date));
-    els.list.appendChild(li);
-  }
+  els.listSpacer.style.height = `${visibleEntries.length * ROW_HEIGHT}px`;
+  renderVisibleRows(true);
 }
 
+/** Drop every rendered row and forget the viewport window (used on lock). */
+function resetList() {
+  visibleEntries = [];
+  renderedStart = -1;
+  renderedEnd = -1;
+  els.listSpacer.style.height = "0px";
+  els.list.replaceChildren();
+  els.listScroll.scrollTop = 0;
+}
+
+/** Update the active highlight without rebuilding the list. */
 function highlightActive() {
   for (const li of els.list.querySelectorAll(".entry-item")) {
     li.classList.toggle("active", li.dataset.date === currentDate);
   }
+}
+
+/** Scroll the sidebar so `date` is visible, rendering it if necessary. */
+function scrollDateIntoView(date) {
+  const index = visibleEntries.findIndex((e) => e.date === date);
+  if (index < 0) return;
+
+  const top = index * ROW_HEIGHT;
+  const bottom = top + ROW_HEIGHT;
+  const viewTop = els.listScroll.scrollTop;
+  const viewBottom = viewTop + els.listScroll.clientHeight;
+
+  if (top < viewTop) {
+    els.listScroll.scrollTop = top;
+  } else if (bottom > viewBottom) {
+    els.listScroll.scrollTop = bottom - els.listScroll.clientHeight;
+  }
+  renderVisibleRows();
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +307,7 @@ async function selectDate(date) {
 
   els.deleteBtn.disabled = !allEntries.some((e) => e.date === date);
   updateWordCount();
+  scrollDateIntoView(date);
   highlightActive();
   els.content.focus();
 }
@@ -551,7 +637,7 @@ async function changeDiaryDir() {
   savedTitle = "";
   savedContent = "";
   allEntries = [];
-  els.list.innerHTML = "";
+  resetList();
   els.title.value = "";
   els.content.value = "";
 
@@ -579,7 +665,7 @@ async function lockNow() {
   savedTitle = "";
   savedContent = "";
   allEntries = [];
-  els.list.innerHTML = "";
+  resetList();
   els.title.value = "";
   els.content.value = "";
 
@@ -648,8 +734,20 @@ els.changeDirBtn.addEventListener("click", changeDiaryDir);
 
 els.search.addEventListener("input", () => {
   searchQuery = els.search.value;
+  // A new filter changes the row count, so reset the scroll position.
+  els.listScroll.scrollTop = 0;
   renderList();
 });
+
+// Virtual scrolling: redraw the window as the user scrolls. `passive` keeps
+// the scroll smooth because the handler never calls `preventDefault()`.
+els.listScroll.addEventListener("scroll", () => renderVisibleRows(), {
+  passive: true,
+});
+
+// The viewport height changes with the window, so the rendered window must be
+// recomputed.
+window.addEventListener("resize", () => renderVisibleRows(true));
 
 // Keyboard shortcuts.
 document.addEventListener("keydown", (e) => {

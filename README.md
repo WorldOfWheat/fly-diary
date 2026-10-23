@@ -96,6 +96,20 @@ Vault 檔（`vault.xml`）：
 
 `wrapped-key` 解密後就是 diary key。檔案內沒有任何明文密碼或未包裝的金鑰。
 
+索引檔（`index.xml`）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<diary version="2">
+  <date>index</date>
+  <iv>BASE64(12 bytes)</iv>
+  <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
+</diary>
+```
+
+`payload` 解密後是每行一筆的 `日期 \t 標題`，用同一把 diary key 加密。
+側邊欄列出日記時只要解密這一個檔案，不必逐一解密所有日記檔。
+
 > 舊版（`version="1"`）vault 使用單次 SHA-256 派生金鑰，並以 `<verifier>` 驗證密碼。
 > 解鎖舊 vault 時會自動遷移：先以舊金鑰解密所有日記、用新的隨機 diary key 重新加密，
 > 最後才改寫 `vault.xml`。若中途失敗，舊 vault 保持原樣，舊密碼仍可解鎖。
@@ -220,6 +234,7 @@ fly-diary/
 | `save_entry(date, title, content)` | 加密後寫入/覆寫某天的日記                    |
 | `delete_entry(date)`               | 刪除某天的日記                               |
 | `list_entries()`                   | 列出所有日記（新到舊，需解鎖才能取得標題）   |
+| `rebuild_index()`                  | 丟棄 `index.xml` 並重新掃描所有日記重建索引  |
 | `today()`                          | 回傳本地時區的今天日期                       |
 | `diary_path()`                     | 回傳日記資料夾絕對路徑                       |
 
@@ -229,6 +244,8 @@ fly-diary/
 - **路徑驗證**：`settings::validate_diary_dir` 要求絕對路徑且不得為檔案系統根目錄，避免工作目錄變動導致日記「消失」。
 - **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`），檔名由日期推導，天然保證一天一篇。
 - **標題也加密**：標題與內容打包成同一段明文再加密，`list_entries` 必須持有金鑰才能解出標題；鎖定時側邊欄會清空，避免殘留任何標題。
+- **加密索引**：`index.xml` 以同一把 diary key 加密存放所有 `{日期, 標題}`。列出日記時只解密這一個檔案，不必逐一解密上千篇日記；索引缺失或損毀時會自動回退掃描並重建。
+- **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan），列高固定 52px，捲動時以 `index * 52px` 絕對定位。即使有上萬篇日記，DOM 節點數也維持在數十個。
 - **金鑰階層**：密碼只派生 master key，master key 只包裝隨機的 diary key。改密碼或升級 KDF 時只需重新包裝 diary key，不必動到任何日記檔。
 - **可調 KDF**：首次建立 vault 時可在「進階選項」調整 Argon2id 的記憶體／迭代／平行度，參數寫入 `vault.xml`，之後解鎖沿用同一組參數。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
@@ -240,5 +257,6 @@ fly-diary/
 - 日期為明文（檔名與 `<date>`），但標題與內容皆已加密。
 - 尚未提供修改密碼功能（有了金鑰階層後，只需重新包裝 diary key，但 UI 尚未實作）。
 - 舊版（SHA-256）vault 會在解鎖時自動遷移，遷移期間需要重新加密所有日記，日記量大時會較慢。
+- `index.xml` 與日記檔分開寫入，若程式在兩次寫入之間被強制終止，索引可能落後；下次寫入或呼叫 `rebuild_index()` 即可修復。
 - 變更日記路徑不會搬移既有檔案，需自行複製；新路徑若已有 vault 則會沿用該 vault 的密碼。
 - 設定檔本身未加密，任何人可讀到日記資料夾位置（但沒有密碼仍無法解密內容）。

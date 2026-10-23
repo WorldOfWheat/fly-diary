@@ -253,19 +253,44 @@ body {
   border-color: var(--accent);
 }
 
-.entry-list {
+/* Virtual scrolling viewport. `entry-spacer` is sized to the full list height
+   so the native scrollbar behaves normally, while `entry-list` only holds the
+   handful of rows currently visible. */
+.entry-scroll {
   flex: 1;
   overflow-y: auto;
-  list-style: none;
-  padding: 4px 8px 8px;
+  overflow-x: hidden;
   min-height: 0;
+  position: relative;
 }
 
+.entry-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.entry-list {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  list-style: none;
+  padding: 4px 8px 8px;
+  margin: 0;
+}
+
+/* Rows are absolutely positioned by `renderList()`; the fixed height keeps the
+   scroll math exact. */
 .entry-item {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 52px;
+  box-sizing: border-box;
   padding: 9px 10px;
   border-radius: var(--radius);
   cursor: pointer;
-  margin-bottom: 2px;
+  overflow: hidden;
   transition: background 0.12s ease;
 }
 
@@ -306,7 +331,10 @@ body {
   opacity: 0.6;
 }
 
+/* The empty-state row lives inside the absolutely positioned `entry-list`, so
+   it needs `position: static` to flow normally. */
 .list-empty {
+  position: static;
   padding: 24px 12px;
   text-align: center;
   font-size: 12px;

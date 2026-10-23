@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! diary/
-//! ├── vault.xml              # salt + passphrase verifier (no key material)
+//! ├── vault.xml              # KDF params + wrapped diary key (no key material)
+//! ├── index.xml              # encrypted {date, title} index for the sidebar
 //! ├── 2026-10-23.xml         # one encrypted entry per day
 //! └── 2026-10-22.xml
 //! ```
@@ -13,7 +14,17 @@
 //! AES-256-GCM encrypted `payload` (see [`crate::xml`]). The payload is the
 //! title and the body joined by [`FIELD_SEPARATOR`], so neither of them is
 //! readable on disk without the passphrase.
+//!
+//! ## Why an index?
+//!
+//! Titles live inside the encrypted payload, so listing the sidebar would
+//! otherwise require decrypting *every* entry file on every unlock. With a few
+//! thousand entries that is hundreds of milliseconds of disk I/O. `index.xml`
+//! stores all `{date, title}` pairs in a single encrypted blob, so unlocking
+//! decrypts one file instead of thousands. The index is a cache: if it is
+//! missing, stale or corrupt it is rebuilt by scanning the entry files.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -24,6 +35,18 @@ use crate::xml::{self, EncryptedEntry};
 
 /// Name of the vault metadata file (salt + verifier).
 const VAULT_FILE: &str = "vault.xml";
+
+/// Name of the encrypted sidebar index.
+const INDEX_FILE: &str = "index.xml";
+
+/// Separator between index records inside the encrypted index payload.
+///
+/// Records are `date \t title`; a tab cannot appear in a date, and titles have
+/// their tabs flattened on write, so the split is unambiguous.
+const INDEX_FIELD_SEPARATOR: u8 = b'\t';
+
+/// Separator between index records.
+const INDEX_RECORD_SEPARATOR: u8 = b'\n';
 
 /// Separator between the title and the body inside the encrypted payload.
 ///
@@ -391,7 +414,149 @@ fn migrate_entries(
         fs::write(&path, xml::to_xml(&rewritten)?)
             .map_err(|e| format!("Failed to rewrite entry {date}: {e}"))?;
     }
-    Ok(())
+
+    // The old index was encrypted with `old_key`, so it is now unreadable.
+    // Rebuild it under the new key from the freshly re-encrypted entries.
+    let index = scan_entries(dir, new_key)?;
+    write_index(dir, new_key, &index)
+}
+
+// ---------------------------------------------------------------------------
+// Encrypted sidebar index
+// ---------------------------------------------------------------------------
+
+fn index_path(dir: &Path) -> PathBuf {
+    dir.join(INDEX_FILE)
+}
+
+/// Serialize `{date, title}` pairs into the plaintext index format.
+///
+/// One record per line, `date \t title`. Tabs and newlines in titles are
+/// flattened to spaces so the record separator stays unambiguous.
+fn pack_index(entries: &BTreeMap<String, String>) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (date, title) in entries {
+        let title = title.replace(['\t', '\r', '\n'], " ");
+        out.extend_from_slice(date.as_bytes());
+        out.push(INDEX_FIELD_SEPARATOR);
+        out.extend_from_slice(title.as_bytes());
+        out.push(INDEX_RECORD_SEPARATOR);
+    }
+    out
+}
+
+/// Parse the plaintext index format back into `{date, title}` pairs.
+///
+/// Malformed lines are skipped rather than failing the whole index; a bad
+/// record is indistinguishable from a missing one and will be re-added on the
+/// next write.
+fn unpack_index(plain: &[u8]) -> BTreeMap<String, String> {
+    let mut entries = BTreeMap::new();
+    for line in plain.split(|b| *b == INDEX_RECORD_SEPARATOR) {
+        if line.is_empty() {
+            continue;
+        }
+        let Some(sep) = line.iter().position(|b| *b == INDEX_FIELD_SEPARATOR) else {
+            continue;
+        };
+        let date = String::from_utf8_lossy(&line[..sep]).to_string();
+        if validate_date(&date).is_err() {
+            continue;
+        }
+        let title = String::from_utf8_lossy(&line[sep + 1..]).to_string();
+        entries.insert(date, title);
+    }
+    entries
+}
+
+/// Write the encrypted index for `entries`.
+fn write_index(dir: &Path, key: &[u8; 32], entries: &BTreeMap<String, String>) -> Result<(), String> {
+    ensure_dir(dir)?;
+    let (iv, ct) = crypto::encrypt(key, &pack_index(entries))?;
+    let document = xml::to_xml(&EncryptedEntry::new(
+        "index",
+        crypto::b64_encode(&iv),
+        crypto::b64_encode(&ct),
+    ))?;
+    fs::write(index_path(dir), document).map_err(|e| format!("Failed to write index: {e}"))
+}
+
+/// Read and decrypt the index, returning `None` when it is missing or cannot
+/// be decrypted (wrong key, corrupt file, or written by another vault).
+fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, String>> {
+    let text = fs::read_to_string(index_path(dir)).ok()?;
+    let encrypted = xml::from_xml(&text).ok()?;
+    let iv = crypto::b64_decode(&encrypted.iv).ok()?;
+    let ct = crypto::b64_decode(&encrypted.payload).ok()?;
+    let plain = crypto::decrypt(key, &iv, &ct).ok()?;
+    Some(unpack_index(&plain))
+}
+
+/// Scan every entry file and decrypt its title.
+///
+/// This is the slow path: it is only used to build the index from scratch, or
+/// to repair it when it is missing or stale.
+fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, String>, String> {
+    ensure_dir(dir)?;
+    let mut entries = BTreeMap::new();
+
+    let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
+    for item in read_dir {
+        let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
+        let path = item.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("xml") {
+            continue;
+        }
+        let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        // Skip the vault/index files and anything that is not a valid date.
+        if validate_date(date).is_err() {
+            continue;
+        }
+
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(encrypted) = xml::from_xml(&text) else {
+            continue;
+        };
+        let (Ok(iv), Ok(ct)) = (
+            crypto::b64_decode(&encrypted.iv),
+            crypto::b64_decode(&encrypted.payload),
+        ) else {
+            continue;
+        };
+        let Ok(plain) = crypto::decrypt(key, &iv, &ct) else {
+            continue;
+        };
+        let (title, _) = unpack(&plain, encrypted.legacy_title.as_deref());
+        entries.insert(date.to_string(), title);
+    }
+
+    Ok(entries)
+}
+
+/// Rebuild `index.xml` from the entry files and return the fresh index.
+pub fn rebuild_index(dir: &Path, key: &[u8; 32]) -> Result<Vec<EntryMeta>, String> {
+    let entries = scan_entries(dir, key)?;
+    write_index(dir, key, &entries)?;
+    Ok(to_meta(dir, &entries))
+}
+
+/// Convert `{date, title}` pairs into sidebar metadata, newest first.
+fn to_meta(dir: &Path, entries: &BTreeMap<String, String>) -> Vec<EntryMeta> {
+    entries
+        .iter()
+        .rev()
+        .map(|(date, title)| EntryMeta {
+            date: date.clone(),
+            title: title.clone(),
+            size: fs::metadata(dir.join(format!("{date}.xml")))
+                .map(|m| m.len())
+                .unwrap_or(0),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -468,71 +633,49 @@ pub fn write_entry(
     let (iv, ct) = crypto::encrypt(key, &pack(title, content))?;
     let encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
     let document = xml::to_xml(&encrypted)?;
-    fs::write(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))
+    fs::write(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))?;
+
+    // Keep the sidebar index in sync. A missing index is rebuilt from scratch
+    // so the first write after an upgrade also seeds it.
+    let mut index = read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
+    index.insert(date.to_string(), title.to_string());
+    write_index(dir, key, &index)
 }
 
 /// Delete the entry for a given date. Missing files are treated as success.
-pub fn delete_entry(dir: &Path, date: &str) -> Result<(), String> {
+pub fn delete_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<(), String> {
     let path = entry_path(dir, date)?;
     match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(format!("Failed to delete entry {date}: {e}")),
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Failed to delete entry {date}: {e}")),
     }
+
+    // Drop the record from the index. If the index is unreadable, rebuild it
+    // from the remaining files instead of leaving a stale entry behind.
+    let mut index = match read_index(dir, key) {
+        Some(index) => index,
+        None => scan_entries(dir, key)?,
+    };
+    index.remove(date);
+    write_index(dir, key, &index)
 }
 
 /// List all entries, newest first.
 ///
-/// The title lives inside the encrypted payload, so `key` is required. Files
-/// that cannot be decrypted (corrupt, or written by another vault) are skipped
-/// rather than failing the whole listing.
+/// The title lives inside the encrypted payload, so `key` is required. This
+/// reads the encrypted `index.xml` (one decryption) instead of every entry
+/// file. When the index is missing or unreadable it is rebuilt by scanning the
+/// entry files, which also repairs it for next time.
 pub fn list_entries(dir: &Path, key: &[u8; 32]) -> Result<Vec<EntryMeta>, String> {
     ensure_dir(dir)?;
-    let mut entries = Vec::new();
 
-    let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
-    for item in read_dir {
-        let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
-        let path = item.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("xml") {
-            continue;
-        }
-        let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        // Skip the vault file and any file whose name is not a valid date.
-        if validate_date(date).is_err() {
-            continue;
-        }
-
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(encrypted) = xml::from_xml(&text) else {
-            continue;
-        };
-        let (Ok(iv), Ok(ct)) = (
-            crypto::b64_decode(&encrypted.iv),
-            crypto::b64_decode(&encrypted.payload),
-        ) else {
-            continue;
-        };
-        let Ok(plain) = crypto::decrypt(key, &iv, &ct) else {
-            continue;
-        };
-        let (title, _) = unpack(&plain, encrypted.legacy_title.as_deref());
-
-        let size = item.metadata().map(|m| m.len()).unwrap_or(0);
-        entries.push(EntryMeta {
-            date: date.to_string(),
-            title,
-            size,
-        });
+    if let Some(index) = read_index(dir, key) {
+        return Ok(to_meta(dir, &index));
     }
 
-    // Newest first; ISO dates sort lexicographically.
-    entries.sort_by(|a, b| b.date.cmp(&a.date));
-    Ok(entries)
+    // No usable index: fall back to the slow path and persist the result.
+    rebuild_index(dir, key)
 }
 
 #[cfg(test)]
@@ -861,12 +1004,16 @@ mod tests {
         assert_eq!(entry.title, "新標題");
         assert_eq!(entry.content, "新內容");
 
-        // Exactly one file per day.
+        // Exactly one entry file per day (vault.xml and index.xml are metadata).
         let count = fs::read_dir(&dir)
             .unwrap()
             .filter_map(Result::ok)
             .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("xml"))
-            .filter(|e| e.file_name().to_string_lossy() != VAULT_FILE)
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name != VAULT_FILE && name != INDEX_FILE
+            })
             .count();
         assert_eq!(count, 1);
     }
@@ -879,18 +1026,19 @@ mod tests {
         write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
         assert!(dir.join("2026-10-23.xml").exists());
 
-        delete_entry(&dir, "2026-10-23").unwrap();
+        delete_entry(&dir, &key, "2026-10-23").unwrap();
         assert!(!dir.join("2026-10-23.xml").exists());
         assert!(read_entry(&dir, &key, "2026-10-23").unwrap().is_none());
 
         // Deleting again must not fail.
-        delete_entry(&dir, "2026-10-23").unwrap();
+        delete_entry(&dir, &key, "2026-10-23").unwrap();
     }
 
     #[test]
     fn delete_entry_rejects_bad_date() {
         let dir = temp_dir("delete-bad");
-        assert!(delete_entry(&dir, "../../etc/passwd").is_err());
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        assert!(delete_entry(&dir, &key, "../../etc/passwd").is_err());
     }
 
     #[test]
