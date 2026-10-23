@@ -26,6 +26,7 @@ import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
+import { createMobileShell } from "./mobile.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -93,15 +94,17 @@ function relativeDayOf(iso) {
   return weekdayOf(iso);
 }
 
-/** Refresh the visible date pill. */
+/** Refresh the visible date pill, in the editor and in the mobile top bar. */
 function renderDateLabel() {
   if (!currentDate) {
     els.dateMain.textContent = "—";
     els.dateSub.textContent = "";
+    if (mobile) mobile.renderDateLabel("—");
     return;
   }
   els.dateMain.textContent = longDateOf(currentDate);
   els.dateSub.textContent = relativeDayOf(currentDate);
+  if (mobile) mobile.renderDateLabel(longDateOf(currentDate));
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +129,8 @@ let statsDialog;
 let settingsDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
+/** @type {ReturnType<typeof createMobileShell>} */
+let mobile;
 
 // ---------------------------------------------------------------------------
 // Status / word count
@@ -677,6 +682,9 @@ function setView(view) {
     btn.setAttribute("aria-selected", active ? "true" : "false");
   }
 
+  // Keep the mobile bottom navigation in step with the sidebar tabs.
+  if (mobile) mobile.renderNavTabs(view);
+
   // The row count changes, so the old scroll offset is meaningless.
   els.listScroll.scrollTop = 0;
   renderList();
@@ -977,6 +985,15 @@ function createControllers() {
     setAutoLockMinutes,
   });
 
+  // The mobile shell is built before the lock screen because `enterApp` and
+  // `renderDateLabel` reach for it, and it only needs the calendar.
+  mobile = createMobileShell({
+    els,
+    openCalendar: () => calendar.openCalendar(),
+    closeCalendar: () => calendar.closeCalendar(),
+    isCalendarOpen: () => calendar.isCalendarOpen(),
+  });
+
   lockScreen = createLockScreen({
     els,
     invoke,
@@ -1006,6 +1023,9 @@ function createControllers() {
 async function enterApp() {
   els.lockScreen.hidden = true;
   els.app.hidden = false;
+  // The mobile chrome is hidden by CSS on the desktop layout, so revealing it
+  // here is harmless there and necessary here.
+  if (mobile) mobile.setVisible(true);
 
   try {
     const path = await invoke("diary_path");
@@ -1045,6 +1065,8 @@ function clearPendingSave() {
 function wireEvents() {
   initEventWiring({
     els,
+    // Mobile shell (drawer, bottom navigation, FAB)
+    mobile,
     // Lock screen
     handleUnlockSubmit: lockScreen.handleUnlockSubmit,
     browseForDir: lockScreen.browseForDir,

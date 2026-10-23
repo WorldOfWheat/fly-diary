@@ -229,6 +229,43 @@ export function initEventWiring(deps) {
   });
 
   // -------------------------------------------------------------------------
+  // Mobile shell
+  // -------------------------------------------------------------------------
+  //
+  // Every listener below is guarded: the mobile elements are optional, so a
+  // caller that does not pass a mobile controller (or a test harness that does
+  // not build those elements) simply skips this block.
+
+  if (deps.mobile) {
+    const mobile = deps.mobile;
+
+    if (els.drawerToggle) on(els.drawerToggle, "click", mobile.toggleDrawer);
+    if (els.mobileMore) on(els.mobileMore, "click", mobile.toggleDrawer);
+    if (els.drawerScrim) on(els.drawerScrim, "click", mobile.closeDrawer);
+    if (els.mobileDate) on(els.mobileDate, "click", mobile.openDatePicker);
+
+    if (els.mobileFab) {
+      on(els.mobileFab, "click", async () => {
+        const today = await deps.today();
+        await deps.selectDate(today);
+      });
+    }
+
+    if (els.mobileNav) {
+      on(els.mobileNav, "click", (e) => {
+        const btn = e.target.closest("[data-nav-tab]");
+        if (btn) mobile.selectNavTab(btn.dataset.navTab);
+      });
+    }
+
+    // Picking a row from the drawer should reveal the editor immediately.
+    if (els.list) on(els.list, "click", mobile.handleEntryPicked);
+
+    // Rotating or resizing past the breakpoint must not leave the scrim up.
+    on(window, "resize", mobile.handleResize);
+  }
+
+  // -------------------------------------------------------------------------
   // Sidebar
   // -------------------------------------------------------------------------
 
@@ -258,6 +295,13 @@ export function initEventWiring(deps) {
 
   on(document, "keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
+
+    // The drawer is the topmost surface while it is open, so it gets Escape
+    // first. `handleEscape` returns false when it did nothing.
+    if (e.key === "Escape" && deps.mobile && deps.mobile.handleEscape()) {
+      e.preventDefault();
+      return;
+    }
 
     if (e.key === "Escape" && deps.isStatsOpen()) {
       e.preventDefault();

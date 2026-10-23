@@ -79,6 +79,31 @@
   --favourite-bg-hover: #ffe97a;
   --favourite-edge: #f0c419;
 
+  /* ---------- Typography ---------- */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+    "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* ---------- Metrics (all rem, so they follow the root size) ---------- */
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* Sidebar width: grows with the window but never eats the editor. */
+  --sidebar-w: clamp(15rem, 22vw, 21rem);
+
+  /* Virtual-scroll row pitch. Read by main.js via getComputedStyle: rows are
+     absolutely positioned at `index * --row-h`, so this is the distance from
+     one row's top to the next, not the painted height. */
+  --row-h: 3.25rem;
+
+  /* Breathing room between rows. The painted box is `--row-h - --row-gap`, so
+     the gap lives inside the pitch and the scroll math stays exact. */
+  --row-gap: 0.25rem;
+
+  /* Editor measure: long lines are hard to read, so cap the text column and
+     centre it once the window gets wide. */
+  --measure: 46rem;
+
   /* Lets the webview draw native widgets (scrollbars, form controls, the
      `<details>` marker) in the matching scheme. */
   color-scheme: light;
@@ -135,31 +160,6 @@
   --favourite-edge: #d9a520;
 
   color-scheme: dark;
-
-  /* ---------- Typography ---------- */
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
-    "PingFang TC", "Microsoft JhengHei", sans-serif;
-  --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
-
-  /* ---------- Metrics (all rem, so they follow the root size) ---------- */
-  --radius: 0.5rem;
-  --radius-lg: 0.75rem;
-
-  /* Sidebar width: grows with the window but never eats the editor. */
-  --sidebar-w: clamp(15rem, 22vw, 21rem);
-
-  /* Virtual-scroll row pitch. Read by main.js via getComputedStyle: rows are
-     absolutely positioned at `index * --row-h`, so this is the distance from
-     one row's top to the next, not the painted height. */
-  --row-h: 3.25rem;
-
-  /* Breathing room between rows. The painted box is `--row-h - --row-gap`, so
-     the gap lives inside the pitch and the scroll math stays exact. */
-  --row-gap: 0.25rem;
-
-  /* Editor measure: long lines are hard to read, so cap the text column and
-     centre it once the window gets wide. */
-  --measure: 46rem;
 }
 
 /* Fluid root size. 0.9375rem (15px) at 900px wide, growing to 1.0625rem
@@ -1840,40 +1840,591 @@ summary:focus-visible {
   }
 }
 
-/* Very narrow window: stack the sidebar above the editor. The sidebar becomes
-   a fixed-height strip so the editor still gets the rest of the window. */
-@media (max-width: 640px) {
+/* ===========================================================================
+   Mobile shell (Material Design)
+
+   Below 720px the two-column desktop layout is replaced by a single column
+   with a top app bar, a floating action button and a bottom navigation bar.
+   The sidebar becomes a modal navigation drawer and the three dialogs become
+   bottom sheets.
+
+   The breakpoint is duplicated in `mobile.js` as `MOBILE_BREAKPOINT`; the two
+   have to stay in sync or the drawer will open on a layout that has no
+   hamburger button to close it.
+
+   Sizing follows Material's 4dp grid: 48dp minimum touch targets, 8dp/16dp
+   spacing steps, and elevation instead of borders for the raised surfaces.
+   =========================================================================== */
+
+/* The mobile chrome is desktop-hidden by default. `display: none` (rather than
+   `hidden`) keeps the `hidden` attribute free for the JS to toggle. */
+.mobile-bar,
+.mobile-nav,
+.mobile-fab,
+.drawer-scrim {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  :root {
+    /* One column: the drawer floats above the editor instead of taking a
+       column of its own. */
+    --sidebar-w: 0;
+    --measure: 100%;
+    /* Taller rows: a 3.25rem row is below the 48dp touch target once the
+       root font size shrinks on a phone. main.js re-measures this. */
+    --row-h: 3.75rem;
+    --row-gap: 0.125rem;
+
+    /* Material surface tokens, derived from the existing palette so both
+       themes keep working. */
+    --m-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.12),
+      0 1px 3px rgba(0, 0, 0, 0.08);
+    --m-elevation-2: 0 2px 6px rgba(0, 0, 0, 0.14),
+      0 1px 2px rgba(0, 0, 0, 0.08);
+    --m-elevation-3: 0 6px 16px rgba(0, 0, 0, 0.18),
+      0 2px 4px rgba(0, 0, 0, 0.1);
+    --m-bar-h: 3.5rem;
+    --m-nav-h: 4rem;
+    --m-safe-top: env(safe-area-inset-top, 0px);
+    --m-safe-bottom: env(safe-area-inset-bottom, 0px);
+    --m-safe-left: env(safe-area-inset-left, 0px);
+    --m-safe-right: env(safe-area-inset-right, 0px);
+  }
+
+  :root[data-theme="dark"] {
+    --m-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0, 0, 0, 0.4);
+    --m-elevation-2: 0 2px 6px rgba(0, 0, 0, 0.65),
+      0 1px 2px rgba(0, 0, 0, 0.45);
+    --m-elevation-3: 0 6px 16px rgba(0, 0, 0, 0.7), 0 2px 4px rgba(0, 0, 0, 0.5);
+  }
+
+  /* ---------- Shell ---------- */
+
+  /* Three rows: app bar, editor, bottom navigation. The editor is the only
+     flexible row, so the textarea gets every pixel the chrome does not need. */
   .app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 40vh) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    height: 100dvh;
   }
 
-  .sidebar {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
+  /* ---------- Top app bar ---------- */
 
-  .sidebar-header {
-    padding: 0.625rem 0.75rem 0.375rem;
-  }
-
-  /* The sidebar is only 40vh tall here, so the extra path row would eat into
-     the entry list. Keep the path on one line but shrink it. */
-  .sidebar-footer {
+  .mobile-bar {
+    display: flex;
+    align-items: center;
     gap: 0.25rem;
-    padding: 0.375rem 0.75rem;
+    height: calc(var(--m-bar-h) + var(--m-safe-top));
+    padding: var(--m-safe-top) calc(0.25rem + var(--m-safe-right)) 0
+      calc(0.25rem + var(--m-safe-left));
+    background: var(--sidebar-bg);
+    border-bottom: 1px solid var(--border);
+    /* The bar sits above the editor but below the drawer and the sheets. */
+    z-index: 5;
+  }
+
+  .mobile-bar[hidden] {
+    display: none;
+  }
+
+  /* 48dp square icon buttons, per Material's minimum touch target. */
+  .mobile-bar-btn {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    width: 3rem;
+    height: 3rem;
+    padding: 0;
+    color: var(--text);
+    border-radius: 50%;
+    transition: background 0.15s ease;
+  }
+
+  .mobile-bar-btn:active {
+    background: var(--pressed);
+  }
+
+  .mobile-bar-btn svg {
+    width: 1.375rem;
+    height: 1.375rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* The three-dot icon is drawn with filled circles, not strokes. */
+  .mobile-bar-btn svg .dot {
+    fill: currentColor;
+    stroke: none;
+  }
+
+  /* The date is the bar's title: centred, tappable, and it opens the calendar. */
+  .mobile-bar-date {
+    flex: 1;
+    min-width: 0;
+    height: 3rem;
+    padding: 0 0.5rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    border-radius: var(--radius);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .mobile-bar-date:active {
+    background: var(--pressed);
+  }
+
+  /* ---------- Navigation drawer ---------- */
+
+  /* The sidebar leaves the grid and becomes an overlay panel. It is always
+     rendered (so the entry list keeps its scroll position) but translated off
+     screen until the drawer is open. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: min(20rem, 84vw);
+    padding-top: var(--m-safe-top);
+    padding-bottom: var(--m-safe-bottom);
+    padding-left: var(--m-safe-left);
+    background: var(--panel);
+    border-right: none;
+    border-top-right-radius: 1rem;
+    border-bottom-right-radius: 1rem;
+    box-shadow: var(--m-elevation-3);
+    transform: translateX(-102%);
+    transition: transform 0.24s cubic-bezier(0.2, 0, 0, 1);
+    /* Off screen and inert until opened. */
+    visibility: hidden;
+  }
+
+  .app.drawer-open .sidebar {
+    transform: translateX(0);
+    visibility: visible;
+  }
+
+  /* The scrim dims the editor behind the drawer and swallows taps. */
+  .drawer-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 15;
+    display: block;
+    background: var(--overlay);
+    animation: overlay-in 0.16s ease-out;
+  }
+
+  .drawer-scrim[hidden] {
+    display: none;
+  }
+
+  /* The drawer has its own header, so the desktop title row is redundant. */
+  .sidebar-header {
+    padding: 0.75rem 1rem 0.5rem;
+  }
+
+  .sidebar-header h1 {
+    font-size: 1.125rem;
+  }
+
+  /* Material's filled button: 40dp tall, fully rounded. */
+  .sidebar-header .btn-primary {
+    min-height: 2.5rem;
+    padding: 0 1rem;
+    font-size: 0.8125rem;
+    border-radius: 999px;
+    box-shadow: var(--m-elevation-1);
+  }
+
+  /* Segmented control, 48dp tall so it is comfortable to tap. */
+  .view-switch {
+    margin: 0 1rem 0.5rem;
+    padding: 0.25rem;
+    border-radius: 999px;
+  }
+
+  .view-tab {
+    min-height: 2.5rem;
+    font-size: 0.8125rem;
+    border-radius: 999px;
+  }
+
+  .search-wrap {
+    padding: 0 1rem 0.5rem;
+  }
+
+  /* Material search field: filled, rounded, 48dp. */
+  #search {
+    height: 3rem;
+    padding: 0 1rem;
+    font-size: 0.9375rem;
+    background: var(--bg);
+    border: 1px solid transparent;
+    border-radius: 999px;
+  }
+
+  #search:focus {
+    background: var(--panel);
+    border-color: var(--accent);
+  }
+
+  .entry-list {
+    padding: 0.25rem 0.5rem 0.75rem;
+  }
+
+  .entry-item {
+    left: 0.5rem;
+    right: 0.5rem;
+    padding: 0.625rem 0.875rem;
+    border-radius: 0.75rem;
+  }
+
+  .entry-item:active {
+    background: var(--pressed);
+  }
+
+  .entry-item .entry-date {
+    font-size: 0.875rem;
+  }
+
+  .entry-item .entry-preview {
+    font-size: 0.8125rem;
+  }
+
+  /* The drawer footer keeps the path but drops the button row: those actions
+     now live in the bottom navigation. */
+  .sidebar-footer {
+    padding: 0.5rem 1rem calc(0.75rem + var(--m-safe-bottom));
+  }
+
+  .footer-actions {
+    display: none;
   }
 
   .path {
-    font-size: 0.5625rem;
+    font-size: 0.6875rem;
   }
 
+  /* ---------- Editor ---------- */
+
+  .editor {
+    grid-row: 2;
+    min-height: 0;
+  }
+
+  /* The editor header keeps the date navigator but loses the status cluster:
+     favourite and delete move into the top bar's overflow on a phone. */
+  .editor-header {
+    padding: 0.25rem 0.5rem;
+    border-bottom: none;
+  }
+
+  .date-nav {
+    flex: 1;
+    justify-content: center;
+  }
+
+  /* 48dp round step buttons. */
+  .date-step {
+    width: 3rem;
+    height: 3rem;
+  }
+
+  .date-step svg {
+    width: 1.25rem;
+    height: 1.25rem;
+  }
+
+  .date-label {
+    padding: 0.5rem 0.875rem;
+  }
+
+  .date-main {
+    font-size: 1rem;
+  }
+
+  /* The relative-day hint is already in the top bar, so the pill only needs
+     the absolute date. */
+  .date-sub {
+    display: none;
+  }
+
+  /* The status cluster moves to its own row under the header, where it reads
+     as a Material "supporting text" line rather than competing with the date. */
+  .status {
+    order: 3;
+    width: 100%;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding: 0 0.5rem 0.25rem;
+  }
+
+  .editor-header {
+    flex-wrap: wrap;
+  }
+
+  .btn-favourite,
+  .btn-danger {
+    min-height: 2.5rem;
+    padding: 0 0.75rem;
+    font-size: 0.8125rem;
+    border-radius: 999px;
+  }
+
+  .btn-favourite:active,
+  .btn-danger:active {
+    background: var(--pressed);
+  }
+
+  .title-wrap {
+    padding: 0.5rem 1rem 0;
+  }
+
+  .title-input {
+    font-size: 1.375rem;
+    padding-bottom: 0.625rem;
+  }
+
+  #content {
+    padding: 0.75rem 1rem 1rem;
+    /* 16px minimum stops iOS from zooming the viewport on focus. */
+    font-size: max(1rem, 0.9375rem);
+    line-height: 1.7;
+  }
+
+  /* The footer keeps the word count and the font control; the static hint is
+     the first thing to go when space is tight. */
+  .editor-footer {
+    padding: 0.375rem 1rem;
+    font-size: 0.75rem;
+  }
+
+  .hint {
+    display: none;
+  }
+
+  .font-step,
+  .font-value {
+    height: 2rem;
+    padding: 0 0.625rem;
+    font-size: 0.75rem;
+  }
+
+  /* ---------- Floating action button ---------- */
+
+  .mobile-fab {
+    position: fixed;
+    right: calc(1rem + var(--m-safe-right));
+    bottom: calc(var(--m-nav-h) + var(--m-safe-bottom) + 1rem);
+    z-index: 8;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 3.5rem;
+    height: 3.5rem;
+    padding: 0;
+    color: var(--on-accent);
+    background: var(--accent);
+    border-radius: 1rem;
+    box-shadow: var(--m-elevation-3);
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+
+  .mobile-fab[hidden] {
+    display: none;
+  }
+
+  .mobile-fab:active {
+    background: var(--accent-hover);
+    transform: scale(0.94);
+  }
+
+  .mobile-fab svg {
+    width: 1.5rem;
+    height: 1.5rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2.2;
+    stroke-linecap: round;
+  }
+
+  /* ---------- Bottom navigation ---------- */
+
+  .mobile-nav {
+    grid-row: 3;
+    display: flex;
+    align-items: stretch;
+    height: calc(var(--m-nav-h) + var(--m-safe-bottom));
+    padding-bottom: var(--m-safe-bottom);
+    padding-left: var(--m-safe-left);
+    padding-right: var(--m-safe-right);
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    z-index: 6;
+  }
+
+  .mobile-nav[hidden] {
+    display: none;
+  }
+
+  .mobile-nav-item {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.1875rem;
+    min-width: 0;
+    padding: 0.375rem 0.25rem;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    border-radius: 0;
+    transition: color 0.15s ease;
+  }
+
+  .mobile-nav-item svg {
+    width: 1.5rem;
+    height: 1.5rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .mobile-nav-item span {
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  /* Material's active indicator: a tinted pill behind the icon. */
+  .mobile-nav-item.is-active {
+    color: var(--accent);
+  }
+
+  .mobile-nav-item.is-active svg {
+    padding: 0.1875rem;
+    width: 2rem;
+    height: 2rem;
+    background: var(--accent-wash);
+    border-radius: 999px;
+  }
+
+  .mobile-nav-item:active {
+    background: var(--hover);
+  }
+
+  /* ---------- Dialogs as bottom sheets ---------- */
+
+  /* A sheet is anchored to the bottom edge, full width, with only the top
+     corners rounded. It slides up instead of fading in. */
   .modal-overlay {
-    padding: 0.5rem;
+    align-items: flex-end;
+    padding: 0;
   }
 
   .modal {
     width: 100%;
+    max-width: 100%;
+    /* Never taller than the viewport minus a peek of the page behind it. */
+    max-height: 92dvh;
+    border: none;
+    border-radius: 1.5rem 1.5rem 0 0;
+    box-shadow: var(--m-elevation-3);
+    animation: sheet-in 0.24s cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  /* The drag handle. Purely decorative: the sheet is dismissed by the close
+     button, the backdrop, or Escape. */
+  .modal::before {
+    content: "";
+    flex: none;
+    width: 2rem;
+    height: 0.25rem;
+    margin: 0.5rem auto 0;
+    background: var(--border);
+    border-radius: 999px;
+  }
+
+  .modal-head {
+    padding: 0.5rem 1rem 0.75rem;
+    border-bottom: none;
+  }
+
+  .modal-title {
+    font-size: 1.125rem;
+  }
+
+  .modal-close {
+    width: 3rem;
+    height: 3rem;
+    font-size: 1.5rem;
+  }
+
+  .modal-body {
+    gap: 0.75rem;
+    padding: 0 1rem 1rem;
+  }
+
+  /* The action row is pinned to the bottom of the sheet and padded for the
+     gesture bar. */
+  .modal-foot {
+    gap: 0.5rem;
+    padding: 0.75rem 1rem calc(0.75rem + var(--m-safe-bottom));
+    border-top: 1px solid var(--border);
+  }
+
+  /* Material text buttons: 48dp tall, fully rounded, right aligned. */
+  .modal-foot .btn-browse,
+  .modal-foot .btn-primary {
+    min-height: 3rem;
+    padding: 0 1.25rem;
+    font-size: 0.875rem;
+    border-radius: 999px;
+  }
+
+  .modal-foot .btn-primary {
+    box-shadow: var(--m-elevation-1);
+  }
+
+  /* The error message takes the free space so the buttons stay right aligned. */
+  .modal-foot .import-error {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* ---------- Sheet contents ---------- */
+
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.375rem;
+  }
+
+  .settings-input,
+  .settings-select {
+    min-height: 3rem;
+    font-size: 1rem;
+  }
+
+  .settings-kdf-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .stats-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .import-row {
@@ -1882,6 +2433,99 @@ summary:focus-visible {
 
   .import-row .row-date {
     grid-column: 1 / -1;
+  }
+
+  /* ---------- Lock screen ---------- */
+
+  /* The lock card becomes a full-height column so the on-screen keyboard does
+     not push the submit button out of reach. */
+  .lock-screen {
+    align-items: flex-start;
+    padding: calc(1rem + var(--m-safe-top)) 1rem
+      calc(1rem + var(--m-safe-bottom));
+  }
+
+  .lock-card {
+    width: 100%;
+    padding: 1.5rem 1.25rem;
+    border-radius: 1.25rem;
+    box-shadow: var(--m-elevation-2);
+  }
+
+  .lock-input {
+    min-height: 3rem;
+    font-size: 1rem;
+  }
+
+  .lock-submit {
+    min-height: 3rem;
+    font-size: 0.9375rem;
+    border-radius: 999px;
+    box-shadow: var(--m-elevation-1);
+  }
+
+  .btn-browse {
+    min-height: 3rem;
+    padding: 0 1rem;
+    font-size: 0.875rem;
+    border-radius: 999px;
+  }
+
+  /* The path row stacks so the input keeps a usable width on a narrow phone. */
+  .lock-path-row {
+    flex-direction: column;
+  }
+
+  .lock-path-row .lock-input {
+    font-size: 0.875rem;
+  }
+
+  .lock-advanced-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .icon-toggle {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .icon-toggle svg {
+    width: 1.125rem;
+    height: 1.125rem;
+  }
+
+  .lang-toggle {
+    min-height: 2.75rem;
+    padding: 0 0.875rem;
+    font-size: 0.8125rem;
+  }
+}
+
+/* The sheet slide-up. Kept outside the media query so the keyframes are
+   defined once; it is only referenced from inside the block above. */
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+/* Landscape phones: the app bar and the bottom navigation together would eat
+   most of the height, so the navigation collapses to icons only. */
+@media (max-width: 720px) and (max-height: 480px) {
+  :root {
+    --m-bar-h: 3rem;
+    --m-nav-h: 3.25rem;
+  }
+
+  .mobile-nav-item span {
+    display: none;
+  }
+
+  .mobile-fab {
+    bottom: calc(var(--m-nav-h) + var(--m-safe-bottom) + 0.75rem);
   }
 }
 

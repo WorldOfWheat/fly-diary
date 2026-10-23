@@ -1,0 +1,24 @@
+# Android cross-compilation linkers.
+#
+# Without these, cargo falls back to the host `cc`, which cannot find
+# `-landroid`, `-llog` or `-lunwind` and fails at link time.
+#
+# The NDK path is resolved at build time by `tauri android`, which sets
+# `NDK_HOME`. If you build with plain `cargo`, export it first:
+#
+#   export NDK_HOME="$HOME/Android/Sdk/ndk/30.0.16248370"
+#
+# The `21` suffix is the minimum API level the linker targets; it must be
+# <= the `minSdkVersion` declared in `tauri.android.conf.json`.
+
+[target.aarch64-linux-android]
+linker = "aarch64-linux-android21-clang"
+
+[target.armv7-linux-androideabi]
+linker = "armv7a-linux-androideabi21-clang"
+
+[target.i686-linux-android]
+linker = "i686-linux-android21-clang"
+
+[target.x86_64-linux-android]
+linker = "x86_64-linux-android21-clang"

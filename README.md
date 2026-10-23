@@ -21,6 +21,7 @@
 - **Argon2id 自動校準**：實測本機速度，自動挑出約 1 秒可解鎖的參數
 - **繁體中文／英文介面**：右上角一鍵切換，日期格式也跟著語言改變
 - **淺色／深色主題**：解鎖畫面右上角的主題鈕三態循環（跟隨系統 → 淺色 → 深色），選擇存在 `localStorage`
+- **行動版 Material Design 介面**：`720px` 以下自動切換成頂部 app bar + 導覽抽屜 + FAB + 底部導覽，對話框改為 bottom sheet
 - 刪除單日記（有確認提示）
 - 使用**本地時區**判定「今天」，不會因 UTC 造成跨日錯亂
 
@@ -46,7 +47,38 @@
 
 因為所有尺寸（內距、圖示、日曆、對話框）都是 `rem`，調整根字級會一次縮放整個介面，而不是只有文字變大。虛擬滾動的列高以 `--row-h` 宣告並由 JS 用 `getComputedStyle` 讀回，所以列高會跟著字級變動，捲動位置不會錯位。
 
-視窗變窄時另有兩個斷點：`900px` 以下縮小側邊欄、隱藏日期的星期副標；`640px` 以下改為上下堆疊（側邊欄在上、編輯區在下）。
+視窗變窄時另有兩個斷點：`900px` 以下縮小側邊欄、隱藏日期的星期副標；`720px` 以下切換成行動版外殼（見下節）。
+
+## 行動版介面（Material Design）
+
+`720px` 以下（手機、直向平板）不再把側邊欄疊在編輯區上方，而是換成一套 Material Design 外殼。
+桌面版完全不受影響：新元素在桌面是 `display: none`，所有新事件監聽都包在 `if (deps.mobile)` 裡。
+
+**版面**：`.app` 改成三列 grid —— 頂部 app bar（`auto`）、編輯區（`minmax(0, 1fr)`）、底部導覽（`auto`），
+高度用 `100dvh` 讓行動瀏覽器的網址列收合時不會留白。
+
+**元件**：
+
+| 元件         | 行為                                                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 頂部 app bar | 左側漢堡鈕開抽屜，中間日期膠囊點擊開日曆，右側「更多」也開抽屜                                                                        |
+| 導覽抽屜     | 側邊欄改成 `position: fixed` 的 off-canvas 抽屜，`transform: translateX(-102%)` 滑入，寬度 `min(20rem, 84vw)`，右側圓角 + elevation 3 |
+| 遮罩 scrim   | 抽屜開啟時鋪滿畫面，點擊即關閉；抽屜狀態由 JS 的 `drawerOpen` 持有，再以 `.app.drawer-open` 交給 CSS 做動畫                           |
+| FAB          | 右下角浮動按鈕，等同「今天」，位置在底部導覽之上                                                                                      |
+| 底部導覽     | 4 個目的地（日記／收藏／統計／設定），48dp 觸控區，選中時圖示後方有強調色藥丸底                                                       |
+| 底部 sheet   | 匯入、設定、統計三個對話框改成由下往上滑入的 bottom sheet（`max-height: 92dvh`、上方圓角、拖曳把手）                                  |
+
+**觸控與安全區**：
+
+- 所有可點元素至少 48dp：清單列高在行動版提高到 `--row-h: 3.75rem`（`main.js` 的 `watchRowHeight()` 會在轉向時重新量測，虛擬滾動不會錯位）。
+- `viewport-fit=cover` + `env(safe-area-inset-*)`：app bar、底部導覽、抽屜與 sheet 都避開瀏海與手勢列。
+- `interactive-widget=resizes-content`：軟鍵盤彈出時縮小內容區，而不是蓋住輸入框。
+- 輸入框字級用 `max(1rem, …)`，避免 iOS 聚焦時自動放大整個頁面。
+- 直向轉橫向（`max-height: 480px`）時底部導覽只留圖示，把高度讓給編輯區。
+
+**狀態同步**：`src/mobile.js` 的 `createMobileShell(deps)` 是唯一持有抽屜狀態的地方，
+`handleResize()` 會在轉回桌面寬度時自動關閉抽屜，`handleEscape()` 讓 Escape 優先關抽屜（比日曆、對話框更上層）。
+斷點常數 `MOBILE_BREAKPOINT = 720` 必須與 `styles.css` 的 `@media (max-width: 720px)` 一致。
 
 ## 多語系
 
@@ -119,17 +151,17 @@
 - **diary key**：隨機 32 bytes，真正用來加密日記。它被 master key 包裝後存進 `vault.xml`。
 - 這層間接讓「改密碼」或「升級 KDF 參數」只需要重新包裝 32 bytes，不必重新加密所有日記。
 
-| 項目         | 實作                                                                |
-| ------------ | ------------------------------------------------------------------- |
-| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                          |
+| 項目         | 實作                                                                   |
+| ------------ | ---------------------------------------------------------------------- |
+| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
 | 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
-| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                   |
-| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                           |
-| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                      |
-| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                       |
-| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                |
-| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證） |
-| 金鑰生命週期 | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零     |
+| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                      |
+| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                              |
+| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
+| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
+| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
+| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
+| 金鑰生命週期 | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零        |
 
 > ⚠️ **忘記密碼無法救回**：master key 由密碼派生且不落地，沒有後門或回復機制。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
@@ -347,6 +379,7 @@ fly-diary/
 │   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
 │   ├── settings-dialog.js  # 設定對話框：自動鎖定、KDF、改密碼（createSettingsDialog）
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準（createLockScreen）
+│   ├── mobile.js           # 行動版外殼：抽屜、底部導覽、FAB、Escape（createMobileShell）
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
@@ -363,7 +396,8 @@ fly-diary/
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 自動鎖定選項、KDF 單位換算、儲存驗證
-│   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
+│   ├── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
+│   └── mobile.test.js          # 斷點偵測、抽屜開關、底部導覽、可見性
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
 │   ├── build.rs
@@ -387,33 +421,33 @@ fly-diary/
 
 ## Tauri Commands
 
-| Command                                   | 說明                                           |
-| ----------------------------------------- | ---------------------------------------------- |
+| Command                                   | 說明                                                                 |
+| ----------------------------------------- | -------------------------------------------------------------------- |
 | `get_settings()`                          | 讀取設定檔（是否已設定、日記路徑、預設路徑、自動鎖定分鐘數與可選值） |
-| `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（保留既有的自動鎖定設定） |
-| `set_auto_lock(minutes)`                  | 寫入閒置自動鎖定分鐘數（`0` 表示永不）         |
-| `pick_diary_dir()`                        | 開啟原生資料夾選擇器，回傳選擇的路徑           |
-| `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）               |
-| `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍               |
-| `get_vault_kdf()`                         | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`） |
-| `calibrate_kdf()`                         | 實測本機速度，回傳約 1 秒可解鎖的參數          |
-| `change_passphrase(current, new, kdf?)`   | 驗證目前密碼後重新包裝 diary key（新密碼留空＝只改參數） |
-| `create_vault(passphrase, kdf?)`          | 建立 vault 並立即解鎖，可指定 KDF 參數         |
-| `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體                     |
-| `lock()`                                  | 清除記憶體中的金鑰                             |
-| `is_unlocked()`                           | 目前是否已解鎖                                 |
-| `get_entry(date)`                         | 讀取並解密某天的日記，不存在回 `null`          |
-| `save_entry(date, title, content)`        | 加密後寫入/覆寫某天的日記                      |
-| `delete_entry(date)`                      | 刪除某天的日記                                 |
-| `list_entries()`                          | 列出所有日記（新到舊，需解鎖才能取得標題）     |
-| `list_favourites()`                       | 只列出收藏的日記（新到舊）                     |
-| `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態             |
-| `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引    |
-| `pick_import_dir()`                       | 開啟原生資料夾選擇器，回傳匯入來源路徑         |
-| `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入 |
-| `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告     |
-| `today()`                                 | 回傳本地時區的今天日期                         |
-| `diary_path()`                            | 回傳日記資料夾絕對路徑                         |
+| `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（保留既有的自動鎖定設定）                       |
+| `set_auto_lock(minutes)`                  | 寫入閒置自動鎖定分鐘數（`0` 表示永不）                               |
+| `pick_diary_dir()`                        | 開啟原生資料夾選擇器，回傳選擇的路徑                                 |
+| `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）                                     |
+| `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍                                     |
+| `get_vault_kdf()`                         | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`）                   |
+| `calibrate_kdf()`                         | 實測本機速度，回傳約 1 秒可解鎖的參數                                |
+| `change_passphrase(current, new, kdf?)`   | 驗證目前密碼後重新包裝 diary key（新密碼留空＝只改參數）             |
+| `create_vault(passphrase, kdf?)`          | 建立 vault 並立即解鎖，可指定 KDF 參數                               |
+| `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體                                           |
+| `lock()`                                  | 清除記憶體中的金鑰                                                   |
+| `is_unlocked()`                           | 目前是否已解鎖                                                       |
+| `get_entry(date)`                         | 讀取並解密某天的日記，不存在回 `null`                                |
+| `save_entry(date, title, content)`        | 加密後寫入/覆寫某天的日記                                            |
+| `delete_entry(date)`                      | 刪除某天的日記                                                       |
+| `list_entries()`                          | 列出所有日記（新到舊，需解鎖才能取得標題）                           |
+| `list_favourites()`                       | 只列出收藏的日記（新到舊）                                           |
+| `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態                                   |
+| `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引                          |
+| `pick_import_dir()`                       | 開啟原生資料夾選擇器，回傳匯入來源路徑                               |
+| `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入                       |
+| `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告                           |
+| `today()`                                 | 回傳本地時區的今天日期                                               |
+| `diary_path()`                            | 回傳日記資料夾絕對路徑                                               |
 
 ## 設計重點
 

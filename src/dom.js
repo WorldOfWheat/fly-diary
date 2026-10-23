@@ -35,6 +35,17 @@ export const els = {
   kdfReset: $("kdf-reset"),
   // App
   app: $("app"),
+  sidebar: $("sidebar"),
+  // Mobile shell. These elements only exist in the mobile layout; on the
+  // desktop they are present but hidden, so the lookups are always safe.
+  mobileBar: $("mobile-bar"),
+  mobileDate: $("mobile-date"),
+  mobileDateLabel: $("mobile-date-label"),
+  mobileMore: $("mobile-more"),
+  mobileFab: $("mobile-fab"),
+  mobileNav: $("mobile-nav"),
+  drawerToggle: $("drawer-toggle"),
+  drawerScrim: $("drawer-scrim"),
   list: $("entry-list"),
   listScroll: $("entry-scroll"),
   listSpacer: $("entry-spacer"),

@@ -33,6 +33,7 @@ fn default_diary_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(base.join("diary"))
 }
 
+
 /// Resolve the diary directory from the settings file.
 ///
 /// Returns an error when the app has not been configured yet, so callers can
@@ -156,24 +157,34 @@ fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
 
 /// Open a native folder picker and return the chosen path.
 ///
-/// Returns `None` when the user cancels.
+/// Returns `None` when the user cancels. On mobile there is no folder picker,
+/// so the app's own data directory is returned instead.
 #[tauri::command]
 async fn pick_diary_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let dir = default_diary_dir(&app)?;
+        return Ok(Some(dir.to_string_lossy().to_string()));
+    }
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title("選擇日記儲存資料夾")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        use tauri_plugin_dialog::DialogExt;
 
-    let picked = rx
-        .recv()
-        .map_err(|e| format!("Folder picker failed: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.dialog()
+            .file()
+            .set_title("選擇日記儲存資料夾")
+            .pick_folder(move |folder| {
+                let _ = tx.send(folder);
+            });
 
-    Ok(picked.map(|p| p.to_string()))
+        let picked = rx
+            .recv()
+            .map_err(|e| format!("Folder picker failed: {e}"))?;
+
+        Ok(picked.map(|p| p.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -475,9 +486,75 @@ fn rebuild_index(
 
 /// Open a native folder picker for the import source and return its path.
 ///
-/// Returns `None` when the user cancels.
+/// Returns `None` when the user cancels. On mobile, where folders cannot be
+/// picked, the user selects individual files and they are copied into a
+/// staging directory so `scan_import` can keep walking a single folder.
 #[tauri::command]
 async fn pick_import_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        pick_import_files(app).await
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        pick_import_folder(app).await
+    }
+}
+
+/// Mobile import picker: choose files, then stage them in the cache dir.
+///
+/// `scan_import` walks a directory, so the picked files are copied into one
+/// before being handed back to the frontend.
+#[cfg(any(target_os = "android", target_os = "ios"))]
+async fn pick_import_files(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("選擇要匯入的日記檔")
+        .add_filter("Text", &["txt", "md"])
+        .pick_files(move |files| {
+            let _ = tx.send(files);
+        });
+
+    let files = rx
+        .recv()
+        .map_err(|e| format!("File picker failed: {e}"))?;
+
+    let files = match files {
+        Some(files) if !files.is_empty() => files,
+        _ => return Ok(None),
+    };
+
+    let staging = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to resolve cache dir: {e}"))?
+        .join("import-staging");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging)
+        .map_err(|e| format!("Failed to create staging dir: {e}"))?;
+
+    for file in files {
+        let src = file
+            .into_path()
+            .map_err(|e| format!("Picked file is not a local path: {e}"))?;
+        let name = src
+            .file_name()
+            .ok_or_else(|| "Picked file has no name".to_string())?
+            .to_owned();
+        std::fs::copy(&src, staging.join(&name))
+            .map_err(|e| format!("Failed to copy {:?}: {e}", name))?;
+    }
+
+    Ok(Some(staging.to_string_lossy().to_string()))
+}
+
+/// Desktop import picker: choose a folder directly.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+async fn pick_import_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let (tx, rx) = std::sync::mpsc::channel();
