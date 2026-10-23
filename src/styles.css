@@ -1551,6 +1551,121 @@ summary:focus-visible {
   color: var(--danger);
 }
 
+/* ---------- Settings dialog ---------- */
+
+/* Each block of related controls. A hairline between sections keeps the
+   dialog readable without needing a second level of cards. */
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-section:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.settings-heading {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-hint {
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Label on the left, control on the right. The label column is fixed so the
+   inputs line up down the dialog. */
+.settings-row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.settings-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.settings-input,
+.settings-select {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-input:focus,
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-input[type="number"] {
+  font-family: var(--mono);
+}
+
+/* Read-only summary of the parameters currently stored in the vault. */
+.settings-kdf {
+  padding: 0.5rem 0.625rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-kdf:empty {
+  display: none;
+}
+
+.settings-advanced {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-summary {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.settings-summary:hover {
+  color: var(--accent);
+}
+
+.settings-kdf-grid {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+  margin: 0.5rem 0;
+}
+
+.settings-advanced .btn-browse {
+  font-size: 0.6875rem;
+}
+
+/* Calibration result line; empty until the user runs it. */
+#settings-calibrate-note:empty {
+  display: none;
+}
+
 /* ---------- Scrollbar ---------- */
 
 ::-webkit-scrollbar {

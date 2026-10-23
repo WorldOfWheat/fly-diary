@@ -309,6 +309,73 @@ pub fn vault_exists(dir: &Path) -> Result<bool, String> {
     Ok(vault_path(dir).exists())
 }
 
+/// The Argon2id parameters recorded in the vault, for display in settings.
+///
+/// Returns `None` for a legacy vault, which has no Argon2id parameters yet.
+pub fn vault_kdf_params(dir: &Path) -> Result<Option<crypto::KdfParams>, String> {
+    let vault = read_vault(dir)?.ok_or_else(|| "No vault found".to_string())?;
+    Ok(match vault.kdf {
+        Kdf::Argon2id => Some(vault.params),
+        Kdf::LegacySha256 => None,
+    })
+}
+
+/// Change the passphrase and/or the Argon2id cost parameters.
+///
+/// This **re-wraps** the existing diary key rather than re-encrypting entries:
+/// the diary key is unwrapped with the old passphrase, then wrapped again with
+/// a master key derived from the new passphrase and parameters. Entries and the
+/// index are untouched, so the operation is fast and cannot corrupt the diary.
+///
+/// A fresh salt is generated every time, so changing only the parameters still
+/// produces a different master key.
+///
+/// Returns the diary key, which is unchanged and still valid for the session.
+pub fn rewrap_vault(
+    dir: &Path,
+    old_passphrase: &str,
+    new_passphrase: &str,
+    new_params: crypto::KdfParams,
+) -> Result<[u8; 32], String> {
+    if new_passphrase.is_empty() {
+        return Err("Passphrase must not be empty".to_string());
+    }
+    new_params.validate()?;
+
+    let vault = read_vault(dir)?.ok_or_else(|| "No vault found".to_string())?;
+    if vault.kdf != Kdf::Argon2id {
+        return Err("Unlock the diary once to upgrade it before changing the passphrase".to_string());
+    }
+
+    // Verify the old passphrase by unwrapping the diary key with it.
+    let old_salt = crypto::b64_decode(&vault.salt_b64)?;
+    let old_iv = crypto::b64_decode(&vault.wrapped_key_iv_b64)?;
+    let old_ct = crypto::b64_decode(&vault.wrapped_key_b64)?;
+    let old_master = crypto::derive_master_key(old_passphrase, &old_salt, vault.params)?;
+    let plain = crypto::decrypt(&old_master, &old_iv, &old_ct)
+        .map_err(|_| "Incorrect passphrase".to_string())?;
+    let diary_key: [u8; 32] = plain
+        .try_into()
+        .map_err(|_| "Wrapped diary key has the wrong length".to_string())?;
+
+    // Wrap the same diary key under the new master key.
+    let new_salt_b64 = crypto::new_salt_b64();
+    let new_salt = crypto::b64_decode(&new_salt_b64)?;
+    let new_master = crypto::derive_master_key(new_passphrase, &new_salt, new_params)?;
+    let (new_iv, new_ct) = crypto::encrypt(&new_master, &diary_key)?;
+
+    let rewritten = Vault {
+        kdf: Kdf::Argon2id,
+        params: new_params,
+        salt_b64: new_salt_b64,
+        wrapped_key_iv_b64: crypto::b64_encode(&new_iv),
+        wrapped_key_b64: crypto::b64_encode(&new_ct),
+    };
+    write_vault(dir, &rewritten)?;
+
+    Ok(diary_key)
+}
+
 /// Create a brand-new vault and return the random diary key.
 ///
 /// A fresh diary key is generated, wrapped with the Argon2id-derived master
@@ -2405,5 +2472,107 @@ mod tests {
 
         assert!(!read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().favourite);
         assert!(list_favourites(&dir, &key).unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Re-wrapping (passphrase / KDF change)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn rewrap_changes_the_passphrase_and_keeps_the_diary_key() {
+        let dir = temp_dir("rewrap-pass");
+        let key = create_vault(&dir, "old-pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "標題", "內容").unwrap();
+
+        let returned = rewrap_vault(&dir, "old-pw", "new-pw", fast()).unwrap();
+        assert_eq!(returned, key, "the diary key must not change");
+
+        // Old passphrase no longer works, new one does and yields the same key.
+        assert!(unlock_vault(&dir, "old-pw").is_err());
+        assert_eq!(unlock_vault(&dir, "new-pw").unwrap(), key);
+
+        // Entries were never re-encrypted, so they still read fine.
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "標題");
+        assert_eq!(entry.content, "內容");
+    }
+
+    #[test]
+    fn rewrap_rejects_a_wrong_current_passphrase() {
+        let dir = temp_dir("rewrap-wrong");
+        let key = create_vault(&dir, "old-pw", fast()).unwrap();
+
+        let err = rewrap_vault(&dir, "nope", "new-pw", fast()).unwrap_err();
+        assert!(err.contains("Incorrect passphrase"), "got: {err}");
+
+        // The vault is untouched: the original passphrase still works.
+        assert_eq!(unlock_vault(&dir, "old-pw").unwrap(), key);
+    }
+
+    #[test]
+    fn rewrap_updates_the_stored_kdf_parameters() {
+        let dir = temp_dir("rewrap-params");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let stronger = crypto::KdfParams {
+            memory_kib: 16 * 1024,
+            iterations: 2,
+            parallelism: 1,
+        };
+
+        rewrap_vault(&dir, "pw", "pw", stronger).unwrap();
+
+        assert_eq!(vault_kdf_params(&dir).unwrap(), Some(stronger));
+        assert_eq!(unlock_vault(&dir, "pw").unwrap(), key);
+    }
+
+    #[test]
+    fn rewrap_uses_a_fresh_salt() {
+        let dir = temp_dir("rewrap-salt");
+        create_vault(&dir, "pw", fast()).unwrap();
+        let before = read_vault(&dir).unwrap().unwrap().salt_b64;
+
+        rewrap_vault(&dir, "pw", "pw", fast()).unwrap();
+
+        let after = read_vault(&dir).unwrap().unwrap().salt_b64;
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn rewrap_rejects_an_empty_new_passphrase() {
+        let dir = temp_dir("rewrap-empty");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        assert!(rewrap_vault(&dir, "pw", "", fast()).is_err());
+        assert_eq!(unlock_vault(&dir, "pw").unwrap(), key);
+    }
+
+    #[test]
+    fn rewrap_rejects_invalid_kdf_params() {
+        let dir = temp_dir("rewrap-bad-params");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let bad = crypto::KdfParams {
+            memory_kib: 1024,
+            iterations: 2,
+            parallelism: 1,
+        };
+        assert!(rewrap_vault(&dir, "pw", "pw", bad).is_err());
+        assert_eq!(unlock_vault(&dir, "pw").unwrap(), key);
+    }
+
+    #[test]
+    fn rewrap_on_a_missing_vault_fails() {
+        let dir = temp_dir("rewrap-missing");
+        assert!(rewrap_vault(&dir, "pw", "pw", fast()).is_err());
+    }
+
+    #[test]
+    fn vault_kdf_params_reports_the_creation_parameters() {
+        let dir = temp_dir("kdf-report");
+        let params = crypto::KdfParams {
+            memory_kib: 8 * 1024,
+            iterations: 3,
+            parallelism: 2,
+        };
+        create_vault(&dir, "pw", params).unwrap();
+        assert_eq!(vault_kdf_params(&dir).unwrap(), Some(params));
     }
 }

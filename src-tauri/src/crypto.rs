@@ -173,6 +173,77 @@ pub fn new_diary_key() -> Zeroizing<[u8; KEY_LEN]> {
 }
 
 // ---------------------------------------------------------------------------
+// Calibration
+// ---------------------------------------------------------------------------
+
+/// Target wall-clock time for a single unlock, in milliseconds.
+pub const CALIBRATION_TARGET_MS: u128 = 1000;
+
+/// Memory cost the calibration starts from (64 MiB).
+///
+/// Starting high and scaling *down* is deliberate: the first measurement is
+/// then an upper bound, so a slow machine never gets a parameter set that is
+/// already too expensive before we have measured anything.
+const CALIBRATION_START_MEMORY_KIB: u32 = 64 * 1024;
+
+/// Memory cost the calibration will not go below, even on very slow hardware.
+/// Below this Argon2id stops being a meaningful barrier.
+const CALIBRATION_FLOOR_MEMORY_KIB: u32 = 19 * 1024;
+
+/// Measure how long one Argon2id derivation takes with `params`.
+///
+/// The passphrase and salt are throwaway values; only the timing matters.
+fn measure_derivation(params: KdfParams) -> Result<u128, String> {
+    let salt = [0x5au8; 16];
+    let started = std::time::Instant::now();
+    let _ = derive_master_key("calibration-probe", &salt, params)?;
+    Ok(started.elapsed().as_millis())
+}
+
+/// Pick Argon2id parameters that take roughly [`CALIBRATION_TARGET_MS`] on this
+/// machine.
+///
+/// The strategy is a coarse search over memory cost, which is the knob that
+/// matters most against GPU cracking, followed by a fine adjustment of the
+/// iteration count. Parallelism is left at 1 so the result is reproducible on
+/// machines with different core counts.
+///
+/// The returned parameters are always valid per [`KdfParams::validate`].
+pub fn calibrate_kdf() -> Result<KdfParams, String> {
+    // Step 1: find the largest memory cost that still fits in the budget.
+    let mut memory_kib = CALIBRATION_START_MEMORY_KIB;
+    let mut elapsed = measure_derivation(KdfParams {
+        memory_kib,
+        iterations: 1,
+        parallelism: 1,
+    })?;
+
+    // Halve until we are inside the budget, or until we hit the floor.
+    while elapsed > CALIBRATION_TARGET_MS && memory_kib > CALIBRATION_FLOOR_MEMORY_KIB {
+        memory_kib = (memory_kib / 2).max(CALIBRATION_FLOOR_MEMORY_KIB);
+        elapsed = measure_derivation(KdfParams {
+            memory_kib,
+            iterations: 1,
+            parallelism: 1,
+        })?;
+    }
+
+    // Step 2: spend any leftover budget on extra passes. Each pass costs
+    // roughly the same as the first, so the ratio tells us how many fit.
+    let per_pass = elapsed.max(1);
+    let budget_passes = (CALIBRATION_TARGET_MS / per_pass).max(1) as u32;
+    let iterations = budget_passes.clamp(KdfParams::MIN_ITERATIONS, KdfParams::MAX_ITERATIONS);
+
+    let params = KdfParams {
+        memory_kib,
+        iterations,
+        parallelism: 1,
+    };
+    params.validate()?;
+    Ok(params)
+}
+
+// ---------------------------------------------------------------------------
 // AES-256-GCM
 // ---------------------------------------------------------------------------
 
@@ -346,6 +417,24 @@ mod tests {
     #[test]
     fn default_params_are_valid() {
         assert!(KdfParams::default().validate().is_ok());
+    }
+
+    #[test]
+    fn calibration_returns_valid_params() {
+        let params = calibrate_kdf().unwrap();
+        assert!(params.validate().is_ok(), "got: {params:?}");
+        assert_eq!(params.parallelism, 1);
+        assert!(params.memory_kib >= CALIBRATION_FLOOR_MEMORY_KIB);
+        assert!(params.memory_kib <= CALIBRATION_START_MEMORY_KIB);
+        assert!(params.iterations >= KdfParams::MIN_ITERATIONS);
+        assert!(params.iterations <= KdfParams::MAX_ITERATIONS);
+    }
+
+    #[test]
+    fn calibrated_params_can_derive_a_key() {
+        let params = calibrate_kdf().unwrap();
+        let key = derive_master_key("pw", &salt("calibrated"), params).unwrap();
+        assert_eq!(key.len(), KEY_LEN);
     }
 
     #[test]

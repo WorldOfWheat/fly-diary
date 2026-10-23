@@ -8,10 +8,14 @@
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
-//! <settings version="1">
+//! <settings version="2">
 //!   <diary-dir>/home/user/Documents/diary</diary-dir>
+//!   <auto-lock-minutes>10</auto-lock-minutes>
 //! </settings>
 //! ```
+//!
+//! Version 1 files (no `<auto-lock-minutes>`) are still readable; they fall
+//! back to [`DEFAULT_AUTO_LOCK_MINUTES`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,11 +26,48 @@ use quick_xml::{Reader, Writer};
 /// Name of the settings file inside the config directory.
 const SETTINGS_FILE: &str = "settings.xml";
 
+/// Idle minutes before the diary locks itself, used when the settings file
+/// predates the auto-lock feature.
+pub const DEFAULT_AUTO_LOCK_MINUTES: u32 = 10;
+
+/// Sentinel stored in `<auto-lock-minutes>` meaning "never lock".
+pub const AUTO_LOCK_NEVER: u32 = 0;
+
+/// Allowed auto-lock values, in minutes. `0` means never.
+///
+/// The list is deliberately short: a free-form number would let the user pick
+/// something like 3 minutes and then be surprised by the lock screen.
+pub const AUTO_LOCK_CHOICES: [u32; 7] = [0, 1, 5, 10, 15, 30, 60];
+
 /// Persisted application settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
     /// Absolute path of the directory holding the encrypted diary files.
     pub diary_dir: PathBuf,
+    /// Idle minutes before the diary locks itself; `0` disables auto-lock.
+    pub auto_lock_minutes: u32,
+}
+
+impl Settings {
+    /// Build settings with the default auto-lock value.
+    pub fn new(diary_dir: PathBuf) -> Self {
+        Self {
+            diary_dir,
+            auto_lock_minutes: DEFAULT_AUTO_LOCK_MINUTES,
+        }
+    }
+}
+
+/// Reject auto-lock values that are not one of [`AUTO_LOCK_CHOICES`].
+pub fn validate_auto_lock(minutes: u32) -> Result<(), String> {
+    if AUTO_LOCK_CHOICES.contains(&minutes) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Auto-lock must be one of {:?} minutes",
+            AUTO_LOCK_CHOICES
+        ))
+    }
 }
 
 /// Resolve the settings file path inside `config_dir`.
@@ -62,6 +103,7 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
 
     let mut diary_dir = None;
     let mut seen_diary_dir = false;
+    let mut auto_lock = None;
     let mut current = String::new();
 
     let mut reader = Reader::from_str(&text);
@@ -81,6 +123,8 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
                     .to_string();
                 if current == "diary-dir" {
                     diary_dir = Some(value);
+                } else if current == "auto-lock-minutes" {
+                    auto_lock = Some(value);
                 }
             }
             Ok(Event::End(_)) => current.clear(),
@@ -101,7 +145,26 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
 
     let dir = PathBuf::from(raw);
     validate_diary_dir(&dir)?;
-    Ok(Some(Settings { diary_dir: dir }))
+
+    // A missing element means the file predates auto-lock, so use the default
+    // rather than failing to start. A present-but-garbage value is an error:
+    // silently ignoring it would hide a hand-edited mistake.
+    let auto_lock_minutes = match auto_lock {
+        None => DEFAULT_AUTO_LOCK_MINUTES,
+        Some(text) => {
+            let minutes: u32 = text
+                .trim()
+                .parse()
+                .map_err(|_| format!("Settings file has an invalid <auto-lock-minutes>: {text}"))?;
+            validate_auto_lock(minutes)?;
+            minutes
+        }
+    };
+
+    Ok(Some(Settings {
+        diary_dir: dir,
+        auto_lock_minutes,
+    }))
 }
 
 /// Serialize settings to an XML document.
@@ -113,7 +176,7 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
         .map_err(|e| format!("Failed to write XML declaration: {e}"))?;
 
     let mut root = BytesStart::new("settings");
-    root.push_attribute(("version", "1"));
+    root.push_attribute(("version", "2"));
     writer
         .write_event(Event::Start(root))
         .map_err(|e| format!("Failed to write <settings>: {e}"))?;
@@ -131,6 +194,16 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
         .map_err(|e| format!("Failed to close <diary-dir>: {e}"))?;
 
     writer
+        .write_event(Event::Start(BytesStart::new("auto-lock-minutes")))
+        .map_err(|e| format!("Failed to write <auto-lock-minutes>: {e}"))?;
+    writer
+        .write_event(Event::Text(BytesText::new(&settings.auto_lock_minutes.to_string())))
+        .map_err(|e| format!("Failed to write auto-lock value: {e}"))?;
+    writer
+        .write_event(Event::End(BytesEnd::new("auto-lock-minutes")))
+        .map_err(|e| format!("Failed to close <auto-lock-minutes>: {e}"))?;
+
+    writer
         .write_event(Event::End(BytesEnd::new("settings")))
         .map_err(|e| format!("Failed to close <settings>: {e}"))?;
 
@@ -141,6 +214,7 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
 /// Write settings, creating the config directory if needed.
 pub fn write_settings(config_dir: &Path, settings: &Settings) -> Result<(), String> {
     validate_diary_dir(&settings.diary_dir)?;
+    validate_auto_lock(settings.auto_lock_minutes)?;
     fs::create_dir_all(config_dir)
         .map_err(|e| format!("Failed to create config directory: {e}"))?;
     let document = to_xml(settings)?;
@@ -164,9 +238,7 @@ mod tests {
     }
 
     fn sample(dir: &Path) -> Settings {
-        Settings {
-            diary_dir: dir.join("diary"),
-        }
+        Settings::new(dir.join("diary"))
     }
 
     #[test]
@@ -217,9 +289,7 @@ mod tests {
     #[test]
     fn write_rejects_relative_path() {
         let config = temp_dir("write-relative");
-        let bad = Settings {
-            diary_dir: PathBuf::from("relative/diary"),
-        };
+        let bad = Settings::new(PathBuf::from("relative/diary"));
         assert!(write_settings(&config, &bad).is_err());
         assert!(read_settings(&config).unwrap().is_none());
         let _ = fs::remove_dir_all(&config);
@@ -239,16 +309,14 @@ mod tests {
         let config = temp_dir("decl");
         let xml = to_xml(&sample(&config)).unwrap();
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        assert!(xml.contains("<settings version=\"1\">"));
+        assert!(xml.contains("<settings version=\"2\">"));
         let _ = fs::remove_dir_all(&config);
     }
 
     #[test]
     fn path_with_special_characters_roundtrips() {
         let config = temp_dir("specials");
-        let settings = Settings {
-            diary_dir: config.join("a & b < c > d \" e ' f"),
-        };
+        let settings = Settings::new(config.join("a & b < c > d \" e ' f"));
         write_settings(&config, &settings).unwrap();
         let loaded = read_settings(&config).unwrap().unwrap();
         assert_eq!(loaded, settings);
@@ -258,9 +326,7 @@ mod tests {
     #[test]
     fn path_with_cjk_roundtrips() {
         let config = temp_dir("cjk");
-        let settings = Settings {
-            diary_dir: config.join("我的日記 🦋"),
-        };
+        let settings = Settings::new(config.join("我的日記 🦋"));
         write_settings(&config, &settings).unwrap();
         let loaded = read_settings(&config).unwrap().unwrap();
         assert_eq!(loaded, settings);
@@ -317,16 +383,86 @@ mod tests {
     #[test]
     fn overwrite_replaces_previous_path() {
         let config = temp_dir("overwrite");
-        let first = Settings {
-            diary_dir: config.join("first"),
-        };
-        let second = Settings {
-            diary_dir: config.join("second"),
-        };
+        let first = Settings::new(config.join("first"));
+        let second = Settings::new(config.join("second"));
         write_settings(&config, &first).unwrap();
         write_settings(&config, &second).unwrap();
         assert_eq!(read_settings(&config).unwrap().unwrap(), second);
         let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn auto_lock_roundtrips() {
+        let config = temp_dir("auto-lock");
+        let mut settings = sample(&config);
+        settings.auto_lock_minutes = 30;
+        write_settings(&config, &settings).unwrap();
+        assert_eq!(read_settings(&config).unwrap().unwrap(), settings);
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn auto_lock_never_roundtrips() {
+        let config = temp_dir("auto-lock-never");
+        let mut settings = sample(&config);
+        settings.auto_lock_minutes = AUTO_LOCK_NEVER;
+        write_settings(&config, &settings).unwrap();
+        assert_eq!(read_settings(&config).unwrap().unwrap(), settings);
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn version_1_file_without_auto_lock_uses_the_default() {
+        let config = temp_dir("v1-default");
+        fs::write(
+            settings_path(&config),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<settings version=\"1\">\n  <diary-dir>/home/user/diary</diary-dir>\n</settings>\n",
+        )
+        .unwrap();
+        let loaded = read_settings(&config).unwrap().unwrap();
+        assert_eq!(loaded.auto_lock_minutes, DEFAULT_AUTO_LOCK_MINUTES);
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn rejects_auto_lock_outside_the_allowed_choices() {
+        let config = temp_dir("auto-lock-bad");
+        fs::write(
+            settings_path(&config),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<settings version=\"2\">\n  <diary-dir>/home/user/diary</diary-dir>\n  <auto-lock-minutes>7</auto-lock-minutes>\n</settings>\n",
+        )
+        .unwrap();
+        assert!(read_settings(&config).is_err());
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn rejects_non_numeric_auto_lock() {
+        let config = temp_dir("auto-lock-junk");
+        fs::write(
+            settings_path(&config),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<settings version=\"2\">\n  <diary-dir>/home/user/diary</diary-dir>\n  <auto-lock-minutes>soon</auto-lock-minutes>\n</settings>\n",
+        )
+        .unwrap();
+        assert!(read_settings(&config).is_err());
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn write_rejects_invalid_auto_lock() {
+        let config = temp_dir("auto-lock-write");
+        let mut settings = sample(&config);
+        settings.auto_lock_minutes = 7;
+        assert!(write_settings(&config, &settings).is_err());
+        assert!(read_settings(&config).unwrap().is_none());
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn validate_auto_lock_accepts_every_choice() {
+        for minutes in AUTO_LOCK_CHOICES {
+            assert!(validate_auto_lock(minutes).is_ok(), "rejected {minutes}");
+        }
     }
 
     #[test]

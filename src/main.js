@@ -117,6 +117,23 @@ const els = {
   deleteBtn: $("delete-btn"),
   lockBtn: $("lock-btn"),
   changeDirBtn: $("change-dir-btn"),
+  settingsBtn: $("settings-btn"),
+  // Settings dialog
+  settingsOverlay: $("settings-overlay"),
+  settingsClose: $("settings-close"),
+  settingsCancel: $("settings-cancel"),
+  settingsSave: $("settings-save"),
+  settingsError: $("settings-error"),
+  autoLockSelect: $("auto-lock-select"),
+  vaultKdf: $("vault-kdf"),
+  settingsCurrentPass: $("settings-current-pass"),
+  settingsNewPass: $("settings-new-pass"),
+  settingsNewPassConfirm: $("settings-new-pass-confirm"),
+  settingsKdfMemory: $("settings-kdf-memory"),
+  settingsKdfIterations: $("settings-kdf-iterations"),
+  settingsKdfParallelism: $("settings-kdf-parallelism"),
+  settingsCalibrate: $("settings-calibrate"),
+  settingsCalibrateNote: $("settings-calibrate-note"),
   // Import dialog
   importBtn: $("import-btn"),
   importOverlay: $("import-overlay"),
@@ -1419,6 +1436,10 @@ async function enterApp() {
     console.error("diary_path failed:", err);
   }
 
+  // Start the idle countdown as soon as the diary is visible. The duration was
+  // read from the settings file during `init()`.
+  resetAutoLockTimer();
+
   await refreshList();
 
   const today = await invoke("today");
@@ -1430,6 +1451,8 @@ async function loadSettings() {
   const settings = await invoke("get_settings");
   configured = settings.configured;
   els.diaryDir.value = settings.diaryDir ?? settings.defaultDir ?? "";
+  // Keep the idle timer in sync with whatever is on disk.
+  setAutoLockMinutes(settings.autoLockMinutes ?? 0);
   return settings;
 }
 
@@ -1568,17 +1591,21 @@ async function changeDiaryDir() {
   resetList();
   closeCalendar();
   closeImport();
+  closeSettings();
   renderDateLabel();
   els.title.value = "";
   els.content.value = "";
 
   // Show the lock screen with the path field so the user can pick a new folder.
+  // `configured` is cleared so the path field is visible, but the vault state
+  // is *not* forced to false: the folder the user lands on may already hold a
+  // diary, in which case the form must ask for the passphrase rather than
+  // offering to create a new vault.
   configured = false;
-  vaultInitialized = false;
   showLockScreen();
-  renderLockScreen();
   els.diaryDir.focus();
   els.diaryDir.select();
+  await refreshSetupVaultState();
 }
 
 async function lockNow() {
@@ -1608,9 +1635,256 @@ async function lockNow() {
   // still exists, so re-render instead of leaving the previous layout on
   // screen. Re-detect the vault so a folder that was swapped out from under
   // us is handled correctly.
+  stopAutoLockTimer();
+  closeSettings();
   await refreshVaultState();
   showLockScreen();
   renderLockScreen();
+}
+
+// ---------------------------------------------------------------------------
+// Idle auto-lock
+// ---------------------------------------------------------------------------
+
+/** Idle minutes before locking; `0` disables auto-lock. */
+let autoLockMinutes = 0;
+/** Pending idle timer, or `null` when auto-lock is off or the app is locked. */
+let autoLockTimer = null;
+
+/** Events that count as "the user is still here". */
+const ACTIVITY_EVENTS = [
+  "mousemove",
+  "mousedown",
+  "keydown",
+  "wheel",
+  "touchstart",
+  "focusin",
+];
+
+/**
+ * Restart the idle countdown.
+ *
+ * Called on every activity event, so it must stay cheap: it only clears and
+ * re-arms a single timeout. Throttling is unnecessary because `setTimeout`
+ * itself is O(1) and the events are already coalesced by the browser.
+ */
+function resetAutoLockTimer() {
+  if (autoLockTimer) {
+    clearTimeout(autoLockTimer);
+    autoLockTimer = null;
+  }
+  if (!autoLockMinutes || els.app.hidden) return;
+  autoLockTimer = setTimeout(() => {
+    autoLockTimer = null;
+    // A pending keystroke must reach the disk before the key is dropped.
+    lockNow();
+  }, autoLockMinutes * 60 * 1000);
+}
+
+/** Stop the countdown, e.g. while the app is locked or the setting is off. */
+function stopAutoLockTimer() {
+  if (autoLockTimer) {
+    clearTimeout(autoLockTimer);
+    autoLockTimer = null;
+  }
+}
+
+/** Apply a new auto-lock duration and re-arm the timer. */
+function setAutoLockMinutes(minutes) {
+  autoLockMinutes = Number(minutes) || 0;
+  resetAutoLockTimer();
+}
+
+/** Wire the global activity listeners once, at startup. */
+function initAutoLock() {
+  for (const name of ACTIVITY_EVENTS) {
+    // Capture phase so activity inside the editor counts even if a handler
+    // stops propagation. `passive` keeps scrolling smooth.
+    document.addEventListener(name, resetAutoLockTimer, {
+      capture: true,
+      passive: true,
+    });
+  }
+  // Coming back to the window is activity too.
+  window.addEventListener("focus", resetAutoLockTimer);
+}
+
+// ---------------------------------------------------------------------------
+// Settings dialog
+// ---------------------------------------------------------------------------
+
+/** Whether the settings dialog is open. */
+function isSettingsOpen() {
+  return !els.settingsOverlay.hidden;
+}
+
+/** Fill the auto-lock dropdown from the choices the backend allows. */
+function renderAutoLockChoices(choices, current) {
+  els.autoLockSelect.replaceChildren();
+  for (const minutes of choices) {
+    const option = document.createElement("option");
+    option.value = String(minutes);
+    option.textContent = minutes === 0
+      ? t("settings.autoLockNever")
+      : t("settings.autoLockMinutes", { n: minutes });
+    if (minutes === current) option.selected = true;
+    els.autoLockSelect.append(option);
+  }
+}
+
+/** Show the Argon2id parameters currently recorded in the vault. */
+function renderVaultKdf(params) {
+  if (!params) {
+    els.vaultKdf.textContent = t("settings.vaultKdfLegacy");
+    return;
+  }
+  els.vaultKdf.textContent = t("settings.vaultKdf", {
+    memory: Math.round(params.memoryKib / 1024),
+    iterations: params.iterations,
+    parallelism: params.parallelism,
+  });
+}
+
+/** Copy the vault's current parameters into the advanced inputs. */
+function fillSettingsKdf(params) {
+  if (!params) return;
+  els.settingsKdfMemory.value = Math.round(params.memoryKib / 1024);
+  els.settingsKdfIterations.value = params.iterations;
+  els.settingsKdfParallelism.value = params.parallelism;
+}
+
+/** Read the advanced inputs as a KdfView payload. */
+function readSettingsKdf() {
+  return {
+    memoryKib: Number(els.settingsKdfMemory.value) * 1024,
+    iterations: Number(els.settingsKdfIterations.value),
+    parallelism: Number(els.settingsKdfParallelism.value),
+  };
+}
+
+/** Open the settings dialog and populate it from the backend. */
+async function openSettings() {
+  els.settingsError.textContent = "";
+  els.settingsCalibrateNote.textContent = "";
+  els.settingsCurrentPass.value = "";
+  els.settingsNewPass.value = "";
+  els.settingsNewPassConfirm.value = "";
+
+  try {
+    const settings = await invoke("get_settings");
+    renderAutoLockChoices(
+      settings.autoLockChoices ?? [0, 1, 5, 10, 15, 30, 60],
+      settings.autoLockMinutes ?? 0
+    );
+    const params = await invoke("get_vault_kdf");
+    renderVaultKdf(params);
+    fillSettingsKdf(params);
+  } catch (err) {
+    console.error("settings load failed:", err);
+    els.settingsError.textContent = t("settings.errSave", {
+      message: typeof err === "string" ? err : String(err),
+    });
+  }
+
+  els.settingsOverlay.hidden = false;
+  els.settingsCurrentPass.focus();
+}
+
+/** Close the settings dialog without saving. */
+function closeSettings() {
+  els.settingsOverlay.hidden = true;
+  els.settingsError.textContent = "";
+  // Never leave a passphrase sitting in a hidden input.
+  els.settingsCurrentPass.value = "";
+  els.settingsNewPass.value = "";
+  els.settingsNewPassConfirm.value = "";
+}
+
+/** Measure this machine and fill the advanced inputs with the result. */
+async function calibrateKdf() {
+  els.settingsError.textContent = "";
+  els.settingsCalibrate.disabled = true;
+  els.settingsCalibrateNote.textContent = t("settings.calibrating");
+  try {
+    const params = await invoke("calibrate_kdf");
+    fillSettingsKdf(params);
+    els.settingsCalibrateNote.textContent = t("settings.calibrated", {
+      memory: Math.round(params.memoryKib / 1024),
+      iterations: params.iterations,
+      parallelism: params.parallelism,
+    });
+  } catch (err) {
+    console.error("calibrate_kdf failed:", err);
+    els.settingsCalibrateNote.textContent = "";
+    els.settingsError.textContent = t("settings.errCalibrate", {
+      message: typeof err === "string" ? err : String(err),
+    });
+  } finally {
+    els.settingsCalibrate.disabled = false;
+  }
+}
+
+/**
+ * Save the dialog.
+ *
+ * The auto-lock preference and the passphrase/KDF change are independent: the
+ * former is always written, the latter only when the user typed a current
+ * passphrase. That way the dialog can be used for either purpose alone.
+ */
+async function saveSettings() {
+  els.settingsError.textContent = "";
+
+  const current = els.settingsCurrentPass.value;
+  const next = els.settingsNewPass.value;
+  const confirm = els.settingsNewPassConfirm.value;
+  const wantsPassChange = current !== "" || next !== "" || confirm !== "";
+
+  if (wantsPassChange) {
+    if (!current) {
+      els.settingsError.textContent = t("settings.errCurrentRequired");
+      return;
+    }
+    if (next !== confirm) {
+      els.settingsError.textContent = t("settings.errMismatch");
+      return;
+    }
+  }
+
+  els.settingsSave.disabled = true;
+  try {
+    const minutes = Number(els.autoLockSelect.value);
+    await invoke("set_auto_lock", { minutes });
+    setAutoLockMinutes(minutes);
+
+    if (wantsPassChange) {
+      const kdf = readSettingsKdf();
+      if (
+        !Number.isFinite(kdf.memoryKib) ||
+        !Number.isFinite(kdf.iterations) ||
+        !Number.isFinite(kdf.parallelism)
+      ) {
+        els.settingsError.textContent = t("lock.errKdfNaN");
+        return;
+      }
+      await invoke("change_passphrase", {
+        currentPassphrase: current,
+        newPassphrase: next,
+        kdf,
+      });
+      // The vault now records the parameters we just sent.
+      renderVaultKdf(kdf);
+    }
+
+    closeSettings();
+    setStatus(t("settings.saved"), true);
+  } catch (err) {
+    console.error("save settings failed:", err);
+    els.settingsError.textContent = t("settings.errSave", {
+      message: typeof err === "string" ? err : String(err),
+    });
+  } finally {
+    els.settingsSave.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,6 +1987,16 @@ els.deleteBtn.addEventListener("click", deleteCurrent);
 els.favouriteBtn.addEventListener("click", toggleFavourite);
 els.lockBtn.addEventListener("click", lockNow);
 els.changeDirBtn.addEventListener("click", changeDiaryDir);
+
+// Settings dialog.
+els.settingsBtn.addEventListener("click", openSettings);
+els.settingsClose.addEventListener("click", closeSettings);
+els.settingsCancel.addEventListener("click", closeSettings);
+els.settingsSave.addEventListener("click", saveSettings);
+els.settingsCalibrate.addEventListener("click", calibrateKdf);
+els.settingsOverlay.addEventListener("mousedown", (e) => {
+  if (e.target === els.settingsOverlay) closeSettings();
+});
 
 // Sidebar view switch.
 els.viewAll.addEventListener("click", () => setView("all"));
@@ -1823,6 +2107,9 @@ async function init() {
   // Same for the theme: resolve it before the first paint so the app never
   // flashes light before switching to dark.
   initTheme();
+
+  // Idle auto-lock listens globally; the duration arrives with the settings.
+  initAutoLock();
 
   // The bookmark button starts disabled: no entry is open yet.
   renderFavouriteButton();

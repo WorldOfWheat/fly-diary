@@ -44,6 +44,7 @@ fn diary_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 
 /// Settings exposed to the frontend.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SettingsView {
     /// Whether a settings file exists (i.e. the app has been set up).
     configured: bool,
@@ -51,6 +52,10 @@ struct SettingsView {
     diary_dir: Option<String>,
     /// Suggested directory to pre-fill on first run.
     default_dir: String,
+    /// Idle minutes before auto-lock; `0` means never.
+    auto_lock_minutes: u32,
+    /// The auto-lock values the UI may offer.
+    auto_lock_choices: Vec<u32>,
 }
 
 /// In-memory session state: the derived AES key while the vault is unlocked.
@@ -89,11 +94,17 @@ fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
     let diary_dir = settings
         .as_ref()
         .map(|s| s.diary_dir.to_string_lossy().to_string());
+    let auto_lock_minutes = settings
+        .as_ref()
+        .map(|s| s.auto_lock_minutes)
+        .unwrap_or(settings::DEFAULT_AUTO_LOCK_MINUTES);
 
     Ok(SettingsView {
         configured: diary_dir.is_some(),
         diary_dir,
         default_dir,
+        auto_lock_minutes,
+        auto_lock_choices: settings::AUTO_LOCK_CHOICES.to_vec(),
     })
 }
 
@@ -101,6 +112,9 @@ fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
 ///
 /// Refuses to change the location while the diary is unlocked, because the
 /// in-memory key belongs to the vault at the old location.
+///
+/// The auto-lock preference is carried over from the existing settings so
+/// changing the path does not silently reset it.
 #[tauri::command]
 fn set_diary_dir(
     app: tauri::AppHandle,
@@ -115,7 +129,27 @@ fn set_diary_dir(
     settings::validate_diary_dir(&dir)?;
 
     let config = config_dir(&app)?;
-    settings::write_settings(&config, &settings::Settings { diary_dir: dir })
+    let mut settings = settings::read_settings(&config)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| settings::Settings::new(dir.clone()));
+    settings.diary_dir = dir;
+    settings::write_settings(&config, &settings)
+}
+
+/// Persist the auto-lock preference.
+///
+/// Allowed while unlocked: it is a UI preference, not key material.
+/// `minutes == 0` ([`settings::AUTO_LOCK_NEVER`]) disables auto-lock.
+#[tauri::command]
+fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
+    settings::validate_auto_lock(minutes)?;
+
+    let config = config_dir(&app)?;
+    let mut settings = settings::read_settings(&config)?
+        .ok_or_else(|| "Diary is not configured yet".to_string())?;
+    settings.auto_lock_minutes = minutes;
+    settings::write_settings(&config, &settings)
 }
 
 /// Open a native folder picker and return the chosen path.
@@ -250,6 +284,90 @@ fn unlock(
 #[tauri::command]
 fn lock(session: tauri::State<'_, SharedSession>) {
     *session.lock().unwrap() = Session::default();
+}
+
+/// The Argon2id parameters currently recorded in the vault.
+///
+/// Returns `None` when the vault is still in the legacy format, which has no
+/// Argon2id parameters to report.
+#[tauri::command]
+fn get_vault_kdf(app: tauri::AppHandle) -> Result<Option<KdfView>, String> {
+    let dir = diary_dir(&app)?;
+    Ok(storage::vault_kdf_params(&dir)?.map(|p| KdfView {
+        memory_kib: p.memory_kib,
+        iterations: p.iterations,
+        parallelism: p.parallelism,
+        min_memory_kib: 0,
+        max_memory_kib: 0,
+        min_iterations: 0,
+        max_iterations: 0,
+        min_parallelism: 0,
+        max_parallelism: 0,
+    }))
+}
+
+/// Measure this machine and return Argon2id parameters that take about a
+/// second to derive.
+#[tauri::command]
+async fn calibrate_kdf() -> Result<KdfView, String> {
+    // Deriving is CPU-bound and deliberately slow, so keep it off the async
+    // runtime's worker threads.
+    let params = tauri::async_runtime::spawn_blocking(crypto::calibrate_kdf)
+        .await
+        .map_err(|e| format!("Calibration task failed: {e}"))??;
+    Ok(KdfView {
+        memory_kib: params.memory_kib,
+        iterations: params.iterations,
+        parallelism: params.parallelism,
+        min_memory_kib: crypto::KdfParams::MIN_MEMORY_KIB,
+        max_memory_kib: crypto::KdfParams::MAX_MEMORY_KIB,
+        min_iterations: crypto::KdfParams::MIN_ITERATIONS,
+        max_iterations: crypto::KdfParams::MAX_ITERATIONS,
+        min_parallelism: crypto::KdfParams::MIN_PARALLELISM,
+        max_parallelism: crypto::KdfParams::MAX_PARALLELISM,
+    })
+}
+
+/// Change the passphrase and/or the Argon2id parameters.
+///
+/// The diary key is re-wrapped, not regenerated, so entries are untouched and
+/// the session stays unlocked. `new_passphrase` may be empty to keep the
+/// current passphrase and only change the parameters.
+#[tauri::command]
+fn change_passphrase(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    current_passphrase: String,
+    new_passphrase: String,
+    kdf: Option<KdfView>,
+) -> Result<(), String> {
+    let dir = diary_dir(&app)?;
+
+    // Default to the parameters already in the vault so a passphrase-only
+    // change does not silently downgrade the cost.
+    let params = match kdf {
+        Some(view) => crypto::KdfParams {
+            memory_kib: view.memory_kib,
+            iterations: view.iterations,
+            parallelism: view.parallelism,
+        },
+        None => storage::vault_kdf_params(&dir)?.unwrap_or_default(),
+    };
+
+    let effective_new = if new_passphrase.is_empty() {
+        current_passphrase.clone()
+    } else {
+        new_passphrase
+    };
+
+    let key = storage::rewrap_vault(&dir, &current_passphrase, &effective_new, params)?;
+
+    // The diary key is unchanged, but refresh the session anyway so the
+    // in-memory copy is the one the vault now wraps.
+    *session.lock().unwrap() = Session {
+        key: Some(Zeroizing::new(key)),
+    };
+    Ok(())
 }
 
 /// Whether the vault is currently unlocked.
@@ -460,6 +578,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_settings,
             set_diary_dir,
+            set_auto_lock,
             pick_diary_dir,
             get_kdf_defaults,
             vault_exists,
@@ -467,6 +586,9 @@ pub fn run() {
             unlock,
             lock,
             is_unlocked,
+            get_vault_kdf,
+            calibrate_kdf,
+            change_passphrase,
             get_entry,
             save_entry,
             delete_entry,

@@ -118,6 +118,8 @@
                 <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
                 <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
                     data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
+                <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
+                    data-i18n-title="sidebar.settingsTitle" title="設定">設定</button>
                 <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
                     data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
                 <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
@@ -275,6 +277,92 @@
                 <span id="import-error" class="import-error"></span>
                 <button id="import-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
                 <button id="import-confirm" class="btn-primary" type="button" data-i18n="sidebar.import">匯入</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Settings dialog: auto-lock timing and the passphrase / Argon2id
+         controls. Only reachable while unlocked, because changing the
+         passphrase needs the current one and the vault must be readable. -->
+    <div id="settings-overlay" class="modal-overlay" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <header class="modal-head">
+                <h2 id="settings-title" class="modal-title" data-i18n="settings.title">設定</h2>
+                <button id="settings-close" class="modal-close" type="button" data-i18n-title="common.close"
+                    data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <!-- Auto-lock -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="settings.autoLock">閒置自動鎖定</h3>
+                    <p class="settings-hint" data-i18n="settings.autoLockHint">
+                        閒置超過指定時間後自動鎖定日記，需要重新輸入密碼。
+                    </p>
+                    <label class="settings-row" for="auto-lock-select">
+                        <span class="settings-label" data-i18n="settings.autoLockLabel">鎖定時間</span>
+                        <select id="auto-lock-select" class="settings-select"></select>
+                    </label>
+                </section>
+
+                <!-- Passphrase / KDF -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="settings.security">密碼與金鑰派生</h3>
+                    <p class="settings-hint" data-i18n="settings.securityHint">
+                        變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。
+                    </p>
+
+                    <div id="vault-kdf" class="settings-kdf"></div>
+
+                    <label class="settings-row" for="settings-current-pass">
+                        <span class="settings-label" data-i18n="settings.currentPass">目前密碼</span>
+                        <input id="settings-current-pass" class="settings-input" type="password"
+                            autocomplete="current-password" data-i18n-placeholder="settings.currentPass"
+                            placeholder="目前密碼" />
+                    </label>
+                    <label class="settings-row" for="settings-new-pass">
+                        <span class="settings-label" data-i18n="settings.newPass">新密碼</span>
+                        <input id="settings-new-pass" class="settings-input" type="password"
+                            autocomplete="new-password" data-i18n-placeholder="settings.newPassPlaceholder"
+                            placeholder="留空表示不變更" />
+                    </label>
+                    <label class="settings-row" for="settings-new-pass-confirm">
+                        <span class="settings-label" data-i18n="settings.newPassConfirm">確認新密碼</span>
+                        <input id="settings-new-pass-confirm" class="settings-input" type="password"
+                            autocomplete="new-password" data-i18n-placeholder="settings.newPassConfirm"
+                            placeholder="再次輸入新密碼" />
+                    </label>
+
+                    <details class="settings-advanced">
+                        <summary class="settings-summary" data-i18n="settings.advanced">進階：Argon2id 參數</summary>
+                        <p class="settings-hint" data-i18n="settings.advancedHint">
+                            提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。
+                        </p>
+                        <div class="settings-kdf-grid">
+                            <label class="settings-label" for="settings-kdf-memory"
+                                data-i18n="lock.kdfMemory">記憶體 (MiB)</label>
+                            <input id="settings-kdf-memory" class="settings-input" type="number" step="1" min="8"
+                                max="1024" />
+                            <label class="settings-label" for="settings-kdf-iterations"
+                                data-i18n="lock.kdfIterations">迭代次數</label>
+                            <input id="settings-kdf-iterations" class="settings-input" type="number" step="1" min="1"
+                                max="16" />
+                            <label class="settings-label" for="settings-kdf-parallelism"
+                                data-i18n="lock.kdfParallelism">平行度</label>
+                            <input id="settings-kdf-parallelism" class="settings-input" type="number" step="1" min="1"
+                                max="16" />
+                        </div>
+                        <button id="settings-calibrate" class="btn-browse" type="button"
+                            data-i18n="settings.calibrate">自動量測（約 1 秒）</button>
+                        <p id="settings-calibrate-note" class="settings-hint"></p>
+                    </details>
+                </section>
+            </div>
+
+            <footer class="modal-foot">
+                <span id="settings-error" class="import-error"></span>
+                <button id="settings-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
+                <button id="settings-save" class="btn-primary" type="button" data-i18n="settings.save">儲存</button>
             </footer>
         </div>
     </div>
