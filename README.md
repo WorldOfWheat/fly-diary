@@ -16,6 +16,7 @@
 - **從資料夾匯入**：讀取 `YYYY-MM-DD.txt`，先掃描預覽再確認，並列出失敗的檔案
 - **收藏**：編輯區的星號按鈕可把日記加入收藏，側邊欄切到「收藏」頁只看收藏的日記
 - **繁體中文／英文介面**：右上角一鍵切換，日期格式也跟著語言改變
+- **淺色／深色主題**：解鎖畫面右上角的主題鈕三態循環（跟隨系統 → 淺色 → 深色），選擇存在 `localStorage`
 - 刪除單日記（有確認提示）
 - 使用**本地時區**判定「今天」，不會因 UTC 造成跨日錯亂
 
@@ -58,6 +59,25 @@
 
 要新增語言，只需在 `i18n.js` 加一份字典、把語言代碼加進 `LOCALES`，其餘程式不用動。
 
+## 主題
+
+介面有**淺色**與**深色**兩套配色，由解鎖畫面右上角（語言鈕左側）的主題鈕控制。按鈕是**三態循環**：
+
+- **跟隨系統**（半滿圓圖示）：依 `prefers-color-scheme` 決定，系統切換時即時跟著變
+- **淺色**（太陽圖示）：固定淺色，忽略系統設定
+- **深色**（月亮圖示）：固定深色，忽略系統設定
+
+選擇存在 `localStorage`（`fly-diary:theme`），下次啟動自動還原；沒有存過偏好時預設「跟隨系統」。
+
+實作上有幾個重點：
+
+- **`data-theme` 屬性而非單純 media query**：`main.js` 把解析後的結果寫到 `<html data-theme="light|dark">`，`styles.css` 用 `:root[data-theme="dark"]` 覆寫整組變數。這樣使用者選的「淺色」才能蓋過系統的深色偏好 —— 單靠 `@media (prefers-color-scheme)` 做不到。
+- **顏色全部走變數**：`styles.css` 裡沒有任何硬編碼色值（除了變數定義本身），29 處原本寫死的 `rgba()` / `#fff` 都改成語意變數，例如 `--hover`（「疊在底層上的淡色」）、`--on-accent`（「畫在強調色上的文字」）、`--overlay`（模態遮罩）。語意命名是關鍵：`--hover` 在淺色是 4% 黑、在深色是 6% 白，同一個名字在兩套主題都成立。
+- **`color-scheme`**：兩套主題各自宣告 `color-scheme: light` / `dark`，讓 WebView 的原生元件（捲軸、輸入框、`<details>` 箭頭）跟著換色，不會出現深色背景配淺色捲軸。
+- **深色主題的強調色調亮**：淺色的 `#4a7c59` 在深色背景上對比只有約 3:1，不足以當內文，因此深色改用 `#74b287`，並把 `--on-accent` 改成深色，讓主要按鈕上的文字仍然清楚。
+- **收藏高亮在深色下重新設計**：淺色的螢光黃在深色背景上會過亮、蓋過文字，深色版改成低飽和的暖褐底（`#453a1c`）配亮邊條，仍然一眼可辨但不搶戲。
+- **首次繪製前就套用**：`initTheme()` 在 `init()` 中與字級還原並列，早於任何畫面渲染，避免深色使用者看到一瞬間的淺色閃光。
+
 ## 加密設計
 
 ### 金鑰階層
@@ -78,17 +98,17 @@
 - **diary key**：隨機 32 bytes，真正用來加密日記。它被 master key 包裝後存進 `vault.xml`。
 - 這層間接讓「改密碼」或「升級 KDF 參數」只需要重新包裝 32 bytes，不必重新加密所有日記。
 
-| 項目         | 實作                                                                    |
-| ------------ | ----------------------------------------------------------------------- |
-| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                              |
-| 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時可調整          |
-| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                       |
-| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                               |
-| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                          |
-| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                           |
-| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                    |
-| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）     |
-| 金鑰生命週期 | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零         |
+| 項目         | 實作                                                                |
+| ------------ | ------------------------------------------------------------------- |
+| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                          |
+| 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時可調整      |
+| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                   |
+| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                           |
+| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                      |
+| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                       |
+| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                |
+| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證） |
+| 金鑰生命週期 | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零     |
 
 > ⚠️ **忘記密碼無法救回**：master key 由密碼派生且不落地，沒有後門或回復機制。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
@@ -259,29 +279,29 @@ fly-diary/
 
 ## Tauri Commands
 
-| Command                            | 說明                                         |
-| ---------------------------------- | -------------------------------------------- |
-| `get_settings()`                   | 讀取設定檔（是否已設定、日記路徑、預設路徑） |
-| `set_diary_dir(path)`              | 將日記路徑寫入設定檔（需先鎖定）             |
-| `pick_diary_dir()`                 | 開啟原生資料夾選擇器，回傳選擇的路徑         |
-| `vault_exists()`                   | 是否已建立 vault（判斷首次啟動）             |
-| `get_kdf_defaults()`               | 回傳 Argon2id 預設值與可調整範圍             |
-| `create_vault(passphrase, kdf?)`   | 建立 vault 並立即解鎖，可指定 KDF 參數       |
-| `unlock(passphrase)`               | 驗證密碼，將金鑰載入記憶體                   |
-| `lock()`                           | 清除記憶體中的金鑰                           |
-| `is_unlocked()`                    | 目前是否已解鎖                               |
-| `get_entry(date)`                  | 讀取並解密某天的日記，不存在回 `null`        |
-| `save_entry(date, title, content)` | 加密後寫入/覆寫某天的日記                    |
-| `delete_entry(date)`               | 刪除某天的日記                               |
-| `list_entries()`                   | 列出所有日記（新到舊，需解鎖才能取得標題）   |
-| `list_favourites()`                | 只列出收藏的日記（新到舊）                   |
-| `set_favourite(date, favourite)`   | 加入／取消收藏，回傳實際儲存的狀態           |
-| `rebuild_index()`                  | 丟棄 `index.xml` 並重新掃描所有日記重建索引  |
-| `pick_import_dir()`                | 開啟原生資料夾選擇器，回傳匯入來源路徑       |
-| `scan_import(importDir)`           | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入 |
-| `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告 |
-| `today()`                          | 回傳本地時區的今天日期                       |
-| `diary_path()`                     | 回傳日記資料夾絕對路徑                       |
+| Command                                   | 說明                                           |
+| ----------------------------------------- | ---------------------------------------------- |
+| `get_settings()`                          | 讀取設定檔（是否已設定、日記路徑、預設路徑）   |
+| `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（需先鎖定）               |
+| `pick_diary_dir()`                        | 開啟原生資料夾選擇器，回傳選擇的路徑           |
+| `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）               |
+| `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍               |
+| `create_vault(passphrase, kdf?)`          | 建立 vault 並立即解鎖，可指定 KDF 參數         |
+| `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體                     |
+| `lock()`                                  | 清除記憶體中的金鑰                             |
+| `is_unlocked()`                           | 目前是否已解鎖                                 |
+| `get_entry(date)`                         | 讀取並解密某天的日記，不存在回 `null`          |
+| `save_entry(date, title, content)`        | 加密後寫入/覆寫某天的日記                      |
+| `delete_entry(date)`                      | 刪除某天的日記                                 |
+| `list_entries()`                          | 列出所有日記（新到舊，需解鎖才能取得標題）     |
+| `list_favourites()`                       | 只列出收藏的日記（新到舊）                     |
+| `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態             |
+| `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引    |
+| `pick_import_dir()`                       | 開啟原生資料夾選擇器，回傳匯入來源路徑         |
+| `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入 |
+| `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告     |
+| `today()`                                 | 回傳本地時區的今天日期                         |
+| `diary_path()`                            | 回傳日記資料夾絕對路徑                         |
 
 ## 設計重點
 

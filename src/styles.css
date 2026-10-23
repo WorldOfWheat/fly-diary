@@ -26,7 +26,11 @@
    =========================================================================== */
 
 :root {
-  /* ---------- Palette ---------- */
+  /* ---------- Palette ----------
+     Every colour in this file goes through a variable so the whole app can be
+     re-themed by swapping this block. The tokens are semantic rather than
+     literal: `--hover` is "a faint wash over whatever is behind it", not
+     "4% black", which is what lets the dark theme invert it. */
   --bg: #f7f7f5;
   --panel: #ffffff;
   --sidebar-bg: #f0efec;
@@ -39,11 +43,99 @@
   --warn: #b8860b;
   --warn-text: #8a6508;
 
+  /* Text and marks drawn on top of `--accent`. */
+  --on-accent: #ffffff;
+
+  /* Interaction washes. These are translucent so they tint whatever surface
+     they sit on, which is why they work unchanged in both themes. */
+  --hover: rgba(0, 0, 0, 0.04);
+  --hover-strong: rgba(0, 0, 0, 0.06);
+  --pressed: rgba(0, 0, 0, 0.09);
+  --hover-faint: rgba(0, 0, 0, 0.03);
+
+  /* Tinted washes for the accent / warn / danger badges. */
+  --accent-wash: rgba(74, 124, 89, 0.12);
+  --accent-wash-strong: rgba(74, 124, 89, 0.1);
+  --warn-wash: rgba(184, 134, 11, 0.14);
+  --danger-wash: rgba(180, 84, 74, 0.12);
+
+  /* Elevation. Dark themes need heavier shadows to read as depth. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.08);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.2);
+
+  /* Scrim behind modal dialogs. */
+  --overlay: rgba(30, 29, 27, 0.32);
+
+  /* Scrollbar thumb. */
+  --scrollbar: rgba(0, 0, 0, 0.15);
+  --scrollbar-hover: rgba(0, 0, 0, 0.25);
+
   /* Favourite highlight: a bright, high-visibility wash used on bookmarked
      rows in the sidebar. */
   --favourite-bg: #fff3a8;
   --favourite-bg-hover: #ffe97a;
   --favourite-edge: #f0c419;
+
+  /* Lets the webview draw native widgets (scrollbars, form controls, the
+     `<details>` marker) in the matching scheme. */
+  color-scheme: light;
+}
+
+/* ---------- Dark theme ----------
+   Applied by `main.js` as `data-theme="dark"` on `<html>`. The attribute is
+   used instead of a bare `prefers-color-scheme` query because the user can
+   override the system setting from the lock screen.
+
+   The accent is lightened from #4a7c59: the light-theme green only reaches
+   about 3:1 against a dark background, which is too low for body text. */
+:root[data-theme="dark"] {
+  --bg: #1b1a18;
+  --panel: #262523;
+  --sidebar-bg: #201f1d;
+  --border: #3a3835;
+  --text: #e9e7e2;
+  --text-muted: #9c988f;
+  --accent: #74b287;
+  --accent-hover: #8cc49c;
+  --danger: #d97b70;
+  --warn: #d9a520;
+  --warn-text: #e0b545;
+
+  /* Dark text on the lightened accent keeps the primary button readable. */
+  --on-accent: #14201a;
+
+  --hover: rgba(255, 255, 255, 0.06);
+  --hover-strong: rgba(255, 255, 255, 0.09);
+  --pressed: rgba(255, 255, 255, 0.13);
+  --hover-faint: rgba(255, 255, 255, 0.04);
+
+  --accent-wash: rgba(116, 178, 135, 0.16);
+  --accent-wash-strong: rgba(116, 178, 135, 0.14);
+  --warn-wash: rgba(217, 165, 32, 0.18);
+  --danger-wash: rgba(217, 123, 112, 0.16);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.6),
+    0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.65);
+
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --scrollbar-hover: rgba(255, 255, 255, 0.28);
+
+  /* The light-theme neon yellow glows unpleasantly on a dark surface, so the
+     dark variant is a muted warm brown with a brighter edge bar. The bookmark
+     is still obvious, but it no longer outshines the text. */
+  --favourite-bg: #453a1c;
+  --favourite-bg-hover: #54461f;
+  --favourite-edge: #d9a520;
+
+  color-scheme: dark;
 
   /* ---------- Typography ---------- */
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
@@ -171,11 +263,11 @@ summary:focus-visible {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 0.5rem 2rem rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-md);
 }
 
-/* Title and language switch share a row. The switch is pinned to the right so
-   the title stays optically centred in the card. */
+/* Title and the two switches share a row. The switches are pinned to the right
+   so the title stays optically centred in the card. */
 .lock-head {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
@@ -191,10 +283,76 @@ summary:focus-visible {
   letter-spacing: 0.02em;
 }
 
-/* Language switch: a small pill showing the *other* language. */
-.lang-toggle {
+/* Theme and language switches, side by side in the right-hand column. */
+.lock-actions {
   grid-column: 3;
   justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Round icon button used for the theme switch. Only one of its three icons is
+   visible at a time, chosen by the `data-theme-mode` attribute that main.js
+   sets on the button itself. */
+.icon-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.icon-toggle:hover {
+  color: var(--accent);
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.icon-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon-toggle svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The "auto" icon is a half-filled circle, so its fill is a shape rather than
+   a stroke. */
+.icon-toggle .icon-auto-fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Exactly one icon shows, matching the current mode. */
+.icon-toggle .icon-sun,
+.icon-toggle .icon-moon,
+.icon-toggle .icon-auto {
+  display: none;
+}
+
+.icon-toggle[data-theme-mode="light"] .icon-sun,
+.icon-toggle[data-theme-mode="dark"] .icon-moon,
+.icon-toggle[data-theme-mode="system"] .icon-auto {
+  display: block;
+}
+
+/* Language switch: a small pill showing the *other* language. */
+.lang-toggle {
   min-width: 2.25rem;
   padding: 0.25rem 0.5rem;
   font-size: 0.6875rem;
@@ -400,7 +558,7 @@ summary:focus-visible {
 .view-tab.is-active {
   color: var(--text);
   background: var(--sidebar-bg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .search-wrap {
@@ -462,12 +620,12 @@ summary:focus-visible {
 }
 
 .entry-item:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--hover);
 }
 
 .entry-item.active {
   background: var(--panel);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .entry-item .entry-date {
@@ -512,7 +670,7 @@ summary:focus-visible {
 .entry-item.favourite.active {
   background: var(--panel);
   box-shadow: inset 0.1875rem 0 0 var(--favourite-edge),
-    0 1px 2px rgba(0, 0, 0, 0.06);
+    var(--shadow-sm);
 }
 
 .entry-item .entry-preview.empty {
@@ -617,11 +775,11 @@ summary:focus-visible {
 
 .date-step:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover-strong);
 }
 
 .date-step:active {
-  background: rgba(0, 0, 0, 0.09);
+  background: var(--pressed);
 }
 
 /* The visible pill. Clicking it opens our own calendar; the native input is
@@ -644,7 +802,7 @@ summary:focus-visible {
 }
 
 .date-label:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--hover);
   border-color: var(--border);
 }
 
@@ -686,7 +844,7 @@ summary:focus-visible {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 0.75rem 2rem rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-pop);
   animation: calendar-in 0.12s ease-out;
 }
 
@@ -736,7 +894,7 @@ summary:focus-visible {
 
 .cal-step:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover-strong);
 }
 
 .cal-title {
@@ -750,7 +908,7 @@ summary:focus-visible {
 }
 
 .cal-title:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--hover);
 }
 
 .cal-weekdays,
@@ -786,7 +944,7 @@ summary:focus-visible {
 }
 
 .cal-day:hover {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--hover-strong);
 }
 
 .cal-day:focus-visible {
@@ -807,7 +965,7 @@ summary:focus-visible {
 
 .cal-day.selected {
   font-weight: 600;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
 }
 
@@ -829,7 +987,7 @@ summary:focus-visible {
 }
 
 .cal-day.selected.has-entry::after {
-  background: #fff;
+  background: var(--on-accent);
 }
 
 .calendar-foot {
@@ -849,7 +1007,7 @@ summary:focus-visible {
 }
 
 .cal-today:hover {
-  background: rgba(74, 124, 89, 0.1);
+  background: var(--accent-wash-strong);
 }
 
 /* ---------- Editor body ---------- */
@@ -1026,7 +1184,7 @@ summary:focus-visible {
 .font-step:hover,
 .font-value:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--hover-strong);
 }
 
 .font-value {
@@ -1050,7 +1208,7 @@ summary:focus-visible {
   padding: 0.375rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 600;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
 }
 
@@ -1071,7 +1229,7 @@ summary:focus-visible {
 
 .btn-icon:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--hover-strong);
 }
 
 .btn-danger {
@@ -1101,7 +1259,7 @@ summary:focus-visible {
   align-items: center;
   justify-content: center;
   padding: 1.5rem;
-  background: rgba(30, 29, 27, 0.32);
+  background: var(--overlay);
   animation: overlay-in 0.12s ease-out;
 }
 
@@ -1128,7 +1286,7 @@ summary:focus-visible {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 1.25rem 3rem rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-modal);
 }
 
 .modal-head {
@@ -1157,7 +1315,7 @@ summary:focus-visible {
 
 .modal-close:hover {
   color: var(--text);
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--hover-strong);
 }
 
 .modal-body {
@@ -1265,7 +1423,7 @@ summary:focus-visible {
 }
 
 .import-row:hover {
-  background: rgba(0, 0, 0, 0.03);
+  background: var(--hover-faint);
 }
 
 .import-row .row-date {
@@ -1297,17 +1455,17 @@ summary:focus-visible {
 
 .import-row.ready .row-badge {
   color: var(--accent);
-  background: rgba(74, 124, 89, 0.12);
+  background: var(--accent-wash);
 }
 
 .import-row.conflict .row-badge {
   color: var(--warn-text);
-  background: rgba(184, 134, 11, 0.14);
+  background: var(--warn-wash);
 }
 
 .import-row.failed .row-badge {
   color: var(--danger);
-  background: rgba(180, 84, 74, 0.12);
+  background: var(--danger-wash);
 }
 
 .import-row.failed .row-title {
@@ -1400,12 +1558,12 @@ summary:focus-visible {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--scrollbar);
   border-radius: 0.25rem;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--scrollbar-hover);
 }
 
 /* ===========================================================================

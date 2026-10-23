@@ -128,6 +128,18 @@ const zhHant = {
   "lang.switch": "切換語言",
   "lang.switchTitle": "切換語言（目前：繁體中文）",
 
+  // --- Theme switch --------------------------------------------------------
+  // The button cycles system → light → dark, so the label describes what the
+  // *next* click will do.
+  "theme.toggle": "切換主題",
+  "theme.toggleTitle": "切換主題（目前：跟隨系統）",
+  "theme.system": "跟隨系統",
+  "theme.light": "淺色",
+  "theme.dark": "深色",
+  "theme.toggleTitle.system": "切換主題（目前：跟隨系統）",
+  "theme.toggleTitle.light": "切換主題（目前：淺色）",
+  "theme.toggleTitle.dark": "切換主題（目前：深色）",
+
   // --- Status --------------------------------------------------------------
   "status.loaded": "已載入",
   "status.newEntry": "新日記",
@@ -273,6 +285,16 @@ const en = {
   // --- Language switch -----------------------------------------------------
   "lang.switch": "Switch language",
   "lang.switchTitle": "Switch language (currently English)",
+
+  // --- Theme switch --------------------------------------------------------
+  "theme.toggle": "Switch theme",
+  "theme.toggleTitle": "Switch theme (currently: follow system)",
+  "theme.system": "Follow system",
+  "theme.light": "Light",
+  "theme.dark": "Dark",
+  "theme.toggleTitle.system": "Switch theme (currently: follow system)",
+  "theme.toggleTitle.light": "Switch theme (currently: light)",
+  "theme.toggleTitle.dark": "Switch theme (currently: dark)",
 
   // --- Status --------------------------------------------------------------
   "status.loaded": "Loaded",

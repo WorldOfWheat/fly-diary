@@ -67,6 +67,7 @@ const els = {
   lockScreen: $("lock-screen"),
   lockForm: $("lock-form"),
   langToggle: $("lang-toggle"),
+  themeToggle: $("theme-toggle"),
   lockSubtitle: $("lock-subtitle"),
   lockError: $("lock-error"),
   lockSubmit: $("lock-submit"),
@@ -824,6 +825,7 @@ function refreshForLocale() {
   renderWeekdayHeaders();
   renderDateLabel();
   renderFavouriteButton();
+  applyTheme();
   updateWordCount();
   if (isCalendarOpen()) renderCalendar();
   if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
@@ -845,6 +847,97 @@ function initLocaleSwitch() {
 
   // `i18n.js` has already re-translated the markup by the time this fires.
   onLocaleChange(() => refreshForLocale());
+}
+
+// ---------------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------------
+//
+// Three states, cycled by the lock-screen button:
+//
+//   "system" — follow `prefers-color-scheme`, and keep following it live
+//   "light"  — always light, whatever the OS says
+//   "dark"   — always dark
+//
+// The resolved theme is written to `<html data-theme="...">`, which is what the
+// `:root[data-theme="dark"]` block in `styles.css` keys off. The attribute is
+// used rather than a bare media query so an explicit choice can override the
+// system setting.
+
+const THEME_KEY = "fly-diary:theme";
+const THEME_MODES = ["system", "light", "dark"];
+
+/** One of `THEME_MODES`. */
+let themeMode = "system";
+
+/** The OS preference, kept current by the media-query listener. */
+const darkQuery =
+  typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-color-scheme: dark)")
+    : null;
+
+/** Which theme a mode resolves to right now. */
+function resolveTheme(mode) {
+  if (mode === "light" || mode === "dark") return mode;
+  return darkQuery?.matches ? "dark" : "light";
+}
+
+/** Paint the resolved theme and refresh the button's icon and tooltip. */
+function applyTheme() {
+  const resolved = resolveTheme(themeMode);
+  document.documentElement.dataset.theme = resolved;
+
+  if (!els.themeToggle) return;
+  els.themeToggle.dataset.themeMode = themeMode;
+  // `aria-pressed` is not meaningful for a three-state cycle, so the button
+  // reports its state through the label instead.
+  els.themeToggle.setAttribute("aria-label", t("theme.toggle"));
+  els.themeToggle.title = t(`theme.toggleTitle.${themeMode}`);
+}
+
+/** Advance to the next mode, persist it, and repaint. */
+function cycleTheme() {
+  const index = THEME_MODES.indexOf(themeMode);
+  themeMode = THEME_MODES[(index + 1) % THEME_MODES.length];
+  applyTheme();
+  try {
+    localStorage.setItem(THEME_KEY, themeMode);
+  } catch {
+    // Private mode or a locked-down webview: the choice just won't persist.
+  }
+}
+
+/** Restore the saved mode, defaulting to following the system. */
+function loadTheme() {
+  let stored = null;
+  try {
+    stored = localStorage.getItem(THEME_KEY);
+  } catch {
+    stored = null;
+  }
+  themeMode = THEME_MODES.includes(stored) ? stored : "system";
+  applyTheme();
+}
+
+/** Wire the toggle and the live system-preference listener. */
+function initTheme() {
+  loadTheme();
+
+  els.themeToggle?.addEventListener("click", cycleTheme);
+
+  // Only matters while the mode is "system", but listening unconditionally
+  // keeps the handler simple: `applyTheme` re-resolves from scratch.
+  const onSystemChange = () => {
+    if (themeMode === "system") applyTheme();
+  };
+  if (darkQuery) {
+    if (typeof darkQuery.addEventListener === "function") {
+      darkQuery.addEventListener("change", onSystemChange);
+    } else if (typeof darkQuery.addListener === "function") {
+      // Older WebKit builds only ship the deprecated API.
+      darkQuery.addListener(onSystemChange);
+    }
+  }
 }
 
 /** Entries currently passing the search filter, newest first. */
@@ -1726,6 +1819,10 @@ async function init() {
   // Restore the user's font size before anything is drawn, so the first paint
   // is already at the right scale.
   initFontScale();
+
+  // Same for the theme: resolve it before the first paint so the app never
+  // flashes light before switching to dark.
+  initTheme();
 
   // The bookmark button starts disabled: no entry is open yet.
   renderFavouriteButton();

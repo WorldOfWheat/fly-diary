@@ -14,11 +14,28 @@
         <form id="lock-form" class="lock-card" autocomplete="off">
             <div class="lock-head">
                 <h1 class="lock-title">Fly Diary</h1>
-                <!-- Language switch. Lives on the lock screen too, because a
-                     user who cannot read the setup form needs it before they
-                     can get any further. -->
-                <button id="lang-toggle" class="lang-toggle" type="button" data-i18n-title="lang.switchTitle"
-                    data-i18n-aria-label="lang.switch">EN</button>
+                <!-- Language and theme switches. Both live on the lock screen
+                     too, because a user who cannot read the setup form needs
+                     them before they can get any further. -->
+                <div class="lock-actions">
+                    <button id="theme-toggle" class="icon-toggle" type="button" data-theme-mode="system"
+                        data-i18n-title="theme.toggleTitle" data-i18n-aria-label="theme.toggle" title="切換主題">
+                        <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="4.2" />
+                            <path
+                                d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.4 5.4l1.6 1.6M17 17l1.6 1.6M18.6 5.4L17 7M7 17l-1.6 1.6" />
+                        </svg>
+                        <svg class="icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20.5 14.6A8.6 8.6 0 019.4 3.5a8.6 8.6 0 1011.1 11.1z" />
+                        </svg>
+                        <svg class="icon-auto" viewBox="0 0 24 24" aria-hidden="true">
+                            <circle cx="12" cy="12" r="8.2" />
+                            <path d="M12 3.8v16.4a8.2 8.2 0 000-16.4z" class="icon-auto-fill" />
+                        </svg>
+                    </button>
+                    <button id="lang-toggle" class="lang-toggle" type="button" data-i18n-title="lang.switchTitle"
+                        data-i18n-aria-label="lang.switch">EN</button>
+                </div>
             </div>
             <p id="lock-subtitle" class="lock-subtitle" data-i18n="lock.subtitle.unlock">請輸入密碼以解鎖日記</p>
 
@@ -61,7 +78,8 @@
 
             <p id="lock-error" class="lock-error"></p>
 
-            <button id="lock-submit" class="btn-primary lock-submit" type="submit" data-i18n="lock.submitUnlock">解鎖</button>
+            <button id="lock-submit" class="btn-primary lock-submit" type="submit"
+                data-i18n="lock.submitUnlock">解鎖</button>
         </form>
     </div>
 
@@ -77,8 +95,7 @@
             <!-- View switch: the same list, filtered to favourites or not.
                  Both views share the virtual scroller, so switching is just a
                  re-filter rather than a second list to keep in sync. -->
-            <div class="view-switch" role="tablist" data-i18n-aria-label="sidebar.viewFavouritesTitle"
-                aria-label="收藏">
+            <div class="view-switch" role="tablist" data-i18n-aria-label="sidebar.viewFavouritesTitle" aria-label="收藏">
                 <button id="view-all" class="view-tab is-active" type="button" role="tab" aria-selected="true"
                     data-i18n="sidebar.viewAll" data-i18n-title="sidebar.viewAllTitle" title="顯示所有日記">全部</button>
                 <button id="view-favourites" class="view-tab" type="button" role="tab" aria-selected="false"
@@ -99,8 +116,8 @@
             </div>
             <footer class="sidebar-footer">
                 <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
-                <button id="import-btn" class="btn-lock" data-i18n="sidebar.import" data-i18n-title="sidebar.importTitle"
-                    title="從資料夾匯入日記">匯入</button>
+                <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
+                    data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
                 <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
                     data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
                 <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
@@ -153,7 +170,8 @@
                             <div id="cal-weekdays" class="cal-weekdays" aria-hidden="true"></div>
                             <div id="cal-grid" class="cal-grid" role="grid"></div>
                             <div class="calendar-foot">
-                                <button id="cal-today" class="cal-today" type="button" data-i18n="common.today">今天</button>
+                                <button id="cal-today" class="cal-today" type="button"
+                                    data-i18n="common.today">今天</button>
                             </div>
                         </div>
                     </div>

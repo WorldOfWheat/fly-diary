@@ -10,3 +10,5 @@ node_modules
 # Editor / OS
 .DS_Store
 *.log
+
+standalone
