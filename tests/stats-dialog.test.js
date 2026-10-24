@@ -13,6 +13,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createStatsDialog } from "../src/stats-dialog.js";
+import { shiftDate, toISODate } from "../src/lib/dates.js";
 import { installDom, fakeEls, fakeT, spy } from "./helpers/dom.js";
 
 const STATS_IDS = [
@@ -118,6 +119,15 @@ test("renderStats fills the total and favourite counts", () => {
 });
 
 test("renderStats reports the current and longest streaks", () => {
+  // The streak maths reads the real clock, so build the fixture relative to
+  // today instead of relying on the date the suite happens to run on.
+  const today = toISODate(new Date());
+  const entries = [
+    { date: today, favourite: true },
+    { date: shiftDate(today, -1), favourite: false },
+    { date: shiftDate(today, -2), favourite: false },
+  ];
+
   withStats(
     ({ stats, els }) => {
       stats.renderStats();
@@ -126,7 +136,7 @@ test("renderStats reports the current and longest streaks", () => {
       assert.equal(els.statsStreak.textContent, "stats.days(n=3)");
       assert.equal(els.statsLongest.textContent, "stats.days(n=3)");
     },
-    { getEntries: () => ENTRIES }
+    { getEntries: () => entries }
   );
 });
 

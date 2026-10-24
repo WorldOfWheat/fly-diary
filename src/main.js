@@ -751,6 +751,48 @@ async function refreshBroken(announce = false) {
   }
 }
 
+/**
+ * Rewrite every entry that predates the current on-disk format.
+ *
+ * Called right after unlocking and deliberately not awaited by the caller: the
+ * diary is already usable, and a large vault would otherwise keep the user
+ * waiting. The backend reports progress through `upgrade-progress` events, which
+ * are shown in the status bar; the final report is summarised once the run ends.
+ *
+ * Failures are *not* added to the broken list: an entry that could not be
+ * upgraded is still perfectly readable in its old format, so it is not broken.
+ */
+async function upgradeEntries() {
+  let unlisten = null;
+  try {
+    unlisten = await listen("upgrade-progress", (event) => {
+      const { done, total } = event.payload ?? {};
+      if (typeof done === "number" && typeof total === "number") {
+        setStatus(t("upgrade.progress", { done, total }));
+      }
+    });
+  } catch (err) {
+    // Progress is cosmetic; the upgrade still works without it.
+    console.warn("upgrade-progress listener failed:", err);
+  }
+
+  try {
+    const report = await invoke("upgrade_entries");
+    const upgraded = report?.upgraded?.length ?? 0;
+    const failed = report?.failed?.length ?? 0;
+    if (failed > 0) {
+      setStatus(t("upgrade.partial", { upgraded, failed }));
+    } else if (upgraded > 0) {
+      setStatus(t("upgrade.done", { n: upgraded }), true);
+    }
+  } catch (err) {
+    console.error("upgrade_entries failed:", err);
+    setStatus(t("upgrade.failed", { message: String(err) }));
+  } finally {
+    if (typeof unlisten === "function") unlisten();
+  }
+}
+
 async function refreshList() {
   // Titles are encrypted, so listing only works while unlocked. Never leave
   // stale titles on screen after the key has been dropped.
@@ -1281,6 +1323,7 @@ function createControllers() {
     t,
     setAutoLockMinutes,
     enterApp,
+    upgradeEntries,
     resetAutoLockTimer,
     stopAutoLockTimer,
     refreshList,

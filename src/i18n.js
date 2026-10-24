@@ -143,24 +143,34 @@ const zhHant = {
 
   // --- Broken entries ------------------------------------------------------
   "broken.bannerTitle": "這個檔案無法解密",
-  "broken.bannerBody": "檔案已鎖定，不會被覆寫。你可以先匯出備份，再決定是否刪除。",
+  "broken.bannerBody":
+    "檔案已鎖定，不會被覆寫。你可以先匯出備份，再決定是否刪除。",
   "broken.export": "匯出備份",
   "broken.exportTitle": "把原始檔案另存一份",
   "broken.delete": "刪除檔案",
   "broken.deleteTitle": "永久刪除這個檔案",
-  "broken.reason.decrypt_failed": "解密失敗：檔案可能被搬動或改名，也可能已損壞。",
+  "broken.reason.decrypt_failed":
+    "解密失敗：檔案可能被搬動或改名，也可能已損壞。",
   "broken.reason.malformed_xml": "檔案格式錯誤，不是有效的日記檔。",
   "broken.reason.bad_encoding": "檔案的編碼欄位無法解析。",
   "broken.reason.unreadable": "無法讀取檔案，請檢查權限。",
   "broken.notify": "有 {n} 個日記檔無法解密，已列在「損壞」分類。",
   "broken.exported": "已匯出到 {path}",
   "broken.exportFailed": "匯出失敗：{message}",
-  "broken.deleteConfirm": "確定要永久刪除 {date} 的損壞檔案嗎？這個動作無法復原。",
-  "broken.deleteConfirmAfterExport": "備份已匯出。要現在刪除 {date} 的損壞檔案嗎？",
+  "broken.deleteConfirm":
+    "確定要永久刪除 {date} 的損壞檔案嗎？這個動作無法復原。",
+  "broken.deleteConfirmAfterExport":
+    "備份已匯出。要現在刪除 {date} 的損壞檔案嗎？",
   "broken.deleted": "已刪除損壞的檔案",
   "broken.deleteFailed": "刪除失敗：{message}",
   "broken.lockedStatus": "此檔案無法解密，已鎖定",
   "broken.size": "{size}",
+
+  // --- Format upgrade ------------------------------------------------------
+  "upgrade.progress": "正在升級日記格式… {done}/{total}",
+  "upgrade.done": "已升級 {n} 篇日記的格式",
+  "upgrade.partial": "已升級 {upgraded} 篇，{failed} 篇失敗（原檔未更動）",
+  "upgrade.failed": "升級日記格式失敗：{message}",
 
   // --- Statistics ----------------------------------------------------------
   "stats.title": "統計",
@@ -388,24 +398,38 @@ const en = {
 
   // --- Broken entries ------------------------------------------------------
   "broken.bannerTitle": "This file cannot be decrypted",
-  "broken.bannerBody": "The file is locked and will not be overwritten. Export a backup first, then decide whether to delete it.",
+  "broken.bannerBody":
+    "The file is locked and will not be overwritten. Export a backup first, then decide whether to delete it.",
   "broken.export": "Export backup",
   "broken.exportTitle": "Save a copy of the original file",
   "broken.delete": "Delete file",
   "broken.deleteTitle": "Permanently delete this file",
-  "broken.reason.decrypt_failed": "Decryption failed: the file may have been moved or renamed, or it is damaged.",
-  "broken.reason.malformed_xml": "Malformed file: this is not a valid entry document.",
+  "broken.reason.decrypt_failed":
+    "Decryption failed: the file may have been moved or renamed, or it is damaged.",
+  "broken.reason.malformed_xml":
+    "Malformed file: this is not a valid entry document.",
   "broken.reason.bad_encoding": "The file's encoding fields cannot be parsed.",
-  "broken.reason.unreadable": "The file could not be read. Check its permissions.",
-  "broken.notify": "{n} entry file(s) could not be decrypted and are listed under \"Broken\".",
+  "broken.reason.unreadable":
+    "The file could not be read. Check its permissions.",
+  "broken.notify":
+    '{n} entry file(s) could not be decrypted and are listed under "Broken".',
   "broken.exported": "Exported to {path}",
   "broken.exportFailed": "Export failed: {message}",
-  "broken.deleteConfirm": "Permanently delete the broken file for {date}? This cannot be undone.",
-  "broken.deleteConfirmAfterExport": "The backup was exported. Delete the broken file for {date} now?",
+  "broken.deleteConfirm":
+    "Permanently delete the broken file for {date}? This cannot be undone.",
+  "broken.deleteConfirmAfterExport":
+    "The backup was exported. Delete the broken file for {date} now?",
   "broken.deleted": "Broken file deleted",
   "broken.deleteFailed": "Delete failed: {message}",
   "broken.lockedStatus": "This file cannot be decrypted and is locked",
   "broken.size": "{size}",
+
+  // --- Format upgrade ------------------------------------------------------
+  "upgrade.progress": "Upgrading diary format… {done}/{total}",
+  "upgrade.done": "Upgraded {n} entr(y/ies) to the current format",
+  "upgrade.partial":
+    "Upgraded {upgraded}, {failed} failed (original files untouched)",
+  "upgrade.failed": "Format upgrade failed: {message}",
 
   // --- Statistics ----------------------------------------------------------
   "stats.title": "Statistics",

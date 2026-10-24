@@ -31,6 +31,7 @@
 //   t                  — (key: string, params?: object) => string
 //   setAutoLockMinutes — (minutes: number) => void
 //   enterApp           — () => Promise<void>
+//   upgradeEntries     — () => Promise<void>
 //   resetAutoLockTimer — () => void
 //   stopAutoLockTimer  — () => void
 //   refreshList        — () => Promise<void>
@@ -223,6 +224,14 @@ export function createLockScreen(deps) {
 
     const today = await deps.invoke("today");
     await deps.selectDate(today);
+
+    // Rewrite any entry that predates the current on-disk format. Deliberately
+    // not awaited: the diary is already usable, and a large vault would
+    // otherwise keep the user staring at the editor for seconds. The run is
+    // idempotent, so an interrupted one simply resumes on the next unlock.
+    // Optional so that a host which does not care about upgrades (and the
+    // tests) can leave it out.
+    deps.upgradeEntries?.();
   }
 
   /** Re-read the settings file and refresh the lock screen state. */

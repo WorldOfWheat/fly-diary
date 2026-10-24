@@ -1506,6 +1506,267 @@ pub fn import_entries(
     import_entries_with_progress(dir, key, import_dir, dates, overwrite, |_, _| {})
 }
 
+// ---------------------------------------------------------------------------
+// Format upgrade
+// ---------------------------------------------------------------------------
+//
+// Entries written before version 3 are not AAD-bound: their ciphertext can be
+// copied to another day and will decrypt there, silently showing the wrong
+// entry. New writes always produce version 3, so an entry is upgraded the first
+// time the user saves it — but an entry that is never opened again would stay
+// unprotected forever.
+//
+// [`upgrade_entries_with_progress`] closes that gap: it walks the directory and
+// rewrites every outdated entry in the current format. It runs in the
+// background right after unlocking, so the user never waits for it.
+//
+// Three properties make it safe to run unattended:
+//
+// 1. **Idempotent** — an entry that is already version 3 is skipped, so a run
+//    that was interrupted simply resumes on the next unlock.
+// 2. **Atomic** — the new document is written to a temporary file and then
+//    renamed over the original. A crash leaves either the old file or the new
+//    one, never a half-written one.
+// 3. **Race-free** — the file's mtime is re-checked just before the rename. If
+//    the user saved that entry while it was being upgraded, the upgrade is
+//    abandoned for that day instead of overwriting the fresh content.
+
+/// One entry that could not be upgraded, and why.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpgradeFailure {
+    /// Date derived from the filename.
+    pub date: String,
+    /// Human-readable reason, shown in the status bar.
+    pub reason: String,
+}
+
+/// What an upgrade run did.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct UpgradeReport {
+    /// Dates that were rewritten in the current format.
+    pub upgraded: Vec<String>,
+    /// Dates that were already current, or that changed under us.
+    pub skipped: Vec<String>,
+    /// Dates that could not be upgraded. These files are left untouched.
+    pub failed: Vec<UpgradeFailure>,
+}
+
+impl UpgradeReport {
+    /// Total number of entries the run looked at.
+    pub fn total(&self) -> usize {
+        self.upgraded.len() + self.skipped.len() + self.failed.len()
+    }
+}
+
+/// Outcome of upgrading a single entry.
+enum UpgradeOutcome {
+    Upgraded(String),
+    Skipped(String),
+    Failed(UpgradeFailure),
+}
+
+/// List the dates whose entry files are still in an older format.
+///
+/// This is the read-only half of the upgrade: it decrypts each entry to prove
+/// it is readable, but writes nothing. Broken files are left out entirely —
+/// they cannot be decrypted, so rewriting them would destroy the bytes the user
+/// might still want to rescue.
+pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, String> {
+    ensure_dir(dir)?;
+    let mut outdated = Vec::new();
+
+    let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
+    for item in read_dir {
+        let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
+        let path = item.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("xml") {
+            continue;
+        }
+        let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if validate_date(date).is_err() {
+            continue;
+        }
+
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(encrypted) = xml::from_xml(&text) else {
+            continue;
+        };
+        if encrypted.is_aad_bound() {
+            continue;
+        }
+        // Only plan an upgrade for entries we can actually read. A file that
+        // fails here is broken, and broken files are never rewritten.
+        let Ok(iv) = crypto::b64_decode(&encrypted.iv) else {
+            continue;
+        };
+        let Ok(ct) = crypto::b64_decode(&encrypted.payload) else {
+            continue;
+        };
+        if decrypt_entry_payload(key, date, &encrypted, &iv, &ct).is_err() {
+            continue;
+        }
+        outdated.push(date.to_string());
+    }
+
+    outdated.sort();
+    Ok(outdated)
+}
+
+/// Rewrite a single entry in the current format.
+///
+/// Returns [`UpgradeOutcome::Skipped`] when the entry is already current or when
+/// its mtime changed while we were working (the user saved it concurrently).
+fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
+    let fail = |reason: String| UpgradeOutcome::Failed(UpgradeFailure {
+        date: date.to_string(),
+        reason,
+    });
+
+    let path = match entry_path(dir, date) {
+        Ok(path) => path,
+        Err(e) => return fail(e),
+    };
+
+    // Snapshot the mtime before reading, so a concurrent save is detectable.
+    let before = match fs::metadata(&path).and_then(|m| m.modified()) {
+        Ok(mtime) => mtime,
+        Err(e) => return fail(format!("Failed to stat entry {date}: {e}")),
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) => return fail(format!("Failed to read entry {date}: {e}")),
+    };
+    let encrypted = match xml::from_xml(&text) {
+        Ok(encrypted) => encrypted,
+        Err(e) => return fail(format!("Failed to parse entry {date}: {e}")),
+    };
+    if encrypted.is_aad_bound() {
+        return UpgradeOutcome::Skipped(date.to_string());
+    }
+
+    let iv = match crypto::b64_decode(&encrypted.iv) {
+        Ok(iv) => iv,
+        Err(e) => return fail(format!("Failed to decode IV for {date}: {e}")),
+    };
+    let ct = match crypto::b64_decode(&encrypted.payload) {
+        Ok(ct) => ct,
+        Err(e) => return fail(format!("Failed to decode payload for {date}: {e}")),
+    };
+    let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct) {
+        Ok(plain) => plain,
+        Err(e) => return fail(format!("Failed to decrypt entry {date}: {e}")),
+    };
+
+    // Version 1 kept the title in the clear and encrypted the body alone, so the
+    // decrypted bytes are just the content. Fold the cleartext title into the
+    // payload now, otherwise the rewrite would silently drop it.
+    let plain = if encrypted.version < 2 {
+        let title = encrypted.legacy_title.as_deref().unwrap_or_default();
+        pack(title, &String::from_utf8_lossy(&plain), false)
+    } else {
+        plain
+    };
+
+    // Re-encrypt with the date as AAD, then read it straight back. The round
+    // trip is what makes an unattended upgrade trustworthy: if the new
+    // ciphertext does not decrypt to the exact same bytes, we refuse to write.
+    let (new_iv, new_ct) = match crypto::encrypt_with_aad(key, date.as_bytes(), &plain) {
+        Ok(pair) => pair,
+        Err(e) => return fail(format!("Failed to encrypt entry {date}: {e}")),
+    };
+    match crypto::decrypt_with_aad(key, date.as_bytes(), &new_iv, &new_ct) {
+        Ok(check) if check == plain => {}
+        Ok(_) => return fail(format!("Round-trip check failed for entry {date}")),
+        Err(e) => return fail(format!("Round-trip check failed for entry {date}: {e}")),
+    }
+
+    let rewritten = EncryptedEntry::new(
+        date,
+        crypto::b64_encode(&new_iv),
+        crypto::b64_encode(&new_ct),
+    );
+    let document = match xml::to_xml(&rewritten) {
+        Ok(document) => document,
+        Err(e) => return fail(format!("Failed to serialise entry {date}: {e}")),
+    };
+
+    // Write beside the original, then rename. `rename` is atomic on POSIX, so a
+    // crash leaves either the old file or the new one — never a truncated one.
+    let tmp_path = path.with_extension("xml.upgrade");
+    if let Err(e) = fsutil::write_private(&tmp_path, document) {
+        let _ = fs::remove_file(&tmp_path);
+        return fail(format!("Failed to write entry {date}: {e}"));
+    }
+
+    // The user may have saved this entry while we were encrypting it. Their
+    // content wins: drop our copy and let the next run pick it up.
+    let after = fs::metadata(&path).and_then(|m| m.modified());
+    match after {
+        Ok(after) if after == before => {}
+        Ok(_) => {
+            let _ = fs::remove_file(&tmp_path);
+            return UpgradeOutcome::Skipped(date.to_string());
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&tmp_path);
+            return fail(format!("Failed to stat entry {date}: {e}"));
+        }
+    }
+
+    if let Err(e) = fs::rename(&tmp_path, &path) {
+        let _ = fs::remove_file(&tmp_path);
+        return fail(format!("Failed to replace entry {date}: {e}"));
+    }
+
+    UpgradeOutcome::Upgraded(date.to_string())
+}
+
+/// Rewrite every outdated entry in the current format.
+///
+/// `progress` is called after each entry with `(done, total)`, where `total` is
+/// the number of entries that needed upgrading. It runs on the calling thread,
+/// so the caller is responsible for keeping it cheap.
+///
+/// The index is not touched: upgrading changes the ciphertext but not the title
+/// or the favourite flag, so the cached index stays correct.
+pub fn upgrade_entries_with_progress<F>(
+    dir: &Path,
+    key: &[u8; 32],
+    progress: F,
+) -> Result<UpgradeReport, String>
+where
+    F: Fn(usize, usize),
+{
+    let plan = scan_upgrade_plan(dir, key)?;
+    let total = plan.len();
+    let mut report = UpgradeReport::default();
+
+    for (index, date) in plan.iter().enumerate() {
+        match upgrade_one(dir, key, date) {
+            UpgradeOutcome::Upgraded(date) => report.upgraded.push(date),
+            UpgradeOutcome::Skipped(date) => report.skipped.push(date),
+            UpgradeOutcome::Failed(failure) => report.failed.push(failure),
+        }
+        progress(index + 1, total);
+    }
+
+    Ok(report)
+}
+
+/// Upgrade without progress reporting.
+///
+/// Convenience wrapper around [`upgrade_entries_with_progress`]; the app itself
+/// uses the progress-reporting variant so the status bar can show a counter.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn upgrade_entries(dir: &Path, key: &[u8; 32]) -> Result<UpgradeReport, String> {
+    upgrade_entries_with_progress(dir, key, |_, _| {})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3022,5 +3283,202 @@ mod tests {
         delete_entry(&dir, &key, "2026-10-23").unwrap();
 
         assert!(list_broken_entries(&dir, &key).unwrap().is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Format upgrade
+    // -----------------------------------------------------------------------
+
+    /// Write a version 2 entry: no favourite flag, no AAD.
+    fn write_v2_entry(dir: &Path, key: &[u8; 32], date: &str, title: &str, content: &str) {
+        let plain = format!("{title}\n{content}");
+        let (iv, ct) = crypto::encrypt(key, plain.as_bytes()).unwrap();
+        let entry = EncryptedEntry::new(
+            date,
+            crypto::b64_encode(&iv),
+            crypto::b64_encode(&ct),
+        )
+        .with_version(2);
+        fs::write(dir.join(format!("{date}.xml")), xml::to_xml(&entry).unwrap()).unwrap();
+    }
+
+    /// Write a version 1 entry: cleartext title, encrypted body only.
+    fn write_v1_entry(dir: &Path, key: &[u8; 32], date: &str, title: &str, content: &str) {
+        let (iv, ct) = crypto::encrypt(key, content.as_bytes()).unwrap();
+        let document = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <diary version=\"1\">\n\
+             <title>{title}</title>\n\
+             <date>{date}</date>\n\
+             <iv>{}</iv>\n\
+             <content>{}</content>\n\
+             </diary>",
+            crypto::b64_encode(&iv),
+            crypto::b64_encode(&ct)
+        );
+        fs::write(dir.join(format!("{date}.xml")), document).unwrap();
+    }
+
+    #[test]
+    fn a_healthy_vault_has_nothing_to_upgrade() {
+        let dir = temp_dir("upgrade-none");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+
+        assert!(scan_upgrade_plan(&dir, &key).unwrap().is_empty());
+        let report = upgrade_entries(&dir, &key).unwrap();
+        assert!(report.upgraded.is_empty());
+        assert_eq!(report.total(), 0);
+    }
+
+    #[test]
+    fn a_version_2_entry_is_upgraded_and_still_reads_back() {
+        let dir = temp_dir("upgrade-v2");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-23", "舊標題", "舊內容");
+
+        assert_eq!(scan_upgrade_plan(&dir, &key).unwrap(), vec!["2026-10-23"]);
+
+        let report = upgrade_entries(&dir, &key).unwrap();
+        assert_eq!(report.upgraded, vec!["2026-10-23"]);
+        assert!(report.failed.is_empty());
+
+        // The file now declares version 3 and is AAD-bound.
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        assert!(raw.contains("version=\"3\""), "got: {raw}");
+        assert!(xml::from_xml(&raw).unwrap().is_aad_bound());
+
+        // Content survived the rewrite.
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "舊標題");
+        assert_eq!(entry.content, "舊內容");
+        assert!(!entry.favourite);
+    }
+
+    #[test]
+    fn a_version_1_entry_keeps_its_cleartext_title() {
+        let dir = temp_dir("upgrade-v1");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v1_entry(&dir, &key, "2026-10-23", "明文標題", "legacy body");
+
+        let report = upgrade_entries(&dir, &key).unwrap();
+        assert_eq!(report.upgraded, vec!["2026-10-23"]);
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "明文標題");
+        assert_eq!(entry.content, "legacy body");
+
+        // The title is no longer in the clear.
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        assert!(!raw.contains("明文標題"), "title leaked: {raw}");
+    }
+
+    #[test]
+    fn upgrading_is_idempotent() {
+        let dir = temp_dir("upgrade-idempotent");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-23", "t", "c");
+
+        assert_eq!(upgrade_entries(&dir, &key).unwrap().upgraded.len(), 1);
+        let second = upgrade_entries(&dir, &key).unwrap();
+        assert!(second.upgraded.is_empty());
+        assert_eq!(second.total(), 0);
+    }
+
+    #[test]
+    fn upgrading_skips_broken_files_and_leaves_them_untouched() {
+        let dir = temp_dir("upgrade-broken");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-23", "t", "c");
+        let junk = "<diary version=\"9\"><unknown/></diary>";
+        fs::write(dir.join("2026-10-22.xml"), junk).unwrap();
+
+        // The broken file is not even planned.
+        assert_eq!(scan_upgrade_plan(&dir, &key).unwrap(), vec!["2026-10-23"]);
+
+        let report = upgrade_entries(&dir, &key).unwrap();
+        assert_eq!(report.upgraded, vec!["2026-10-23"]);
+        assert!(report.failed.is_empty());
+
+        // Byte-for-byte untouched, so it can still be rescued.
+        assert_eq!(
+            fs::read_to_string(dir.join("2026-10-22.xml")).unwrap(),
+            junk
+        );
+    }
+
+    #[test]
+    fn upgrading_reports_progress_for_every_entry() {
+        let dir = temp_dir("upgrade-progress");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-21", "a", "1");
+        write_v2_entry(&dir, &key, "2026-10-22", "b", "2");
+        write_v2_entry(&dir, &key, "2026-10-23", "c", "3");
+
+        let seen = std::sync::Mutex::new(Vec::new());
+        let report = upgrade_entries_with_progress(&dir, &key, |done, total| {
+            seen.lock().unwrap().push((done, total));
+        })
+        .unwrap();
+
+        assert_eq!(report.upgraded.len(), 3);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(1, 3), (2, 3), (3, 3)],
+            "progress should count up to the total"
+        );
+    }
+
+    #[test]
+    fn an_upgraded_entry_can_no_longer_be_relocated() {
+        let dir = temp_dir("upgrade-aad");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-23", "t", "secret");
+
+        // Before the upgrade a copy decrypts under the new date: that is the
+        // hole AAD closes.
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
+        assert!(read_entry(&dir, &key, "2026-10-24").unwrap().is_some());
+        fs::remove_file(dir.join("2026-10-24.xml")).unwrap();
+
+        upgrade_entries(&dir, &key).unwrap();
+
+        // After the upgrade the same copy fails to decrypt.
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
+        assert!(read_entry(&dir, &key, "2026-10-24").is_err());
+    }
+
+    #[test]
+    fn upgrading_does_not_disturb_the_index() {
+        let dir = temp_dir("upgrade-index");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-23", "標題", "內容");
+        // Seed the index from the version 2 file.
+        let before = list_entries(&dir, &key).unwrap();
+        assert_eq!(before.len(), 1);
+
+        upgrade_entries(&dir, &key).unwrap();
+
+        let after = list_entries(&dir, &key).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].date, "2026-10-23");
+        assert_eq!(after[0].title, "標題");
+    }
+
+    #[test]
+    fn upgrading_leaves_no_temporary_files_behind() {
+        let dir = temp_dir("upgrade-tmp");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v2_entry(&dir, &key, "2026-10-23", "t", "c");
+
+        upgrade_entries(&dir, &key).unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains("upgrade"))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
     }
 }

@@ -610,6 +610,50 @@ async fn run_import(
     .map_err(|e| format!("Import task failed: {e}"))?
 }
 
+/// Rewrite every entry that predates the current on-disk format.
+///
+/// Entries written before version 3 are not bound to their date through AES-GCM
+/// associated data, so their ciphertext can be copied to another day and will
+/// decrypt there. New writes always produce version 3, which means an entry is
+/// upgraded the first time it is saved — but an entry that is never opened
+/// again would stay unprotected forever.
+///
+/// This command closes that gap. The frontend calls it right after unlocking and
+/// deliberately does not await it, so the diary is usable immediately. The work
+/// runs on `spawn_blocking` because a few thousand entries would otherwise
+/// freeze the webview, and progress is reported as `upgrade-progress` events
+/// carrying `{ done, total }`.
+///
+/// The run is idempotent and safe to interrupt: already-current entries are
+/// skipped, each file is replaced atomically, and an entry the user saves while
+/// it is being upgraded is left alone. Broken files are never touched.
+#[tauri::command]
+async fn upgrade_entries(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<storage::UpgradeReport, String> {
+    let dir = diary_dir(&app)?;
+
+    // Copy the key out so the session lock is not held for the whole run. The
+    // copy stays valid even if the diary is locked mid-upgrade; the run simply
+    // finishes on its own copy.
+    let key = {
+        let guard = session.lock().unwrap();
+        *guard.key()?
+    };
+
+    let emitter = app.clone();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        storage::upgrade_entries_with_progress(&dir, &key, |done, total| {
+            use tauri::Emitter;
+            let _ = emitter.emit("upgrade-progress", (done, total));
+        })
+    })
+    .await
+    .map_err(|e| format!("Upgrade task failed: {e}"))?
+}
+
 /// Today's date in the user's local timezone, formatted as `YYYY-MM-DD`.
 #[tauri::command]
 fn today() -> String {
@@ -846,6 +890,7 @@ pub fn run() {
             pick_import_dir,
             scan_import,
             run_import,
+            upgrade_entries,
             today,
             diary_path
         ])
