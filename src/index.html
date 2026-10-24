@@ -133,24 +133,6 @@
                     <ul id="entry-list" class="entry-list"></ul>
                 </div>
             </div>
-            <!-- Two rows: the storage path gets its own full-width line above
-                 the action buttons, so long paths are readable instead of
-                 being squeezed between the buttons. -->
-            <footer class="sidebar-footer">
-                <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
-                <div class="footer-actions">
-                    <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
-                        data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
-                    <button id="stats-btn" class="btn-lock" data-i18n="sidebar.stats"
-                        data-i18n-title="sidebar.statsTitle" title="查看統計">統計</button>
-                    <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
-                        data-i18n-title="sidebar.settingsTitle" title="設定">設定</button>
-                    <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
-                        data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
-                    <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
-                        title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
-                </div>
-            </footer>
         </aside>
 
         <main class="editor">
@@ -225,9 +207,26 @@
                     spellcheck="false"></textarea>
             </div>
 
+            <!-- One footer for the whole app: the live word count, the storage
+                 path, the sidebar actions (which used to sit in a second footer
+                 at the bottom of the sidebar) and the font control. The path is
+                 the only flexible item, so a long one truncates instead of
+                 pushing the buttons off the edge. -->
             <footer class="editor-footer">
                 <span id="word-count" class="word-count"></span>
-                <span class="hint" data-i18n="editor.hint">Markdown 格式 · AES-256-GCM 加密 · 自動儲存</span>
+                <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
+                <div class="footer-actions">
+                    <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
+                        data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
+                    <button id="stats-btn" class="btn-lock" data-i18n="sidebar.stats"
+                        data-i18n-title="sidebar.statsTitle" title="查看統計">統計</button>
+                    <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
+                        data-i18n-title="sidebar.settingsTitle" title="開啟設定">設定</button>
+                    <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
+                        data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
+                    <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
+                        title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
+                </div>
                 <!-- Font size control. The whole UI is sized in rem, so changing
                      the root font size scales everything at once. -->
                 <div class="font-size" role="group" data-i18n-aria-label="font.group" aria-label="字體大小">

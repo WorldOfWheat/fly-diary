@@ -205,7 +205,6 @@ const zhHant = {
   "editor.unfavouriteTitle": "取消收藏 (Ctrl/Cmd+D)",
   "editor.titlePlaceholder": "標題",
   "editor.contentPlaceholder": "今天過得如何？",
-  "editor.hint": "Markdown 格式 · AES-256-GCM 加密 · 自動儲存",
   "editor.wordCount": "{chars} 字 · {lines} 行",
 
   // --- Font size -----------------------------------------------------------
@@ -464,7 +463,6 @@ const en = {
   "editor.unfavouriteTitle": "Remove from favourites (Ctrl/Cmd+D)",
   "editor.titlePlaceholder": "Title",
   "editor.contentPlaceholder": "How was your day?",
-  "editor.hint": "Markdown · AES-256-GCM encrypted · Autosaved",
   "editor.wordCount": "{chars} words · {lines} lines",
 
   // --- Font size -----------------------------------------------------------
