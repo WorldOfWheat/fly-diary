@@ -1,6 +1,7 @@
 // `crypto` and `storage` are public so the integration tests in `tests/` can
 // drive the vault lifecycle through the same API the commands use.
 pub mod crypto;
+mod fsutil;
 mod settings;
 pub mod storage;
 mod xml;

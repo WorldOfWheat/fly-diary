@@ -26,7 +26,7 @@
 //! stored alongside the ciphertext in the XML file; no key material ever
 //! touches the disk in the clear.
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -247,15 +247,31 @@ pub fn calibrate_kdf() -> Result<KdfParams, String> {
 // AES-256-GCM
 // ---------------------------------------------------------------------------
 
-/// Encrypt `plaintext` with AES-256-GCM.
+/// Encrypt `plaintext` with AES-256-GCM, binding it to `aad`.
 ///
 /// Returns `(iv, ciphertext)` where `iv` is 12 bytes and `ciphertext` includes
 /// the 16-byte GCM authentication tag.
-pub fn encrypt(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<([u8; IV_LEN], Vec<u8>), String> {
+///
+/// `aad` (associated data) is authenticated but not encrypted. Passing the
+/// entry's date here is what stops a ciphertext from being moved to a different
+/// day: the tag only verifies against the same AAD, so a file copied from
+/// `2026-10-23.xml` to `2026-10-24.xml` fails to decrypt instead of silently
+/// displaying the wrong day's diary.
+pub fn encrypt_with_aad(
+    key: &[u8; KEY_LEN],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<([u8; IV_LEN], Vec<u8>), String> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| "Encryption failed".to_string())?;
 
     let mut iv = [0u8; IV_LEN];
@@ -263,16 +279,40 @@ pub fn encrypt(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<([u8; IV_LEN], V
     Ok((iv, ciphertext))
 }
 
-/// Decrypt `ciphertext` with AES-256-GCM, verifying the authentication tag.
-pub fn decrypt(key: &[u8; KEY_LEN], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+/// Decrypt `ciphertext` with AES-256-GCM, verifying the tag against `aad`.
+pub fn decrypt_with_aad(
+    key: &[u8; KEY_LEN],
+    aad: &[u8],
+    iv: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, String> {
     if iv.len() != IV_LEN {
         return Err(format!("Invalid IV length: {}", iv.len()));
     }
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Nonce::from_slice(iv);
     cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(
+            nonce,
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
         .map_err(|_| "Decryption failed: wrong passphrase or corrupted entry".to_string())
+}
+
+/// Encrypt `plaintext` with AES-256-GCM and no associated data.
+///
+/// Kept for the vault's wrapped key, which has no natural context to bind to,
+/// and for reading payloads written before AAD was introduced.
+pub fn encrypt(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<([u8; IV_LEN], Vec<u8>), String> {
+    encrypt_with_aad(key, b"", plaintext)
+}
+
+/// Decrypt `ciphertext` with AES-256-GCM and no associated data.
+pub fn decrypt(key: &[u8; KEY_LEN], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+    decrypt_with_aad(key, b"", iv, ciphertext)
 }
 
 // ---------------------------------------------------------------------------
@@ -561,6 +601,63 @@ mod tests {
         let (_, ct) = encrypt(&k, b"secret").unwrap();
         let err = decrypt(&k, &[0u8; 8], &ct).unwrap_err();
         assert!(err.contains("Invalid IV length"), "got: {err}");
+    }
+
+    // -- Associated data ----------------------------------------------------
+
+    #[test]
+    fn aad_roundtrip() {
+        let k = key("pw", &salt("salt"));
+        let (iv, ct) = encrypt_with_aad(&k, b"2026-10-23", b"today I flew").unwrap();
+        assert_eq!(
+            decrypt_with_aad(&k, b"2026-10-23", &iv, &ct).unwrap(),
+            b"today I flew"
+        );
+    }
+
+    #[test]
+    fn aad_mismatch_fails_to_decrypt() {
+        let k = key("pw", &salt("salt"));
+        let (iv, ct) = encrypt_with_aad(&k, b"2026-10-23", b"secret").unwrap();
+
+        // This is the attack the AAD prevents: the same ciphertext presented
+        // under a different date must not decrypt.
+        let err = decrypt_with_aad(&k, b"2026-10-24", &iv, &ct).unwrap_err();
+        assert!(err.contains("Decryption failed"), "got: {err}");
+    }
+
+    #[test]
+    fn aad_ciphertext_does_not_decrypt_without_aad() {
+        let k = key("pw", &salt("salt"));
+        let (iv, ct) = encrypt_with_aad(&k, b"2026-10-23", b"secret").unwrap();
+
+        // A payload written with AAD must not be readable by the legacy
+        // no-AAD path, or the binding could be stripped by a downgrade.
+        assert!(decrypt(&k, &iv, &ct).is_err());
+    }
+
+    #[test]
+    fn no_aad_ciphertext_does_not_decrypt_with_aad() {
+        let k = key("pw", &salt("salt"));
+        let (iv, ct) = encrypt(&k, b"secret").unwrap();
+
+        assert!(decrypt_with_aad(&k, b"2026-10-23", &iv, &ct).is_err());
+    }
+
+    #[test]
+    fn empty_aad_matches_the_plain_helpers() {
+        let k = key("pw", &salt("salt"));
+        let (iv, ct) = encrypt(&k, b"secret").unwrap();
+
+        assert_eq!(decrypt_with_aad(&k, b"", &iv, &ct).unwrap(), b"secret");
+    }
+
+    #[test]
+    fn different_aad_produces_different_ciphertext() {
+        let k = key("pw", &salt("salt"));
+        let (_, ct1) = encrypt_with_aad(&k, b"a", b"same").unwrap();
+        let (_, ct2) = encrypt_with_aad(&k, b"b", b"same").unwrap();
+        assert_ne!(ct1, ct2);
     }
 
     #[test]

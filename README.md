@@ -180,7 +180,7 @@
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diary version="2">
+<diary version="3">
   <date>2026-10-23</date>
   <iv>BASE64(12 bytes)</iv>
   <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
@@ -191,9 +191,27 @@
 因此**標題、內容與收藏狀態都是密文**，未解鎖時無法得知任何日記寫了什麼。
 `date` 是唯一的明文欄位，而它本來就已經出現在檔名上。
 
+### 版本與 AAD
+
+`version="3"` 的 payload 以 AES-GCM 的 **associated data（AAD）** 綁定到它所屬的日期：
+加密時把 `date` 當成 AAD 傳入，解密時再傳一次。AAD 會被 GCM 的驗證標籤涵蓋但不被加密，
+所以只要日期對不上，解密就會失敗。
+
+這擋掉的是「搬檔」攻擊：把 `2026-10-23.xml` 複製成 `2026-10-24.xml`，
+在沒有 AAD 的舊格式下會安靜地顯示 10/23 的內容（因為 `read_entry` 回傳的是**被要求的**日期），
+現在則會直接解密失敗。同理，`index.xml` 用 `b"fly-diary/index"` 當 AAD，
+所以索引密文與日記密文即使使用同一把 diary key 也**不能互換**。
+
+| 版本 | payload 內容 | AAD |
+| --- | --- | --- |
+| `3` | `\x01` + 旗標 + `\n` + 標題 + `\n` + 內容 | 日期（日記）／`fly-diary/index`（索引） |
+| `2` | 標題 + `\n` + 內容（無旗標，視為未收藏） | 無 |
+| `1` | `<title>` 明文、`<content>` 密文 | 無 |
+
 > 舊版（`version="2"`）payload 是 `標題 + "\n" + 內容`，沒有收藏旗標，讀取時視為「未收藏」；
 > 更舊的 `version="1"` 把 `<title>` 存成明文、`<content>` 存密文。兩者都仍相容，
-> 下次儲存該篇日記就會自動改寫成含收藏旗標的新格式。
+> 讀取時依文件上的 `version` 決定要不要帶 AAD，下次儲存該篇日記就會自動改寫成 `version="3"`。
+> 舊 vault 遷移時也會一併把日記改寫成 AAD 綁定的格式。
 
 Vault 檔（`vault.xml`）：
 
@@ -216,14 +234,15 @@ Vault 檔（`vault.xml`）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diary version="2">
+<diary version="3">
   <date>index</date>
   <iv>BASE64(12 bytes)</iv>
   <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
 </diary>
 ```
 
-`payload` 解密後是每行一筆的 `日期 \t 標題 \t 收藏旗標`，用同一把 diary key 加密。
+`payload` 解密後是每行一筆的 `日期 \t 標題 \t 收藏旗標`，用同一把 diary key 加密，
+但 AAD 是 `b"fly-diary/index"` 而不是日期，因此索引密文與日記密文不能互換。
 側邊欄列出日記時只要解密這一個檔案，不必逐一解密所有日記檔。
 
 > 索引只是**快取**：`index.xml` 遺失或損毀時，會改為掃描所有日記檔重建。
@@ -466,6 +485,9 @@ fly-diary/
 - **閒置計時器只有一個**：所有活動事件都只是重設同一個 `setTimeout`，不累積計時器；鎖定與關閉設定頁時一併清除，避免背景殘留。
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
+- **密文綁定日期（AAD）**：日記 payload 以日期作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
+- **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此寫入後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
+- **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
 - **資料安全**：自動儲存 + 切換日期前強制存檔 + 鎖定前強制存檔。
 
@@ -482,3 +504,5 @@ fly-diary/
 - 目前只有繁體中文與英文兩種語言；後端回傳的錯誤訊息（例如 Rust 端的 `Failed to write entry ...`）仍是英文，尚未翻譯。
 - 變更日記路徑不會搬移既有檔案，需自行複製；新路徑若已有 vault 則會直接跳到解鎖畫面，沿用該 vault 的密碼。
 - 設定檔本身未加密，任何人可讀到日記資料夾位置（但沒有密碼仍無法解密內容）。
+- 檔案權限收緊只在 Unix 生效（`0600` / `0700`）。Windows 上沿用 `%APPDATA%` 既有的 per-user ACL，程式本身不額外設定 ACL；若把日記放在共用磁碟或同步資料夾，請自行確認該處的權限設定。
+- AAD 綁定只保護「搬檔」與「索引／日記互換」這類攻擊。若攻擊者同時能改寫檔名與檔案內容，仍可把某一天的密文連同檔名一起搬走——AAD 綁的是檔案自稱的日期，不是外部可信的時間來源。

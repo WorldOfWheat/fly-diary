@@ -212,13 +212,16 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
 }
 
 /// Write settings, creating the config directory if needed.
+///
+/// The file records the diary path, which is a hint about where the encrypted
+/// data lives, so it is written owner-only like the diary itself.
 pub fn write_settings(config_dir: &Path, settings: &Settings) -> Result<(), String> {
     validate_diary_dir(&settings.diary_dir)?;
     validate_auto_lock(settings.auto_lock_minutes)?;
-    fs::create_dir_all(config_dir)
+    crate::fsutil::create_private_dir(config_dir)
         .map_err(|e| format!("Failed to create config directory: {e}"))?;
     let document = to_xml(settings)?;
-    fs::write(settings_path(config_dir), document)
+    crate::fsutil::write_private(&settings_path(config_dir), document)
         .map_err(|e| format!("Failed to write settings: {e}"))
 }
 

@@ -33,6 +33,7 @@ use rayon::prelude::*;
 use serde::Serialize;
 
 use crate::crypto;
+use crate::fsutil;
 use crate::xml::{self, EncryptedEntry};
 
 /// Name of the vault metadata file (salt + verifier).
@@ -123,8 +124,11 @@ fn entry_path(dir: &Path, date: &str) -> Result<PathBuf, String> {
 }
 
 /// Ensure the diary directory exists, creating it if necessary.
+///
+/// A directory this call creates is owner-only (`0700`); an existing one is
+/// left untouched, since it may be a folder the user picked and filled.
 pub fn ensure_dir(dir: &Path) -> Result<(), String> {
-    fs::create_dir_all(dir).map_err(|e| format!("Failed to create diary directory: {e}"))
+    fsutil::create_private_dir(dir).map_err(|e| format!("Failed to create diary directory: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +201,10 @@ fn write_vault(dir: &Path, vault: &Vault) -> Result<(), String> {
         vault.wrapped_key_iv_b64,
         vault.wrapped_key_b64
     );
-    fs::write(vault_path(dir), xml).map_err(|e| format!("Failed to write vault: {e}"))
+    // `vault.xml` holds the salt, the KDF cost parameters and the wrapped diary
+    // key: everything an offline cracker needs. It must never be world-readable.
+    fsutil::write_private(&vault_path(dir), xml)
+        .map_err(|e| format!("Failed to write vault: {e}"))
 }
 
 fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
@@ -498,16 +505,17 @@ fn migrate_entries(
         let encrypted = xml::from_xml(&text)?;
         let iv = crypto::b64_decode(&encrypted.iv)?;
         let ct = crypto::b64_decode(&encrypted.payload)?;
-        let plain = crypto::decrypt(old_key, &iv, &ct)
+        let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct)
             .map_err(|_| format!("Entry {date} could not be decrypted during migration"))?;
 
-        let (new_iv, new_ct) = crypto::encrypt(new_key, &plain)?;
+        // Rewrite in the current format, so the migrated entry gains AAD too.
+        let (new_iv, new_ct) = crypto::encrypt_with_aad(new_key, date.as_bytes(), &plain)?;
         let rewritten = xml::EncryptedEntry::new(
             date,
             crypto::b64_encode(&new_iv),
             crypto::b64_encode(&new_ct),
         );
-        fs::write(&path, xml::to_xml(&rewritten)?)
+        fsutil::write_private(&path, xml::to_xml(&rewritten)?)
             .map_err(|e| format!("Failed to rewrite entry {date}: {e}"))?;
     }
 
@@ -598,6 +606,12 @@ fn unpack_index(plain: &[u8]) -> BTreeMap<String, IndexRecord> {
     entries
 }
 
+/// Associated data that binds the index ciphertext to its role.
+///
+/// Without it, an entry file and `index.xml` are interchangeable: both are
+/// `{date, iv, payload}` documents encrypted with the same diary key.
+const INDEX_AAD: &[u8] = b"fly-diary/index";
+
 /// Write the encrypted index for `entries`.
 fn write_index(
     dir: &Path,
@@ -605,13 +619,14 @@ fn write_index(
     entries: &BTreeMap<String, IndexRecord>,
 ) -> Result<(), String> {
     ensure_dir(dir)?;
-    let (iv, ct) = crypto::encrypt(key, &pack_index(entries))?;
+    let (iv, ct) = crypto::encrypt_with_aad(key, INDEX_AAD, &pack_index(entries))?;
     let document = xml::to_xml(&EncryptedEntry::new(
         "index",
         crypto::b64_encode(&iv),
         crypto::b64_encode(&ct),
     ))?;
-    fs::write(index_path(dir), document).map_err(|e| format!("Failed to write index: {e}"))
+    fsutil::write_private(&index_path(dir), document)
+        .map_err(|e| format!("Failed to write index: {e}"))
 }
 
 /// Read and decrypt the index, returning `None` when it is missing or cannot
@@ -621,7 +636,12 @@ fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, IndexRecord
     let encrypted = xml::from_xml(&text).ok()?;
     let iv = crypto::b64_decode(&encrypted.iv).ok()?;
     let ct = crypto::b64_decode(&encrypted.payload).ok()?;
-    let plain = crypto::decrypt(key, &iv, &ct).ok()?;
+    // Version 3 indexes are AAD-bound; older ones were written without it.
+    let plain = if encrypted.is_aad_bound() {
+        crypto::decrypt_with_aad(key, INDEX_AAD, &iv, &ct).ok()?
+    } else {
+        crypto::decrypt(key, &iv, &ct).ok()?
+    };
     Some(unpack_index(&plain))
 }
 
@@ -660,7 +680,7 @@ fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexReco
         ) else {
             continue;
         };
-        let Ok(plain) = crypto::decrypt(key, &iv, &ct) else {
+        let Ok(plain) = decrypt_entry_payload(key, date, &encrypted, &iv, &ct) else {
             continue;
         };
         let (title, _, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
@@ -761,6 +781,25 @@ fn unpack(plain: &[u8], legacy_title: Option<&str>) -> (String, String, bool) {
     }
 }
 
+/// Decrypt an entry payload, honouring the document's version.
+///
+/// Version 3 payloads are bound to `date` through AES-GCM associated data, so
+/// a file copied to another day fails to decrypt instead of silently showing
+/// the wrong entry. Versions 1 and 2 predate AAD and are read without it.
+fn decrypt_entry_payload(
+    key: &[u8; 32],
+    date: &str,
+    encrypted: &EncryptedEntry,
+    iv: &[u8],
+    ct: &[u8],
+) -> Result<Vec<u8>, String> {
+    if encrypted.is_aad_bound() {
+        crypto::decrypt_with_aad(key, date.as_bytes(), iv, ct)
+    } else {
+        crypto::decrypt(key, iv, ct)
+    }
+}
+
 /// Read and decrypt a single entry. Returns `None` when the file is missing.
 pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry>, String> {
     let path = entry_path(dir, date)?;
@@ -773,7 +812,9 @@ pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry
     let encrypted = xml::from_xml(&text)?;
     let iv = crypto::b64_decode(&encrypted.iv)?;
     let ct = crypto::b64_decode(&encrypted.payload)?;
-    let plain = crypto::decrypt(key, &iv, &ct)?;
+    // Passing the *requested* date as AAD is what makes a copied file fail
+    // loudly instead of silently showing another day's diary.
+    let plain = decrypt_entry_payload(key, date, &encrypted, &iv, &ct)?;
     let (title, content, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
 
     Ok(Some(Entry {
@@ -801,10 +842,12 @@ fn write_entry_file(
     ensure_dir(dir)?;
     let path = entry_path(dir, date)?;
 
-    let (iv, ct) = crypto::encrypt(key, &pack(title, content, favourite))?;
+    // Bind the ciphertext to its date so it cannot be relocated to another day.
+    let (iv, ct) = crypto::encrypt_with_aad(key, date.as_bytes(), &pack(title, content, favourite))?;
     let encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
     let document = xml::to_xml(&encrypted)?;
-    fs::write(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))
+    fsutil::write_private(&path, document)
+        .map_err(|e| format!("Failed to write entry {date}: {e}"))
 }
 
 /// Encrypt and write (create or overwrite) the entry for a given date.
@@ -1484,11 +1527,12 @@ mod tests {
         let list = list_entries(&dir, &key).unwrap();
         assert_eq!(list[0].title, "舊標題");
 
-        // Saving rewrites the file in the version 2 layout.
+        // Saving rewrites the file in the current layout, with the title
+        // encrypted and the payload bound to the date.
         write_entry(&dir, &key, "2026-10-23", "舊標題", "legacy body").unwrap();
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
         assert!(!raw.contains("舊標題"));
-        assert!(raw.contains("version=\"2\""));
+        assert!(raw.contains("version=\"3\""), "raw was: {raw}");
     }
 
     #[test]
@@ -1614,12 +1658,15 @@ mod tests {
         );
         fs::write(dir.join("vault.xml"), legacy_vault).unwrap();
 
+        // The entry is a version 2 document: encrypted with the legacy key and
+        // without AAD, which is exactly what migration has to cope with.
         let (e_iv, e_ct) = crypto::encrypt(&legacy_key, b"legacy title\nlegacy body").unwrap();
         let legacy_entry = xml::EncryptedEntry::new(
             "2026-10-23",
             crypto::b64_encode(&e_iv),
             crypto::b64_encode(&e_ct),
-        );
+        )
+        .with_version(2);
         fs::write(
             dir.join("2026-10-23.xml"),
             xml::to_xml(&legacy_entry).unwrap(),
@@ -2413,12 +2460,17 @@ mod tests {
         let key = create_vault(&dir, "pw", fast()).unwrap();
 
         // Hand-build a version 2 payload: title + newline + body, no flag.
+        // Version 2 predates AAD, so the payload is encrypted without it and
+        // the document must say so — otherwise the reader would demand AAD.
         let (iv, ct) = crypto::encrypt(&key, b"old title\nold body").unwrap();
-        let document = xml::to_xml(&EncryptedEntry::new(
-            "2026-10-23",
-            crypto::b64_encode(&iv),
-            crypto::b64_encode(&ct),
-        ))
+        let document = xml::to_xml(
+            &EncryptedEntry::new(
+                "2026-10-23",
+                crypto::b64_encode(&iv),
+                crypto::b64_encode(&ct),
+            )
+            .with_version(2),
+        )
         .unwrap();
         fs::write(dir.join("2026-10-23.xml"), document).unwrap();
 
@@ -2574,5 +2626,154 @@ mod tests {
         };
         create_vault(&dir, "pw", params).unwrap();
         assert_eq!(vault_kdf_params(&dir).unwrap(), Some(params));
+    }
+
+    // -----------------------------------------------------------------------
+    // AAD binding: a ciphertext must not be movable to another date or role
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn entry_file_copied_to_another_date_fails_to_decrypt() {
+        let dir = temp_dir("aad-copy-date");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "monday secret").unwrap();
+
+        // The attack: rename the file so it claims to be a different day.
+        fs::copy(
+            dir.join("2026-10-23.xml"),
+            dir.join("2026-10-24.xml"),
+        )
+        .unwrap();
+
+        // The original still reads, the copy does not.
+        assert_eq!(
+            read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().content,
+            "monday secret"
+        );
+        assert!(
+            read_entry(&dir, &key, "2026-10-24").is_err(),
+            "a relocated entry must not decrypt"
+        );
+    }
+
+    #[test]
+    fn entry_file_copied_to_another_date_is_not_listed() {
+        let dir = temp_dir("aad-copy-list");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "monday secret").unwrap();
+        fs::copy(
+            dir.join("2026-10-23.xml"),
+            dir.join("2026-10-24.xml"),
+        )
+        .unwrap();
+
+        // Rebuilding from disk skips the undecryptable copy rather than
+        // surfacing it with the wrong title.
+        let metas = rebuild_index(&dir, &key).unwrap();
+        let dates: Vec<&str> = metas.iter().map(|m| m.date.as_str()).collect();
+        assert_eq!(dates, vec!["2026-10-23"]);
+    }
+
+    #[test]
+    fn index_ciphertext_does_not_decrypt_as_an_entry() {
+        let dir = temp_dir("aad-index-vs-entry");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        // Swap the index payload into an entry document. Both are encrypted
+        // with the same diary key, so only the AAD distinguishes them.
+        let index_raw = fs::read_to_string(dir.join(INDEX_FILE)).unwrap();
+        let index_doc = xml::from_xml(&index_raw).unwrap();
+        let forged = xml::to_xml(&xml::EncryptedEntry::new(
+            "2026-10-24",
+            index_doc.iv,
+            index_doc.payload,
+        ))
+        .unwrap();
+        fs::write(dir.join("2026-10-24.xml"), forged).unwrap();
+
+        assert!(read_entry(&dir, &key, "2026-10-24").is_err());
+    }
+
+    #[test]
+    fn entry_ciphertext_does_not_decrypt_as_the_index() {
+        let dir = temp_dir("aad-entry-vs-index");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        let entry_raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        let entry_doc = xml::from_xml(&entry_raw).unwrap();
+        let forged = xml::to_xml(&xml::EncryptedEntry::new(
+            "2026-10-23",
+            entry_doc.iv,
+            entry_doc.payload,
+        ))
+        .unwrap();
+        fs::write(dir.join(INDEX_FILE), forged).unwrap();
+
+        // A forged index is discarded, so the sidebar falls back to a rebuild.
+        assert!(read_index(&dir, &key).is_none());
+    }
+
+    #[test]
+    fn new_entries_are_written_as_version_3() {
+        let dir = temp_dir("aad-version");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        assert!(raw.contains("version=\"3\""), "raw was: {raw}");
+        assert_eq!(xml::from_xml(&raw).unwrap().version, 3);
+    }
+
+    // -----------------------------------------------------------------------
+    // File permissions
+    // -----------------------------------------------------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_and_entries_are_not_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("perms");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        for name in ["vault.xml", INDEX_FILE, "2026-10-23.xml"] {
+            let mode = fs::metadata(dir.join(name)).unwrap().permissions().mode();
+            assert_eq!(
+                mode & 0o777,
+                0o600,
+                "{name} should be 0600, was {:o}",
+                mode & 0o777
+            );
+        }
+
+        let dir_mode = fs::metadata(&dir).unwrap().permissions().mode();
+        assert_eq!(
+            dir_mode & 0o777,
+            0o700,
+            "diary directory should be 0700, was {:o}",
+            dir_mode & 0o777
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewriting_an_entry_tightens_a_loose_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("perms-tighten");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        // Simulate a file left behind by an older build (or by the user).
+        let path = dir.join("2026-10-23.xml");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_entry(&dir, &key, "2026-10-23", "t", "body again").unwrap();
+
+        let mode = fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "was {:o}", mode & 0o777);
     }
 }

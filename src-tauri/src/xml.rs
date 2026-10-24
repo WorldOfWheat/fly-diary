@@ -4,7 +4,7 @@
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
-//! <diary version="2">
+//! <diary version="3">
 //!   <date>2026-10-23</date>
 //!   <iv>BASE64</iv>
 //!   <payload>BASE64(AES-256-GCM ciphertext)</payload>
@@ -15,12 +15,25 @@
 //! entry's contents is readable without the passphrase. Only `date` stays in
 //! the clear, and it is already implied by the filename.
 //!
-//! Version 1 files stored `<title>` in the clear and the body in `<content>`.
-//! [`from_xml`] still accepts them so existing diaries keep working; the next
-//! save rewrites the file in the version 2 layout.
+//! ## Versions
+//!
+//! * **3** — `payload` is encrypted with the entry's date as AES-GCM
+//!   associated data, so a ciphertext cannot be moved to another day.
+//! * **2** — `payload` is encrypted without associated data.
+//! * **1** — `<title>` in the clear, body in `<content>`.
+//!
+//! [`from_xml`] accepts all three so existing diaries keep working; the next
+//! save rewrites the file in the current layout.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
+
+/// The document version written by [`to_xml`].
+///
+/// Version 3 means the payload was encrypted with the entry's date as
+/// associated data. Readers use this to decide whether to pass AAD when
+/// decrypting.
+pub const CURRENT_VERSION: u8 = 3;
 
 /// An encrypted diary entry as it lives on disk.
 #[derive(Debug, Clone)]
@@ -30,22 +43,43 @@ pub struct EncryptedEntry {
     pub iv: String,
     /// Base64 encoded ciphertext (includes the GCM tag).
     ///
-    /// In version 2 this is the encrypted `title` + `content` bundle. In
-    /// version 1 files it is the encrypted body only.
+    /// In versions 2 and 3 this is the encrypted `title` + `content` bundle.
+    /// In version 1 files it is the encrypted body only.
     pub payload: String,
     /// Version 1 only: the title, which used to be stored in the clear.
     pub legacy_title: Option<String>,
+    /// Version of the document this entry was read from (or will be written
+    /// as). Version 3 payloads are AAD-bound; 1 and 2 are not.
+    pub version: u8,
 }
 
 impl EncryptedEntry {
-    /// Build a version 2 entry from an already encrypted payload.
+    /// Build a version 3 entry from an already encrypted payload.
     pub fn new(date: impl Into<String>, iv: impl Into<String>, payload: impl Into<String>) -> Self {
         Self {
             date: date.into(),
             iv: iv.into(),
             payload: payload.into(),
             legacy_title: None,
+            version: CURRENT_VERSION,
         }
+    }
+
+    /// Override the document version.
+    ///
+    /// Only useful for tests that need to hand-build a document in an older
+    /// layout: a version 1 or 2 payload is *not* AAD-bound, so writing one with
+    /// the default version 3 header would produce a file that cannot be read.
+    /// Production code always writes [`CURRENT_VERSION`], so this is test-only.
+    #[cfg(test)]
+    pub fn with_version(mut self, version: u8) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// Whether the payload was encrypted with associated data.
+    pub fn is_aad_bound(&self) -> bool {
+        self.version >= 3
     }
 }
 
@@ -75,7 +109,7 @@ pub fn to_xml(entry: &EncryptedEntry) -> Result<String, String> {
         .map_err(|e| format!("Failed to write XML declaration: {e}"))?;
 
     let mut root = BytesStart::new("diary");
-    root.push_attribute(("version", "2"));
+    root.push_attribute(("version", entry.version.to_string().as_str()));
     writer
         .write_event(Event::Start(root))
         .map_err(|e| format!("Failed to write <diary>: {e}"))?;
@@ -124,12 +158,25 @@ pub fn from_xml(xml: &str) -> Result<EncryptedEntry, String> {
     let mut seen_iv = false;
     let mut seen_payload = false;
     let mut seen_content = false;
+    // Documents without a `version` attribute predate versioning; they are
+    // treated as version 1, which is the only layout that had no attribute.
+    let mut version: u8 = 1;
     let mut current: Option<String> = None;
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
                 let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if name == "diary" {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"version" {
+                            version = String::from_utf8_lossy(&attr.value)
+                                .trim()
+                                .parse()
+                                .unwrap_or(1);
+                        }
+                    }
+                }
                 match name.as_str() {
                     "date" => seen_date = true,
                     "iv" => seen_iv = true,
@@ -181,6 +228,7 @@ pub fn from_xml(xml: &str) -> Result<EncryptedEntry, String> {
         iv: iv.unwrap_or_default(),
         payload,
         legacy_title,
+        version,
     })
 }
 
@@ -295,7 +343,22 @@ mod tests {
     fn output_declares_utf8_and_version() {
         let xml = to_xml(&entry("c")).unwrap();
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        assert!(xml.contains("<diary version=\"2\">"));
+        assert!(xml.contains("<diary version=\"3\">"), "xml was: {xml}");
+    }
+
+    #[test]
+    fn version_roundtrips_through_the_document() {
+        let xml = to_xml(&entry("c").with_version(2)).unwrap();
+        assert!(xml.contains("<diary version=\"2\">"), "xml was: {xml}");
+        assert_eq!(from_xml(&xml).unwrap().version, 2);
+    }
+
+    #[test]
+    fn only_version_3_and_up_is_aad_bound() {
+        assert!(!entry("c").with_version(1).is_aad_bound());
+        assert!(!entry("c").with_version(2).is_aad_bound());
+        assert!(entry("c").with_version(3).is_aad_bound());
+        assert!(entry("c").is_aad_bound());
     }
 
     #[test]
