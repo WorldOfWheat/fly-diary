@@ -225,6 +225,9 @@ export function installDom() {
 
   const document = {
     activeElement: null,
+    // The calendar overlay locks background scrolling by toggling a class on
+    // `<body>`, so the stub needs one.
+    body: fakeElement("body"),
     createElement: (tagName) => fakeElement(tagName),
     createDocumentFragment: () => fakeFragment(),
     querySelector: () => null,

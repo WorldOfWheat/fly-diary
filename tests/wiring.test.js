@@ -91,10 +91,12 @@ const ELEMENT_IDS = [
   "changeDirBtn",
   "calPrev",
   "calNext",
-  "calTitle",
+  "calMonth",
+  "calClose",
   "calToday",
   "calGrid",
   "calendar",
+  "calendarBackdrop",
   "settingsBtn",
   "settingsClose",
   "settingsCancel",
@@ -521,6 +523,28 @@ test("clicking the grid background picks nothing", () => {
   });
 });
 
+test("the close button dismisses the overlay and restores focus", () => {
+  withHarness((h) => {
+    h.els.calClose.dispatch("click");
+    assert.deepEqual(h.argsOf("closeCalendar"), [{ restoreFocus: true }]);
+  });
+});
+
+test("clicking the backdrop dismisses the overlay", () => {
+  withHarness((h) => {
+    h.els.calendarBackdrop.dispatch("click");
+    assert.deepEqual(h.argsOf("closeCalendar"), [{ restoreFocus: true }]);
+  });
+});
+
+test("the month label jumps back to the selected month", () => {
+  withHarness((h) => {
+    h.els.calMonth.dispatch("click");
+    assert.deepEqual(h.argsOf("setCalendarMonth"), ["2026-10-01"]);
+    assert.deepEqual(h.names(), ["setCalendarMonth", "renderCalendar"]);
+  });
+});
+
 test("an outside mousedown closes the calendar, an inside one does not", () => {
   withHarness(
     (h) => {
@@ -682,18 +706,18 @@ test("the calendar today button picks the backend date", async () => {
   }
 });
 
-test("clicking the calendar title jumps to the selected month", () => {
+test("clicking the calendar month label jumps to the selected month", () => {
   withHarness((h) => {
-    h.els.calTitle.dispatch("click");
+    h.els.calMonth.dispatch("click");
     assert.deepEqual(h.argsOf("setCalendarMonth"), ["2026-10-01"]);
     assert.deepEqual(h.names(), ["setCalendarMonth", "renderCalendar"]);
   });
 });
 
-test("the calendar title falls back to today when no date is selected", () => {
+test("the calendar month label falls back to today when no date is selected", () => {
   withHarness(
     (h) => {
-      h.els.calTitle.dispatch("click");
+      h.els.calMonth.dispatch("click");
       assert.deepEqual(h.argsOf("setCalendarMonth"), ["2026-10-01"]);
     },
     { getCurrentDate: () => "" }

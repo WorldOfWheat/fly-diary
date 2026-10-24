@@ -143,19 +143,26 @@ export function initEventWiring(deps) {
   on(els.changeDirBtn, "click", deps.changeDiaryDir);
 
   // -------------------------------------------------------------------------
-  // Calendar popup
+  // Calendar overlay
   // -------------------------------------------------------------------------
 
   on(els.calPrev, "click", () => deps.stepCalendarMonth(-1));
   on(els.calNext, "click", () => deps.stepCalendarMonth(1));
 
-  // Clicking the month title jumps back to the month of the selected date.
-  on(els.calTitle, "click", () => {
+  // Clicking the month label jumps back to the month of the selected date.
+  on(els.calMonth, "click", () => {
     deps.setCalendarMonth(
       deps.monthStartOf(deps.getCurrentDate() || deps.toISODate(new Date()))
     );
     deps.renderCalendar();
   });
+
+  // The overlay covers the whole window, so it needs its own ways out: the
+  // close button and a click on the backdrop around the panel.
+  on(els.calClose, "click", () => deps.closeCalendar({ restoreFocus: true }));
+  on(els.calendarBackdrop, "click", () =>
+    deps.closeCalendar({ restoreFocus: true })
+  );
 
   on(els.calToday, "click", async () => {
     const today = await deps.today();
@@ -187,7 +194,8 @@ export function initEventWiring(deps) {
     }
   });
 
-  // Clicking anywhere outside the popup dismisses it.
+  // Clicking anywhere outside the overlay dismisses it. The overlay covers the
+  // window, so this only fires for the date pill itself, which toggles.
   on(document, "mousedown", (e) => {
     if (!deps.isCalendarOpen()) return;
     if (els.calendar.contains(e.target) || els.dateLabel.contains(e.target))

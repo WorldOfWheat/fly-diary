@@ -13,7 +13,7 @@
 - 純 HTML/JS 前端，無框架、無打包步驟
 - 自動儲存（停止輸入 0.8 秒後），切換日期前也會先存檔
 - 側邊欄列出所有日記，可依日期或標題搜尋
-- 日期前後切換、自訂月曆選擇器、「今天」快速鍵
+- 日期前後切換、**全螢幕月曆選擇器**（一眼看出哪天寫過、點一下直接跳過去）、「今天」快速鍵
 - **從資料夾匯入**：讀取 `YYYY-MM-DD.txt`，先掃描預覽再確認，並列出失敗的檔案
 - **收藏**：編輯區的星號按鈕可把日記加入收藏，側邊欄切到「收藏」頁只看收藏的日記
 - **設定頁**：側邊欄的「設定」按鈕開啟，集中管理閒置自動鎖定、變更密碼與 Argon2id 參數
@@ -37,6 +37,20 @@
 | `Ctrl/Cmd + -`        | 縮小字體        |
 | `Ctrl/Cmd + 0`        | 重設字體大小    |
 | `Alt + ←` / `Alt + →` | 前一天 / 後一天 |
+
+## 全螢幕日期選擇器
+
+點編輯區上方的日期膠囊，會展開一個蓋滿整個視窗的月曆（`#calendar`，`role="dialog"`）：
+
+- **整月一覽**：6×7 的格線鋪滿面板，`has-entry` 的日子在數字下方有一顆強調色小點，所以「哪天有寫、哪天沒寫」是一眼可見的圖樣，而不是要逐格細看。
+- **點一下即跳轉**：點任一天就關閉月曆並直接切換到該日期（`pickCalendarDate` → `selectDate`），不需要再按確認。
+- **月份摘要**：標題下方顯示「2026 年 10 月 · 寫了 12 天」，只計算屬於該月份的日子，格線中前後月的補格不會被算進去。
+- **三種離開方式**：右上角關閉鈕、點面板外的背景遮罩、`Esc`；關閉後焦點會還原到日期膠囊。
+- **捲動鎖定**：開啟時在 `<body>` 加上 `calendar-open`（`overflow: hidden`），背景不會跟著滾動。
+- **鍵盤操作**：方向鍵在格線內移動焦點、`PageUp` / `PageDown` 換月、`Enter` / `Space` 選取。
+- 點月份標籤可跳回目前選取日期所屬的月份；`今天` 鈕則直接選取今天。
+
+面板寬度 `min(46rem, 100%)`，`640px` 以下縮小內距與列高，仍維持整月可見。
 
 ## 介面縮放
 
@@ -355,7 +369,7 @@ fly-diary/
 │   ├── main.js             # 編輯器、清單、自動儲存、invoke 呼叫
 │   ├── dom.js              # DOM 查表（els），無副作用
 │   ├── wiring.js           # 所有事件綁定，以 deps 注入回呼（可單獨測試）
-│   ├── calendar.js         # 日期選擇彈窗（createCalendar）
+│   ├── calendar.js         # 全螢幕日期選擇器（createCalendar）
 │   ├── import-dialog.js    # 匯入對話框：掃描、進度、報告（createImportDialog）
 │   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
 │   ├── settings-dialog.js  # 設定對話框：自動鎖定、KDF、改密碼（createSettingsDialog）
@@ -372,7 +386,7 @@ fly-diary/
 │   ├── stats.test.js
 │   ├── i18n.test.js
 │   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce
-│   ├── calendar.test.js    # 月曆格線、焦點移動、月份切換
+│   ├── calendar.test.js    # 月曆格線、焦點移動、月份切換、月份摘要、捲動鎖定
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 自動鎖定選項、KDF 單位換算、儲存驗證

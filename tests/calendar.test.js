@@ -1,14 +1,14 @@
 // ---------------------------------------------------------------------------
-// Calendar popup tests
+// Calendar overlay tests
 // ---------------------------------------------------------------------------
 //
 // `calendar.js` owns the month cursor and the 6×7 grid. The tests drive it with
 // a fake `els` table and a fixed "today", so the assertions do not depend on the
 // day the suite happens to run.
 //
-// The interesting behaviour is the state machine around the popup: which month
-// it opens on, what the grid marks, and how keyboard navigation wraps across a
-// month boundary.
+// The interesting behaviour is the state machine around the overlay: which
+// month it opens on, what the grid marks, how the month summary counts, and how
+// keyboard navigation wraps across a month boundary.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -16,10 +16,51 @@ import assert from "node:assert/strict";
 import { createCalendar } from "../src/calendar.js";
 import { installDom, fakeEls, fakeT, spy } from "./helpers/dom.js";
 
-const CAL_IDS = ["calendar", "calTitle", "calWeekdays", "calGrid", "dateLabel"];
+const CAL_IDS = [
+  "calendar",
+  "calendarBackdrop",
+  "calClose",
+  "calTitle",
+  "calMonth",
+  "calSummary",
+  "calWeekdays",
+  "calGrid",
+  "dateLabel",
+];
 
 /** A fixed "today" so the `.today` marker is deterministic. */
 const TODAY = "2026-10-23";
+
+/**
+ * Run `body` with the global clock frozen at `TODAY`.
+ *
+ * `calendar.js` calls `toISODate(new Date())` to find "today", and that helper
+ * is imported rather than injected. Freezing `Date` is therefore the only way
+ * to make the `.today` marker deterministic without faking a dependency that
+ * production does not pass — which is exactly the mistake that let a real
+ * `deps.toISODate is not a function` crash slip past this suite.
+ */
+function withFrozenClock(body) {
+  const RealDate = globalThis.Date;
+  const frozen = new RealDate(`${TODAY}T12:00:00Z`);
+
+  class FrozenDate extends RealDate {
+    constructor(...args) {
+      if (args.length === 0) super(frozen.getTime());
+      else super(...args);
+    }
+    static now() {
+      return frozen.getTime();
+    }
+  }
+
+  globalThis.Date = FrozenDate;
+  try {
+    return body();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+}
 
 /**
  * Build a calendar controller plus the fakes it needs.
@@ -33,6 +74,10 @@ function harness(overrides = {}) {
   const els = fakeEls(CAL_IDS);
   els.calendar.hidden = true;
 
+  // `toISODate` is deliberately *not* injected: `calendar.js` imports it from
+  // `lib/dates.js`, and stubbing it here once hid a real crash — production
+  // never passed it, so `deps.toISODate` was undefined and opening the overlay
+  // threw. The harness must mirror the real `deps` shape, not a superset.
   const deps = {
     els,
     getCurrentDate: () => TODAY,
@@ -41,9 +86,6 @@ function harness(overrides = {}) {
     formatMonth: (monthStart) => `month:${monthStart}`,
     formatDate: (iso) => `date:${iso}`,
     weekdayName: (day) => `wd:${day}`,
-    // `renderCalendar` reads "today" through `deps.toISODate`, not the module
-    // import, so the harness has to supply it.
-    toISODate: () => TODAY,
     t: fakeT(),
     ...overrides,
   };
@@ -62,14 +104,21 @@ function harness(overrides = {}) {
   };
 }
 
-/** Run `body` with a fresh harness, always restoring the DOM globals. */
+/**
+ * Run `body` with a fresh harness, always restoring the DOM globals.
+ *
+ * The clock is frozen for the duration so `toISODate(new Date())` inside
+ * `renderCalendar` agrees with `TODAY`.
+ */
 function withCalendar(body, overrides) {
-  const h = harness(overrides);
-  try {
-    return body(h);
-  } finally {
-    h.restore();
-  }
+  return withFrozenClock(() => {
+    const h = harness(overrides);
+    try {
+      return body(h);
+    } finally {
+      h.restore();
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +171,71 @@ test("renderCalendar writes the formatted month into the title", () => {
     calendar.setCalendarMonth("2026-10-01");
     calendar.renderCalendar();
     assert.equal(els.calTitle.textContent, "month:2026-10-01");
+  });
+});
+
+test("renderCalendar writes the formatted month into the stepper label", () => {
+  withCalendar(({ calendar, els }) => {
+    calendar.setCalendarMonth("2026-10-01");
+    calendar.renderCalendar();
+    assert.equal(els.calMonth.textContent, "month:2026-10-01");
+  });
+});
+
+test("renderCalendar tolerates a missing stepper label", () => {
+  withCalendar(({ calendar, deps }) => {
+    deps.els.calMonth = null;
+    const fresh = createCalendar(deps);
+    fresh.setCalendarMonth("2026-10-01");
+    // Must not throw.
+    fresh.renderCalendar();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Month summary
+// ---------------------------------------------------------------------------
+
+test("renderCalendar counts the days with an entry in the visible month", () => {
+  withCalendar(
+    ({ calendar, els }) => {
+      calendar.setCalendarMonth("2026-10-01");
+      calendar.renderCalendar();
+      assert.equal(
+        els.calSummary.textContent,
+        "editor.calSummary(month=month:2026-10-01,n=2)"
+      );
+    },
+    {
+      getEntries: () => [
+        { date: "2026-10-02" },
+        { date: "2026-10-23" },
+        // Outside the month: must not inflate the count.
+        { date: "2026-09-30" },
+        { date: "2026-11-01" },
+      ],
+    }
+  );
+});
+
+test("renderCalendar says so when the month has no entries", () => {
+  withCalendar(({ calendar, els }) => {
+    calendar.setCalendarMonth("2026-10-01");
+    calendar.renderCalendar();
+    assert.equal(
+      els.calSummary.textContent,
+      "editor.calSummaryEmpty(month=month:2026-10-01)"
+    );
+  });
+});
+
+test("renderCalendar tolerates a missing summary element", () => {
+  withCalendar(({ deps }) => {
+    deps.els.calSummary = null;
+    const fresh = createCalendar(deps);
+    fresh.setCalendarMonth("2026-10-01");
+    // Must not throw.
+    fresh.renderCalendar();
   });
 });
 
@@ -184,6 +298,28 @@ test("renderCalendar gives every cell a role and an aria-label", () => {
       assert.equal(cell.type, "button");
     }
   });
+});
+
+test("renderCalendar describes the entry dot for screen readers", () => {
+  withCalendar(
+    ({ calendar, els }) => {
+      calendar.setCalendarMonth("2026-10-01");
+      calendar.renderCalendar();
+
+      const withEntry = els.calGrid.byClass("has-entry");
+      assert.equal(withEntry.length, 1);
+      assert.equal(
+        withEntry[0].getAttribute("aria-description"),
+        "editor.calLegend"
+      );
+
+      const plain = els.calGrid.children.find(
+        (cell) => cell.dataset.date === "2026-10-03"
+      );
+      assert.equal(plain.getAttribute("aria-description"), null);
+    },
+    { getEntries: () => [{ date: "2026-10-02" }] }
+  );
 });
 
 test("renderCalendar shows the day number, not the full date", () => {
@@ -268,16 +404,44 @@ test("closeCalendar only restores focus when asked", () => {
   });
 });
 
-test("closeCalendar on a closed popup does nothing", () => {
+test("closeCalendar on a closed overlay does nothing", () => {
   withCalendar(({ calendar, els }) => {
     els.calendar.hidden = true;
     els.dateLabel.setAttribute("aria-expanded", "true");
 
     calendar.closeCalendar({ restoreFocus: true });
 
-    // The stale attribute is left alone: the popup was already closed.
+    // The stale attribute is left alone: the overlay was already closed.
     assert.equal(els.dateLabel.getAttribute("aria-expanded"), "true");
     assert.equal(document.activeElement, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Background scroll lock
+// ---------------------------------------------------------------------------
+
+test("opening the overlay locks background scrolling, closing releases it", () => {
+  withCalendar(({ calendar }) => {
+    const body = document.body;
+
+    calendar.openCalendar();
+    assert.equal(body.classList.contains("calendar-open"), true);
+
+    calendar.closeCalendar();
+    assert.equal(body.classList.contains("calendar-open"), false);
+  });
+});
+
+test("closing an already closed overlay leaves the scroll lock alone", () => {
+  withCalendar(({ calendar, els }) => {
+    const body = document.body;
+    body.classList.add("calendar-open");
+    els.calendar.hidden = true;
+
+    calendar.closeCalendar();
+
+    assert.equal(body.classList.contains("calendar-open"), true);
   });
 });
 

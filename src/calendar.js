@@ -1,10 +1,15 @@
 // ---------------------------------------------------------------------------
-// Calendar popup
+// Calendar overlay
 // ---------------------------------------------------------------------------
 //
 // The date pill in the editor header opens a hand-built month grid instead of
 // the native `<input type="date">`, because the native picker cannot show which
 // days already have an entry and looks different on every platform.
+//
+// The grid is a full-screen overlay rather than a small popup: at that size a
+// whole month is legible at a glance, so the dots marking days that already
+// have an entry read as a pattern instead of a detail. Clicking a day jumps
+// straight to it.
 //
 // This module owns the grid, the month cursor and the keyboard navigation. It
 // reads the selected date through `getCurrentDate()` and reports a pick through
@@ -19,14 +24,20 @@
 //   formatMonth     — (monthStart: string) => string
 //   formatDate      — (iso: string) => string
 //   weekdayName     — (dayIndex: number) => string
-//   t               — (key: string) => string
-//   toISODate       — (date: Date) => string
-//   fromISODate     — (iso: string) => Date
-//   monthStartOf    — (iso: string) => string
-//   shiftMonth      — (monthStart: string, months: number) => string
-//   calendarGrid    — (monthStart: string) => string[]
+//   t               — (key: string, params?: object) => string
+//
+// The pure date maths (`toISODate`, `fromISODate`, `monthStartOf`,
+// `shiftMonth`, `calendarGrid`) is imported from `lib/dates.js` directly
+// rather than injected: it has no state and no I/O, so threading it through
+// `deps` only created a second place to forget to wire it up.
 
-import { calendarGrid, fromISODate, monthStartOf, shiftMonth, toISODate } from "./lib/dates.js";
+import {
+  calendarGrid,
+  fromISODate,
+  monthStartOf,
+  shiftMonth,
+  toISODate,
+} from "./lib/dates.js";
 
 /**
  * Create the calendar controller.
@@ -45,6 +56,33 @@ export function createCalendar(deps) {
     return new Set(deps.getEntries().map((entry) => entry.date));
   }
 
+  /**
+   * How many days of `monthStart`'s month have an entry.
+   *
+   * Only days inside the month count: the grid also shows the tail of the
+   * previous month and the head of the next one, and those would inflate the
+   * number the summary claims for the month on screen.
+   */
+  function entryCountInMonth(monthStart, withEntries) {
+    const prefix = monthStart.slice(0, 7);
+    let count = 0;
+    for (const iso of withEntries) {
+      if (iso.startsWith(prefix)) count += 1;
+    }
+    return count;
+  }
+
+  /** Write the "N days written" line under the month title. */
+  function renderSummary(withEntries) {
+    if (!els.calSummary) return;
+    const month = deps.formatMonth(calendarMonth);
+    const count = entryCountInMonth(calendarMonth, withEntries);
+    els.calSummary.textContent =
+      count === 0
+        ? deps.t("editor.calSummaryEmpty", { month })
+        : deps.t("editor.calSummary", { month, n: count });
+  }
+
   /** Fill the weekday header row. Monday-first, matching the grid below. */
   function renderWeekdayHeaders() {
     if (!els.calWeekdays) return;
@@ -61,11 +99,17 @@ export function createCalendar(deps) {
   /** Build the 6×7 grid of day buttons for `calendarMonth`. */
   function renderCalendar() {
     const month = Number(calendarMonth.slice(5, 7));
-    els.calTitle.textContent = deps.formatMonth(calendarMonth);
+    const monthLabel = deps.formatMonth(calendarMonth);
+    els.calTitle.textContent = monthLabel;
+    // The month button in the middle of the stepper carries the same label; the
+    // heading above it is the dialog title, so it stays generic.
+    if (els.calMonth) els.calMonth.textContent = monthLabel;
 
-    const today = deps.toISODate(new Date());
+    const today = toISODate(new Date());
     const currentDate = deps.getCurrentDate();
     const withEntries = entryDateSet();
+
+    renderSummary(withEntries);
 
     const frag = document.createDocumentFragment();
     for (const iso of calendarGrid(calendarMonth)) {
@@ -85,7 +129,11 @@ export function createCalendar(deps) {
         btn.classList.add("selected");
         btn.setAttribute("aria-selected", "true");
       }
-      if (withEntries.has(iso)) btn.classList.add("has-entry");
+      if (withEntries.has(iso)) {
+        btn.classList.add("has-entry");
+        // The dot is decorative, so the fact is repeated for screen readers.
+        btn.setAttribute("aria-description", deps.t("editor.calLegend"));
+      }
 
       frag.appendChild(btn);
     }
@@ -96,12 +144,28 @@ export function createCalendar(deps) {
     return !els.calendar.hidden;
   }
 
+  /**
+   * Stop the page behind the overlay from scrolling.
+   *
+   * The overlay is `position: fixed`, so without this a wheel or trackpad
+   * gesture over the backdrop would still scroll the editor underneath it.
+   */
+  function setBackgroundScrollLocked(locked) {
+    const body = document.body;
+    if (!body) return;
+    if (locked) body.classList.add("calendar-open");
+    else body.classList.remove("calendar-open");
+  }
+
   function openCalendar() {
     // Always open on the month of the selected date.
-    calendarMonth = monthStartOf(deps.getCurrentDate() || toISODate(new Date()));
+    calendarMonth = monthStartOf(
+      deps.getCurrentDate() || toISODate(new Date())
+    );
     renderCalendar();
     els.calendar.hidden = false;
     els.dateLabel.setAttribute("aria-expanded", "true");
+    setBackgroundScrollLocked(true);
 
     // Focus the selected day so arrow keys work immediately.
     const target =
@@ -115,6 +179,7 @@ export function createCalendar(deps) {
     if (!isCalendarOpen()) return;
     els.calendar.hidden = true;
     els.dateLabel.setAttribute("aria-expanded", "false");
+    setBackgroundScrollLocked(false);
     if (restoreFocus) els.dateLabel.focus();
   }
 
