@@ -39,7 +39,19 @@
             </div>
             <p id="lock-subtitle" class="lock-subtitle" data-i18n="lock.subtitle.unlock">請輸入密碼以解鎖日記</p>
 
-            <!-- First run only: choose where the encrypted diary is stored. -->
+            <!-- The workspace (diary folder) currently in use. Shown once a
+                 folder has been configured, so the user can see which diary
+                 they are about to unlock and switch to another one without
+                 having to unlock first. -->
+            <div id="workspace-row" class="lock-workspace" hidden>
+                <span id="workspace-path" class="lock-workspace-path" data-i18n-title="lock.workspaceTitle"
+                    title="目前的工作區"></span>
+                <button id="switch-workspace" class="btn-browse" type="button" data-i18n="lock.switchWorkspace"
+                    data-i18n-title="lock.switchWorkspaceTitle" title="切換工作區">切換工作區</button>
+            </div>
+
+            <!-- Shown on first run, and again whenever the user asks to switch
+                 workspace: choose where the encrypted diary is stored. -->
             <div id="path-field" class="lock-field" hidden>
                 <label class="lock-label" for="diary-dir" data-i18n="lock.pathLabel">日記儲存資料夾</label>
                 <div class="lock-path-row">
@@ -49,6 +61,8 @@
                         data-i18n-title="lock.browseTitle" title="選擇資料夾">瀏覽…</button>
                 </div>
                 <p class="lock-hint" data-i18n="lock.pathHint">此路徑會寫入設定檔，之後每次啟動都從這裡讀取日記。</p>
+                <button id="cancel-workspace" class="btn-browse lock-cancel-workspace" type="button"
+                    data-i18n="common.cancel">取消</button>
             </div>
 
             <input id="passphrase" class="lock-input" type="password" data-i18n-placeholder="lock.passphrase"

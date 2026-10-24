@@ -72,6 +72,8 @@ function fakeTarget(extra = {}) {
 const ELEMENT_IDS = [
   "lockForm",
   "browseDir",
+  "switchWorkspace",
+  "cancelWorkspace",
   "kdfReset",
   "kdfMemory",
   "kdfIterations",
@@ -137,15 +139,19 @@ function harness(overrides = {}) {
 
   const calls = [];
   /** Record a call and return a canned value. */
-  const spy = (name, value) => (...args) => {
-    calls.push({ name, args });
-    return value;
-  };
+  const spy =
+    (name, value) =>
+    (...args) => {
+      calls.push({ name, args });
+      return value;
+    };
 
   const deps = {
     els,
     handleUnlockSubmit: spy("handleUnlockSubmit"),
     browseForDir: spy("browseForDir"),
+    openWorkspacePicker: spy("openWorkspacePicker"),
+    cancelWorkspacePicker: spy("cancelWorkspacePicker"),
     resetKdfFields: spy("resetKdfFields"),
     updateKdfEstimate: spy("updateKdfEstimate"),
     refreshSetupVaultState: spy("refreshSetupVaultState"),
@@ -500,7 +506,9 @@ test("clicking a day cell picks that date", () => {
   withHarness((h) => {
     const cell = { dataset: { date: "2026-10-05" } };
     h.els.calGrid.dispatch("click", {
-      target: { closest: (selector) => (selector === ".cal-day" ? cell : null) },
+      target: {
+        closest: (selector) => (selector === ".cal-day" ? cell : null),
+      },
     });
     assert.deepEqual(h.argsOf("pickCalendarDate"), ["2026-10-05"]);
   });
@@ -726,4 +734,22 @@ test("cleanup cancels a pending path check", (t) => {
   } finally {
     h.restore();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Workspace switching
+// ---------------------------------------------------------------------------
+
+test("the switch-workspace button opens the picker", () => {
+  withHarness((h) => {
+    h.els.switchWorkspace.dispatch("click");
+    assert.deepEqual(h.names(), ["openWorkspacePicker"]);
+  });
+});
+
+test("the cancel-workspace button closes the picker", () => {
+  withHarness((h) => {
+    h.els.cancelWorkspace.dispatch("click");
+    assert.deepEqual(h.names(), ["cancelWorkspacePicker"]);
+  });
 });

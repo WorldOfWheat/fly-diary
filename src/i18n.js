@@ -49,12 +49,18 @@ const zhHant = {
   "lock.subtitle.unlock": "請輸入密碼以解鎖日記",
   "lock.subtitle.existing": "此資料夾已有加密日記，請輸入密碼解鎖",
   "lock.subtitle.newInFolder": "此資料夾尚未建立加密日記，請設定一組密碼",
-  "lock.subtitle.firstRun": "第一次使用：選擇日記儲存位置，並設定一組密碼來加密日記",
+  "lock.subtitle.firstRun":
+    "第一次使用：選擇日記儲存位置，並設定一組密碼來加密日記",
   "lock.pathLabel": "日記儲存資料夾",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "瀏覽…",
   "lock.browseTitle": "選擇資料夾",
   "lock.pathHint": "此路徑會寫入設定檔，之後每次啟動都從這裡讀取日記。",
+  "lock.workspaceTitle": "目前的工作區",
+  "lock.switchWorkspace": "切換工作區",
+  "lock.switchWorkspaceTitle": "改用另一個日記資料夾",
+  "lock.subtitle.switching":
+    "選擇要開啟的日記資料夾，已有加密日記的資料夾會直接要求輸入密碼",
   "lock.passphrase": "密碼",
   "lock.passphraseSet": "設定密碼",
   "lock.passphraseConfirm": "再次輸入密碼",
@@ -100,17 +106,21 @@ const zhHant = {
   "settings.autoLockNever": "永不",
   "settings.autoLockMinutes": "{n} 分鐘",
   "settings.security": "密碼與金鑰派生",
-  "settings.securityHint": "變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。",
+  "settings.securityHint":
+    "變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。",
   "settings.currentPass": "目前密碼",
   "settings.newPass": "新密碼",
   "settings.newPassPlaceholder": "留空表示不變更",
   "settings.newPassConfirm": "確認新密碼",
   "settings.advanced": "進階：Argon2id 參數",
-  "settings.advancedHint": "提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。",
+  "settings.advancedHint":
+    "提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。",
   "settings.calibrate": "自動量測（約 1 秒）",
   "settings.calibrating": "量測中…",
-  "settings.calibrated": "已套用：{memory} MiB / {iterations} 次 / 平行度 {parallelism}",
-  "settings.vaultKdf": "目前參數：{memory} MiB / {iterations} 次 / 平行度 {parallelism}",
+  "settings.calibrated":
+    "已套用：{memory} MiB / {iterations} 次 / 平行度 {parallelism}",
+  "settings.vaultKdf":
+    "目前參數：{memory} MiB / {iterations} 次 / 平行度 {parallelism}",
   "settings.vaultKdfLegacy": "目前使用舊版金鑰派生，解鎖一次即可升級。",
   "settings.save": "儲存",
   "settings.saved": "設定已儲存",
@@ -250,14 +260,23 @@ const en = {
 
   // --- Lock screen ---------------------------------------------------------
   "lock.subtitle.unlock": "Enter your passphrase to unlock the diary",
-  "lock.subtitle.existing": "This folder already holds an encrypted diary. Enter its passphrase.",
-  "lock.subtitle.newInFolder": "No encrypted diary here yet. Choose a passphrase to create one.",
-  "lock.subtitle.firstRun": "First run: choose where to store the diary, then set a passphrase to encrypt it",
+  "lock.subtitle.existing":
+    "This folder already holds an encrypted diary. Enter its passphrase.",
+  "lock.subtitle.newInFolder":
+    "No encrypted diary here yet. Choose a passphrase to create one.",
+  "lock.subtitle.firstRun":
+    "First run: choose where to store the diary, then set a passphrase to encrypt it",
   "lock.pathLabel": "Diary folder",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "Browse…",
   "lock.browseTitle": "Choose a folder",
-  "lock.pathHint": "This path is saved to the settings file and used on every launch.",
+  "lock.pathHint":
+    "This path is saved to the settings file and used on every launch.",
+  "lock.workspaceTitle": "Current workspace",
+  "lock.switchWorkspace": "Switch workspace",
+  "lock.switchWorkspaceTitle": "Open a different diary folder",
+  "lock.subtitle.switching":
+    "Choose the diary folder to open. A folder that already holds an encrypted diary will ask for its passphrase.",
   "lock.passphrase": "Passphrase",
   "lock.passphraseSet": "Set a passphrase",
   "lock.passphraseConfirm": "Repeat passphrase",
@@ -298,23 +317,29 @@ const en = {
 
   "settings.title": "Settings",
   "settings.autoLock": "Idle auto-lock",
-  "settings.autoLockHint": "Lock the diary after a period of inactivity, requiring the passphrase again.",
+  "settings.autoLockHint":
+    "Lock the diary after a period of inactivity, requiring the passphrase again.",
   "settings.autoLockLabel": "Lock after",
   "settings.autoLockNever": "Never",
   "settings.autoLockMinutes": "{n} minutes",
   "settings.security": "Passphrase and key derivation",
-  "settings.securityHint": "Changing the passphrase only re-wraps the diary key; entries are not re-encrypted, so it is fast.",
+  "settings.securityHint":
+    "Changing the passphrase only re-wraps the diary key; entries are not re-encrypted, so it is fast.",
   "settings.currentPass": "Current passphrase",
   "settings.newPass": "New passphrase",
   "settings.newPassPlaceholder": "Leave blank to keep it",
   "settings.newPassConfirm": "Confirm new passphrase",
   "settings.advanced": "Advanced: Argon2id parameters",
-  "settings.advancedHint": "Higher values make brute force harder but unlocking slower. You can measure this machine automatically.",
+  "settings.advancedHint":
+    "Higher values make brute force harder but unlocking slower. You can measure this machine automatically.",
   "settings.calibrate": "Measure automatically (~1s)",
   "settings.calibrating": "Measuring…",
-  "settings.calibrated": "Applied: {memory} MiB / {iterations} passes / parallelism {parallelism}",
-  "settings.vaultKdf": "Current: {memory} MiB / {iterations} passes / parallelism {parallelism}",
-  "settings.vaultKdfLegacy": "This diary still uses the legacy derivation; unlock once to upgrade it.",
+  "settings.calibrated":
+    "Applied: {memory} MiB / {iterations} passes / parallelism {parallelism}",
+  "settings.vaultKdf":
+    "Current: {memory} MiB / {iterations} passes / parallelism {parallelism}",
+  "settings.vaultKdfLegacy":
+    "This diary still uses the legacy derivation; unlock once to upgrade it.",
   "settings.save": "Save",
   "settings.saved": "Settings saved",
   "settings.errCurrentRequired": "Enter your current passphrase",
@@ -542,10 +567,30 @@ export function formatWeekday(iso) {
 // this app; adding one is a two-line change if that ever stops being true.
 
 const ATTR_MAP = [
-  ["data-i18n", (el, text) => { el.textContent = text; }],
-  ["data-i18n-title", (el, text) => { el.title = text; }],
-  ["data-i18n-placeholder", (el, text) => { el.placeholder = text; }],
-  ["data-i18n-aria-label", (el, text) => { el.setAttribute("aria-label", text); }],
+  [
+    "data-i18n",
+    (el, text) => {
+      el.textContent = text;
+    },
+  ],
+  [
+    "data-i18n-title",
+    (el, text) => {
+      el.title = text;
+    },
+  ],
+  [
+    "data-i18n-placeholder",
+    (el, text) => {
+      el.placeholder = text;
+    },
+  ],
+  [
+    "data-i18n-aria-label",
+    (el, text) => {
+      el.setAttribute("aria-label", text);
+    },
+  ],
 ];
 
 /** Translate every `data-i18n*` node inside `root` (default: the document). */

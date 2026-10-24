@@ -15,6 +15,8 @@
 //   els                 — the lookup table from `dom.js`
 //   handleUnlockSubmit  — (event) => void
 //   browseForDir        — () => void
+//   openWorkspacePicker — () => void
+//   cancelWorkspacePicker — () => void
 //   resetKdfFields      — () => void
 //   updateKdfEstimate   — () => void
 //   refreshSetupVaultState — () => void
@@ -82,6 +84,8 @@ export function initEventWiring(deps) {
 
   on(els.lockForm, "submit", deps.handleUnlockSubmit);
   on(els.browseDir, "click", deps.browseForDir);
+  on(els.switchWorkspace, "click", deps.openWorkspacePicker);
+  on(els.cancelWorkspace, "click", deps.cancelWorkspacePicker);
   on(els.kdfReset, "click", deps.resetKdfFields);
   on(els.kdfMemory, "input", deps.updateKdfEstimate);
   on(els.kdfIterations, "input", deps.updateKdfEstimate);

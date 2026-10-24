@@ -13,9 +13,16 @@
 //   true        false  folder chosen but empty: choose a passphrase
 //   true        true   returning user: passphrase only
 //
-// Both flags are owned here because every function below reads or writes them.
-// `main.js` reads them through `isConfigured()` / `isVaultInitialized()` and
-// writes them through the setters, so there is still one source of truth.
+// A third flag, `pickingWorkspace`, decouples "the path field is visible" from
+// "the app has no settings file yet". It is set when the user asks to switch
+// workspace from the lock screen, so a returning user can point the app at a
+// different diary folder *before* unlocking. The folder they land on decides
+// the rest: if it already holds a vault the form asks for its passphrase,
+// otherwise it offers to create a new one.
+//
+// All three flags are owned here because every function below reads or writes
+// them. `main.js` reads them through `isConfigured()` / `isVaultInitialized()`
+// and writes them through the setters, so there is still one source of truth.
 //
 // `deps` shape:
 //
@@ -47,6 +54,14 @@ export function createLockScreen(deps) {
   let configured = false;
   /** Whether the chosen folder already holds a vault. */
   let vaultInitialized = false;
+  /**
+   * Whether the user asked to switch workspace and the path field is open.
+   *
+   * Kept separate from `configured` so that opening the picker does not make
+   * the app look "unconfigured": the settings file is still there, and the
+   * subtitle must keep saying "unlock" rather than "first run".
+   */
+  let pickingWorkspace = false;
   /** Bounds and defaults reported by the backend. */
   let kdfDefaults = null;
 
@@ -64,6 +79,14 @@ export function createLockScreen(deps) {
 
   function setVaultInitialized(value) {
     vaultInitialized = value;
+  }
+
+  function isPickingWorkspace() {
+    return pickingWorkspace;
+  }
+
+  function setPickingWorkspace(value) {
+    pickingWorkspace = value;
   }
 
   function showLockScreen(message = "") {
@@ -134,8 +157,14 @@ export function createLockScreen(deps) {
 
   /** Apply the lock screen layout for the current setup state. */
   function renderLockScreen() {
-    // The path field is only shown while the app has no settings file yet.
-    els.pathField.hidden = configured;
+    // The path field is shown on first run, and whenever the user opens the
+    // workspace picker. It is *not* tied to `configured` any more: a returning
+    // user must be able to point the app at another diary folder before they
+    // unlock, otherwise a second workspace would be unreachable.
+    els.pathField.hidden = configured && !pickingWorkspace;
+    // The current workspace is only worth showing once one has been chosen,
+    // and it is hidden while the picker is open (the path field says it all).
+    els.workspaceRow.hidden = !configured || pickingWorkspace;
     // KDF parameters can only be chosen when a new vault is being created.
     els.advancedField.hidden = vaultInitialized;
 
@@ -150,7 +179,9 @@ export function createLockScreen(deps) {
       els.lockSubmit.textContent = deps.t("lock.submitUnlock");
     } else if (configured) {
       // Configured folder but no vault yet (e.g. an empty folder was picked).
-      els.lockSubtitle.textContent = deps.t("lock.subtitle.newInFolder");
+      els.lockSubtitle.textContent = pickingWorkspace
+        ? deps.t("lock.subtitle.switching")
+        : deps.t("lock.subtitle.newInFolder");
       els.passphraseConfirm.hidden = false;
       els.passphrase.placeholder = deps.t("lock.passphraseSet");
       els.passphrase.autocomplete = "new-password";
@@ -163,6 +194,13 @@ export function createLockScreen(deps) {
       els.passphrase.autocomplete = "new-password";
       els.lockSubmit.textContent = deps.t("lock.submitCreate");
     }
+  }
+
+  /** Show the configured folder next to the "switch workspace" button. */
+  function renderWorkspacePath() {
+    const path = els.diaryDir.value.trim();
+    els.workspacePath.textContent = path;
+    els.workspacePath.title = path;
   }
 
   async function enterApp() {
@@ -192,6 +230,7 @@ export function createLockScreen(deps) {
     const settings = await deps.invoke("get_settings");
     configured = settings.configured;
     els.diaryDir.value = settings.diaryDir ?? settings.defaultDir ?? "";
+    renderWorkspacePath();
     // Keep the idle timer in sync with whatever is on disk.
     deps.setAutoLockMinutes(settings.autoLockMinutes ?? 0);
     return settings;
@@ -234,6 +273,46 @@ export function createLockScreen(deps) {
     renderLockScreen();
   }
 
+  /**
+   * Open the workspace picker on the lock screen.
+   *
+   * The path field is pre-filled with the folder currently in use, so the user
+   * can either edit it or hit "Browse…". Nothing is written to the settings
+   * file until the form is submitted, so abandoning the picker leaves the app
+   * pointing at the original workspace.
+   */
+  async function openWorkspacePicker() {
+    els.lockError.textContent = "";
+    pickingWorkspace = true;
+    renderLockScreen();
+    els.diaryDir.focus();
+    els.diaryDir.select();
+    // Re-detect so the layout matches the folder that is already in the field.
+    await refreshSetupVaultState();
+  }
+
+  /**
+   * Close the workspace picker and restore the folder that is actually saved.
+   *
+   * The field is reset from the settings file rather than from a remembered
+   * value, so a half-typed path cannot leak into the next unlock attempt.
+   */
+  async function cancelWorkspacePicker() {
+    if (!configured) return;
+    els.lockError.textContent = "";
+    pickingWorkspace = false;
+    try {
+      const settings = await deps.invoke("get_settings");
+      els.diaryDir.value = settings.diaryDir ?? "";
+    } catch (err) {
+      console.error("get_settings failed:", err);
+    }
+    renderWorkspacePath();
+    await refreshVaultState();
+    renderLockScreen();
+    els.passphrase.focus();
+  }
+
   async function handleUnlockSubmit(event) {
     event.preventDefault();
     els.lockError.textContent = "";
@@ -259,16 +338,21 @@ export function createLockScreen(deps) {
 
     els.lockSubmit.disabled = true;
     try {
-      if (!configured) {
+      // The path is persisted when the app is unconfigured (first run) *or*
+      // when the user opened the workspace picker to point at another folder.
+      // In both cases the folder is re-checked right before committing, because
+      // it may already hold a vault.
+      if (!configured || pickingWorkspace) {
         const dir = els.diaryDir.value.trim();
         if (!dir) {
           els.lockError.textContent = deps.t("lock.errNoDir");
           return;
         }
-        // Re-check right before committing: the folder may already hold a vault.
         vaultInitialized = await detectVault(dir);
         await deps.invoke("set_diary_dir", { path: dir });
         configured = true;
+        pickingWorkspace = false;
+        renderWorkspacePath();
       }
 
       if (vaultInitialized) {
@@ -322,16 +406,14 @@ export function createLockScreen(deps) {
     deps.closeSettings();
     deps.renderDateLabel();
 
-    // Show the lock screen with the path field so the user can pick a new folder.
-    // `configured` is cleared so the path field is visible, but the vault state
-    // is *not* forced to false: the folder the user lands on may already hold a
-    // diary, in which case the form must ask for the passphrase rather than
-    // offering to create a new vault.
-    configured = false;
+    // Lock, then open the same workspace picker the lock screen offers. Going
+    // through `openWorkspacePicker` keeps one code path for "choose another
+    // folder": `configured` stays true, so the subtitle still reads "unlock"
+    // when the folder the user lands on already holds a diary.
+    deps.stopAutoLockTimer();
+    await refreshVaultState();
     showLockScreen();
-    els.diaryDir.focus();
-    els.diaryDir.select();
-    await refreshSetupVaultState();
+    await openWorkspacePicker();
   }
 
   async function lockNow() {
@@ -346,9 +428,11 @@ export function createLockScreen(deps) {
     // `configured` stays true (the settings file is still there) and the vault
     // still exists, so re-render instead of leaving the previous layout on
     // screen. Re-detect the vault so a folder that was swapped out from under
-    // us is handled correctly.
+    // us is handled correctly. A picker left open from a previous attempt is
+    // closed, so locking always lands on the plain unlock form.
     deps.stopAutoLockTimer();
     deps.closeSettings();
+    pickingWorkspace = false;
     await refreshVaultState();
     showLockScreen();
     renderLockScreen();
@@ -359,17 +443,22 @@ export function createLockScreen(deps) {
     setConfigured,
     isVaultInitialized,
     setVaultInitialized,
+    isPickingWorkspace,
+    setPickingWorkspace,
     showLockScreen,
     loadKdfDefaults,
     resetKdfFields,
     readKdfParams,
     updateKdfEstimate,
     renderLockScreen,
+    renderWorkspacePath,
     enterApp,
     loadSettings,
     detectVault,
     refreshVaultState,
     refreshSetupVaultState,
+    openWorkspacePicker,
+    cancelWorkspacePicker,
     handleUnlockSubmit,
     browseForDir,
     changeDiaryDir,

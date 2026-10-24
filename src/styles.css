@@ -420,6 +420,41 @@ summary:focus-visible {
   gap: 0.375rem;
 }
 
+/* Current workspace: the folder in use, plus the button that opens the picker.
+   Shown only once a folder has been configured, so a returning user can see
+   which diary they are unlocking and switch to another one before unlocking. */
+.lock-workspace {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lock-workspace[hidden] {
+  display: none;
+}
+
+.lock-workspace-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Long paths are truncated from the left, so the folder name stays visible. */
+  direction: rtl;
+  text-align: left;
+}
+
+.lock-cancel-workspace {
+  align-self: flex-start;
+}
+
 .lock-path-row .lock-input {
   flex: 1;
   min-width: 0;

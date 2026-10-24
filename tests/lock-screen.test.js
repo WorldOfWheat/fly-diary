@@ -18,13 +18,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createLockScreen } from "../src/lock-screen.js";
-import {
-  installDom,
-  fakeEls,
-  fakeT,
-  fakeInvoke,
-  spy,
-} from "./helpers/dom.js";
+import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
 
 const LOCK_IDS = [
   "app",
@@ -34,6 +28,8 @@ const LOCK_IDS = [
   "lockSubmit",
   "passphrase",
   "passphraseConfirm",
+  "workspaceRow",
+  "workspacePath",
   "pathField",
   "diaryDir",
   "advancedField",
@@ -120,7 +116,12 @@ async function withLock(body, overrides) {
 
 /** A submit event that records `preventDefault()`. */
 function submitEvent() {
-  return { prevented: false, preventDefault() { this.prevented = true; } };
+  return {
+    prevented: false,
+    preventDefault() {
+      this.prevented = true;
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +287,7 @@ test("renderLockScreen shows the path field on first run", () => {
     lock.renderLockScreen();
 
     assert.equal(els.pathField.hidden, false);
+    assert.equal(els.workspaceRow.hidden, true);
     assert.equal(els.advancedField.hidden, false);
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.firstRun");
     assert.equal(els.passphraseConfirm.hidden, false);
@@ -303,6 +305,7 @@ test("renderLockScreen asks for a new passphrase in an empty folder", () => {
     lock.renderLockScreen();
 
     assert.equal(els.pathField.hidden, true);
+    assert.equal(els.workspaceRow.hidden, false);
     assert.equal(els.advancedField.hidden, false);
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.newInFolder");
     assert.equal(els.passphraseConfirm.hidden, false);
@@ -318,6 +321,7 @@ test("renderLockScreen asks only for the passphrase for a returning user", () =>
     lock.renderLockScreen();
 
     assert.equal(els.pathField.hidden, true);
+    assert.equal(els.workspaceRow.hidden, false);
     assert.equal(els.advancedField.hidden, true);
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.unlock");
     assert.equal(els.passphraseConfirm.hidden, true);
@@ -336,6 +340,34 @@ test("renderLockScreen uses the existing-vault subtitle when unconfigured", () =
 
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.existing");
     assert.equal(els.pathField.hidden, false);
+  });
+});
+
+test("renderLockScreen shows the path field while picking a workspace", () => {
+  withLock(({ lock, els }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(true);
+    lock.setPickingWorkspace(true);
+
+    lock.renderLockScreen();
+
+    // The picker replaces the workspace row, and the subtitle keeps saying
+    // "unlock" because the app is still configured.
+    assert.equal(els.pathField.hidden, false);
+    assert.equal(els.workspaceRow.hidden, true);
+    assert.equal(els.lockSubtitle.textContent, "lock.subtitle.unlock");
+  });
+});
+
+test("renderLockScreen explains the picker when the folder has no vault", () => {
+  withLock(({ lock, els }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(false);
+    lock.setPickingWorkspace(true);
+
+    lock.renderLockScreen();
+
+    assert.equal(els.lockSubtitle.textContent, "lock.subtitle.switching");
   });
 });
 
@@ -767,8 +799,12 @@ test("changeDiaryDir flushes, resets the editor and shows the path field", async
     assert.equal(deps.closeImport.count(), 1);
     assert.equal(deps.closeSettings.count(), 1);
     assert.equal(deps.renderDateLabel.count(), 1);
+    assert.equal(deps.stopAutoLockTimer.count(), 1);
 
-    assert.equal(lock.isConfigured(), false);
+    // The app stays configured: only the picker is open, so the subtitle still
+    // reads "unlock" rather than "first run".
+    assert.equal(lock.isConfigured(), true);
+    assert.equal(lock.isPickingWorkspace(), true);
     assert.equal(els.pathField.hidden, false);
     assert.equal(els.lockScreen.hidden, false);
     assert.equal(document.activeElement, els.diaryDir);
@@ -786,7 +822,121 @@ test("changeDiaryDir keeps the vault flag so an existing diary unlocks", async (
 
     // The folder the user lands on already holds a vault.
     assert.equal(lock.isVaultInitialized(), true);
-    assert.equal(els.lockSubtitle.textContent, "lock.subtitle.existing");
+    assert.equal(els.lockSubtitle.textContent, "lock.subtitle.unlock");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Switching workspace from the lock screen
+// ---------------------------------------------------------------------------
+
+test("openWorkspacePicker reveals the path field without unlocking", async () => {
+  await withLock(async ({ lock, els }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(true);
+    els.diaryDir.value = "/home/u/diary";
+
+    await lock.openWorkspacePicker();
+
+    assert.equal(lock.isPickingWorkspace(), true);
+    assert.equal(els.pathField.hidden, false);
+    assert.equal(els.workspaceRow.hidden, true);
+    assert.equal(document.activeElement, els.diaryDir);
+  });
+});
+
+test("openWorkspacePicker switches to the unlock form for an existing vault", async () => {
+  await withLock(async ({ lock, els }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(false);
+    els.diaryDir.value = "/home/u/other";
+
+    await lock.openWorkspacePicker();
+
+    // `vault_exists` is true in the fake backend, so the form asks for the
+    // passphrase of the folder the user pointed at.
+    assert.equal(lock.isVaultInitialized(), true);
+    assert.equal(els.lockSubtitle.textContent, "lock.subtitle.unlock");
+    assert.equal(els.passphraseConfirm.hidden, true);
+    assert.equal(els.lockSubmit.textContent, "lock.submitUnlock");
+  });
+});
+
+test("openWorkspacePicker offers to create a vault in an empty folder", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      els.diaryDir.value = "/home/u/empty";
+
+      await lock.openWorkspacePicker();
+
+      assert.equal(lock.isVaultInitialized(), false);
+      assert.equal(els.lockSubtitle.textContent, "lock.subtitle.switching");
+      assert.equal(els.passphraseConfirm.hidden, false);
+      assert.equal(els.lockSubmit.textContent, "lock.submitCreate");
+    },
+    { invokeTable: { vault_exists: false } }
+  );
+});
+
+test("cancelWorkspacePicker restores the saved folder and closes the picker", async () => {
+  await withLock(async ({ lock, els }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(true);
+    lock.setPickingWorkspace(true);
+    els.diaryDir.value = "/home/u/half-typed";
+
+    await lock.cancelWorkspacePicker();
+
+    assert.equal(lock.isPickingWorkspace(), false);
+    assert.equal(els.diaryDir.value, "/home/u/diary");
+    assert.equal(els.pathField.hidden, true);
+    assert.equal(els.workspaceRow.hidden, false);
+    assert.equal(document.activeElement, els.passphrase);
+  });
+});
+
+test("cancelWorkspacePicker does nothing on first run", async () => {
+  await withLock(async ({ lock, els }) => {
+    lock.setConfigured(false);
+    els.diaryDir.value = "/typed";
+
+    await lock.cancelWorkspacePicker();
+
+    // The picker cannot be cancelled when there is no saved folder to go back
+    // to, so the typed path is left alone.
+    assert.equal(els.diaryDir.value, "/typed");
+  });
+});
+
+test("handleUnlockSubmit persists the folder chosen in the picker", async () => {
+  await withLock(async ({ lock, els, invoke }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(true);
+    lock.setPickingWorkspace(true);
+    els.diaryDir.value = "/home/u/other";
+    els.passphrase.value = "correct horse";
+
+    await lock.handleUnlockSubmit(submitEvent());
+
+    assert.deepEqual(invoke.argsOf("set_diary_dir"), { path: "/home/u/other" });
+    assert.deepEqual(invoke.argsOf("unlock"), { passphrase: "correct horse" });
+    assert.equal(lock.isPickingWorkspace(), false);
+    assert.equal(els.workspacePath.textContent, "/home/u/other");
+  });
+});
+
+test("handleUnlockSubmit does not touch the settings when no picker is open", async () => {
+  await withLock(async ({ lock, els, invoke }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(true);
+    els.passphrase.value = "correct horse";
+
+    await lock.handleUnlockSubmit(submitEvent());
+
+    assert.equal(invoke.commands().includes("set_diary_dir"), false);
+    assert.deepEqual(invoke.argsOf("unlock"), { passphrase: "correct horse" });
   });
 });
 

@@ -1048,6 +1048,8 @@ function wireEvents() {
     // Lock screen
     handleUnlockSubmit: lockScreen.handleUnlockSubmit,
     browseForDir: lockScreen.browseForDir,
+    openWorkspacePicker: lockScreen.openWorkspacePicker,
+    cancelWorkspacePicker: lockScreen.cancelWorkspacePicker,
     resetKdfFields: lockScreen.resetKdfFields,
     updateKdfEstimate: lockScreen.updateKdfEstimate,
     refreshSetupVaultState: lockScreen.refreshSetupVaultState,
