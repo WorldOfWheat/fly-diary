@@ -139,6 +139,14 @@ export function initEventWiring(deps) {
 
   on(els.deleteBtn, "click", deps.deleteCurrent);
   on(els.favouriteBtn, "click", deps.toggleFavourite);
+
+  // The banner only exists for a locked entry, so its buttons are optional.
+  if (els.brokenExportBtn) {
+    on(els.brokenExportBtn, "click", () => deps.exportBrokenFile());
+  }
+  if (els.brokenDeleteBtn) {
+    on(els.brokenDeleteBtn, "click", () => deps.deleteCurrent());
+  }
   on(els.lockBtn, "click", deps.lockNow);
   on(els.changeDirBtn, "click", deps.changeDiaryDir);
 
@@ -246,6 +254,9 @@ export function initEventWiring(deps) {
 
   on(els.viewAll, "click", () => deps.setView("all"));
   on(els.viewFavourites, "click", () => deps.setView("favourites"));
+  if (els.viewBroken) {
+    on(els.viewBroken, "click", () => deps.setView("broken"));
+  }
 
   on(els.search, "input", () => {
     deps.setSearchQuery(els.search.value);

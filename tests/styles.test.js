@@ -157,3 +157,57 @@ test("the calendar overlay is the only fixed layer above the editor", () => {
   );
   assert.deepEqual(zIndexes, ["40"]);
 });
+
+// ---------------------------------------------------------------------------
+// The broken-entry banner
+// ---------------------------------------------------------------------------
+//
+// The banner is a normal in-flow block, so unlike the overlays it *may* set
+// `display`. It still has to lose to the `hidden` attribute, otherwise the
+// "this file cannot be decrypted" warning would show on every healthy entry.
+
+test("the broken banner hides when the hidden attribute is set", () => {
+  const hidden = rulesFor(".broken-banner[hidden]");
+  assert.ok(hidden.length > 0, ".broken-banner[hidden] rule is missing");
+
+  const displays = hidden.flatMap((rule) =>
+    declarations(rule.body, "display")
+  );
+  assert.ok(displays.length > 0, ".broken-banner[hidden] must set display");
+  for (const value of displays) {
+    assert.match(
+      value,
+      /^none\s*!important$/,
+      `.broken-banner[hidden] must be "none !important", got "${value}"`
+    );
+  }
+});
+
+test("the broken banner is laid out as a flex row", () => {
+  const base = rulesFor(".broken-banner");
+  assert.ok(base.length > 0, "no rule found for .broken-banner");
+  assert.ok(
+    base.some((rule) => declarations(rule.body, "display").includes("flex")),
+    ".broken-banner must be a flex row"
+  );
+});
+
+test("the broken tab badge is hidden while it is empty", () => {
+  // The badge carries the broken-file count. An empty pill would otherwise sit
+  // next to the tab label on a healthy vault.
+  const empty = rulesFor(".view-badge:empty");
+  assert.ok(empty.length > 0, ".view-badge:empty rule is missing");
+  assert.ok(
+    empty.some((rule) => declarations(rule.body, "display").includes("none")),
+    ".view-badge:empty must be display: none"
+  );
+});
+
+test("a locked editor dims its inputs", () => {
+  // The lock is enforced in JS, but the user needs to see that typing will not
+  // be saved. Both the title and the body must pick up the locked styling.
+  for (const selector of [".editor.is-locked .title-input", ".editor.is-locked #content"]) {
+    const locked = rulesFor(selector);
+    assert.ok(locked.length > 0, `no rule found for ${selector}`);
+  }
+});

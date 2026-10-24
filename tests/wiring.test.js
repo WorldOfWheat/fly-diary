@@ -114,6 +114,9 @@ const ELEMENT_IDS = [
   "importOverlay",
   "viewAll",
   "viewFavourites",
+  "viewBroken",
+  "brokenExportBtn",
+  "brokenDeleteBtn",
   "search",
   "listScroll",
 ];
@@ -178,6 +181,7 @@ function harness(overrides = {}) {
     closeStats: spy("closeStats"),
     isStatsOpen: () => false,
     setView: spy("setView"),
+    exportBrokenFile: spy("exportBrokenFile"),
     startImport: spy("startImport"),
     closeImport: spy("closeImport"),
     confirmImport: spy("confirmImport"),
@@ -776,4 +780,65 @@ test("the cancel-workspace button closes the picker", () => {
     h.els.cancelWorkspace.dispatch("click");
     assert.deepEqual(h.names(), ["cancelWorkspacePicker"]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Broken entries
+// ---------------------------------------------------------------------------
+//
+// A file that fails to decrypt is never loaded into the editor. The sidebar
+// grows a third tab for them, and the banner above the editor offers the only
+// two actions that are safe on such a file: export a copy, or delete it. The
+// wiring must not let either button fall through to the normal save path.
+
+test("the broken tab switches to the broken view", () => {
+  withHarness((h) => {
+    h.els.viewBroken.dispatch("click");
+    assert.deepEqual(h.names(), ["setView"]);
+    assert.deepEqual(h.argsOf("setView"), ["broken"]);
+  });
+});
+
+test("the broken banner export button exports the current entry", () => {
+  withHarness((h) => {
+    h.els.brokenExportBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["exportBrokenFile"]);
+  });
+});
+
+test("the broken banner delete button goes through the delete flow", () => {
+  withHarness((h) => {
+    h.els.brokenDeleteBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["deleteCurrent"]);
+  });
+});
+
+test("the broken banner buttons never reach the save path", () => {
+  withHarness((h) => {
+    h.els.brokenExportBtn.dispatch("click");
+    h.els.brokenDeleteBtn.dispatch("click");
+    assert.ok(
+      !h.names().includes("saveNow"),
+      "a broken entry must never be written back"
+    );
+    assert.ok(
+      !h.names().includes("scheduleSave"),
+      "a broken entry must never schedule an autosave"
+    );
+  });
+});
+
+test("the broken tab is optional so an older DOM still wires up", () => {
+  // `wiring.js` guards the new bindings with `if (els.viewBroken)`. Dropping
+  // the element must not throw, and must not register a stray listener.
+  const h = harness();
+  try {
+    delete h.els.viewBroken;
+    delete h.els.brokenExportBtn;
+    delete h.els.brokenDeleteBtn;
+    h.cleanup();
+    assert.deepEqual(h.names(), []);
+  } finally {
+    h.restore();
+  }
 });

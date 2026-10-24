@@ -44,12 +44,29 @@ let allEntries = [];
 /** Search filter string. */
 let searchQuery = "";
 /**
- * Which sidebar view is showing: `"all"` or `"favourites"`.
+ * Which sidebar view is showing: `"all"`, `"favourites"` or `"broken"`.
  *
- * Both views read the same `allEntries` array; the favourites view is just an
- * extra filter, so switching never needs a second fetch or a second list.
+ * The first two read the same `allEntries` array; the favourites view is just an
+ * extra filter, so switching never needs a second fetch or a second list. The
+ * broken view is different: it reads `brokenEntries`, which comes from a
+ * separate command and is rendered without virtual scrolling.
  */
 let currentView = "all";
+/**
+ * Entry files that exist on disk but cannot be decrypted.
+ *
+ * Kept apart from `allEntries` on purpose: a broken file has no readable title,
+ * and the backend never puts it in the index, so the two lists cannot overlap.
+ */
+let brokenEntries = [];
+/**
+ * Date whose entry file is undecryptable, or `""` when the editor is writable.
+ *
+ * While this is set the editor is read-only and autosave is suppressed, so a
+ * blank editor can never overwrite a file we failed to read. It is cleared only
+ * by deleting the file (or by locking the app).
+ */
+let lockedDate = "";
 /** Whether the entry currently open in the editor is a favourite. */
 let currentFavourite = false;
 /** Set while a favourite toggle is in flight, to ignore double clicks. */
@@ -492,6 +509,30 @@ function applyFilter() {
     : base;
 }
 
+/** Broken rows matching the current search, newest first. */
+function filteredBroken() {
+  const q = searchQuery.trim().toLowerCase();
+  if (!q) return brokenEntries;
+  return brokenEntries.filter((b) => b.date.includes(q));
+}
+
+/** Human-readable explanation for a `BrokenReason` from the backend. */
+function brokenReasonText(reason) {
+  const key = `broken.reason.${reason}`;
+  const text = t(key);
+  // `t()` returns the key itself when it is missing, which would leak
+  // `broken.reason.…` into the UI. Fall back to the generic message instead.
+  return text === key ? t("broken.bannerBody") : text;
+}
+
+/** `1234` → `1.2 KB`. Small helper so the broken rows show a useful size. */
+function formatBytes(bytes) {
+  if (!bytes) return "0 B";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /** Build the DOM node for one entry row. */
 function createRow(entry, index) {
   const li = document.createElement("li");
@@ -542,13 +583,72 @@ function renderVisibleRows(force = false) {
   els.list.replaceChildren(frag);
 }
 
+/**
+ * Render the broken-files view.
+ *
+ * Deliberately not virtualised: the list is normally empty or a handful of
+ * rows, and a plain list keeps the "export / delete" buttons simple. The spacer
+ * is collapsed so the scroll container does not reserve phantom height.
+ */
+function renderBrokenList() {
+  const rows = filteredBroken();
+  els.listSpacer.style.height = "0px";
+  renderedStart = -1;
+  renderedEnd = -1;
+
+  if (rows.length === 0) {
+    els.list.replaceChildren();
+    const li = document.createElement("li");
+    li.className = "list-empty";
+    li.textContent = searchQuery.trim()
+      ? t("sidebar.emptyFiltered")
+      : t("sidebar.emptyBroken");
+    els.list.appendChild(li);
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const broken of rows) {
+    const li = document.createElement("li");
+    li.className = "entry-item broken-item";
+    li.dataset.date = broken.date;
+    li.style.position = "static";
+    li.style.height = "auto";
+
+    const dateRow = document.createElement("div");
+    dateRow.className = "entry-date";
+    const dateText = document.createElement("span");
+    dateText.textContent = broken.date;
+    const weekday = document.createElement("span");
+    weekday.className = "entry-weekday";
+    weekday.textContent = weekdayOf(broken.date);
+    dateRow.append(dateText, weekday);
+
+    const preview = document.createElement("div");
+    preview.className = "entry-preview";
+    preview.textContent = `${brokenReasonText(broken.reason)} · ${formatBytes(
+      broken.size
+    )}`;
+
+    li.append(dateRow, preview);
+    li.addEventListener("click", () => selectDate(broken.date));
+    frag.appendChild(li);
+  }
+  els.list.replaceChildren(frag);
+}
+
 /** Full re-render: refilter, resize the spacer, then draw the viewport. */
 function renderList() {
-  applyFilter();
-
   // The calendar marks days that already have an entry, so it has to follow
   // the list. Only redraw while it is actually open.
   if (calendar.isCalendarOpen()) calendar.renderCalendar();
+
+  if (currentView === "broken") {
+    renderBrokenList();
+    return;
+  }
+
+  applyFilter();
 
   if (visibleEntries.length === 0) {
     els.listSpacer.style.height = "0px";
@@ -615,16 +715,54 @@ function scrollDateIntoView(date) {
 // Data operations
 // ---------------------------------------------------------------------------
 
+/**
+ * Refresh the broken-file list and the sidebar tab that advertises it.
+ *
+ * The tab is hidden entirely when nothing is broken, so a healthy diary never
+ * shows a scary red badge. `announce` is only true on the first load, so the
+ * user is told once per session rather than on every autosave.
+ */
+async function refreshBroken(announce = false) {
+  const previous = brokenEntries.length;
+  try {
+    brokenEntries = await invoke("list_broken_entries");
+  } catch (err) {
+    console.error("list_broken_entries failed:", err);
+    brokenEntries = [];
+  }
+
+  if (els.brokenCount) {
+    els.brokenCount.textContent = brokenEntries.length
+      ? String(brokenEntries.length)
+      : "";
+  }
+  if (els.viewBroken) {
+    els.viewBroken.hidden = brokenEntries.length === 0;
+  }
+
+  // The broken view can empty out from under the user (they deleted the last
+  // file), so fall back to "all" rather than showing a hidden tab.
+  if (currentView === "broken" && brokenEntries.length === 0) {
+    setView("all");
+  }
+
+  if (announce && brokenEntries.length > previous) {
+    setStatus(t("broken.notify", { n: brokenEntries.length }));
+  }
+}
+
 async function refreshList() {
   // Titles are encrypted, so listing only works while unlocked. Never leave
   // stale titles on screen after the key has been dropped.
   if (!lockScreen.isVaultInitialized()) {
     allEntries = [];
+    brokenEntries = [];
     renderList();
     return;
   }
   try {
     allEntries = await invoke("list_entries");
+    await refreshBroken();
     renderList();
   } catch (err) {
     console.error("list_entries failed:", err);
@@ -661,15 +799,19 @@ function renderFavouriteButton() {
   }
 }
 
-/** Switch the sidebar between the "all" and "favourites" views. */
+/** Switch the sidebar between the "all", "favourites" and "broken" views. */
 function setView(view) {
-  if (view !== "all" && view !== "favourites") return;
+  if (view !== "all" && view !== "favourites" && view !== "broken") return;
+  // The broken tab is hidden when there is nothing to show, so refuse to switch
+  // to it rather than displaying an empty view with no way back.
+  if (view === "broken" && brokenEntries.length === 0) return;
   if (currentView === view) return;
   currentView = view;
 
   for (const [name, btn] of [
     ["all", els.viewAll],
     ["favourites", els.viewFavourites],
+    ["broken", els.viewBroken],
   ]) {
     if (!btn) continue;
     const active = name === view;
@@ -721,6 +863,52 @@ async function toggleFavourite() {
   }
 }
 
+/**
+ * Put the editor into read-only mode for `date`.
+ *
+ * The fields are disabled rather than merely ignored so the browser cannot
+ * accept a keystroke that would never be saved. `lockedDate` is the flag the
+ * save path checks, so even a programmatic `saveNow()` cannot write.
+ */
+function lockEditor(date, reason) {
+  lockedDate = date;
+  suppressInput = true;
+  els.title.value = "";
+  els.content.value = "";
+  suppressInput = false;
+  savedTitle = "";
+  savedContent = "";
+  els.title.disabled = true;
+  els.content.disabled = true;
+  if (els.editor) els.editor.classList.add("is-locked");
+  if (els.brokenBanner) els.brokenBanner.hidden = false;
+  if (els.brokenBannerReason) {
+    els.brokenBannerReason.textContent = reason
+      ? brokenReasonText(reason)
+      : t("broken.bannerBody");
+  }
+  els.deleteBtn.disabled = false;
+  els.favouriteBtn.disabled = true;
+  currentFavourite = false;
+  renderFavouriteButton();
+  updateWordCount();
+  setStatus(t("broken.lockedStatus"));
+}
+
+/** Return the editor to its normal, writable state. */
+function unlockEditor() {
+  lockedDate = "";
+  els.title.disabled = false;
+  els.content.disabled = false;
+  if (els.editor) els.editor.classList.remove("is-locked");
+  if (els.brokenBanner) els.brokenBanner.hidden = true;
+}
+
+/** Find the broken-file record for `date`, if there is one. */
+function brokenEntryFor(date) {
+  return brokenEntries.find((b) => b.date === date) || null;
+}
+
 /** Load the entry for `date` into the editor. */
 async function selectDate(date) {
   // Flush any pending save for the previous date before switching.
@@ -733,6 +921,20 @@ async function selectDate(date) {
   currentDate = date;
   els.datePicker.value = date;
   renderDateLabel();
+
+  // A known-broken file is never even read: `get_entry` would fail anyway, and
+  // going straight to the locked state avoids a blank editor that looks
+  // editable. Switching away and back re-enters this branch, so the lock
+  // survives navigation.
+  const broken = brokenEntryFor(date);
+  if (broken) {
+    lockEditor(date, broken.reason);
+    scrollDateIntoView(date);
+    highlightActive();
+    return;
+  }
+
+  unlockEditor();
 
   try {
     const entry = await invoke("get_entry", { date });
@@ -748,7 +950,19 @@ async function selectDate(date) {
     renderFavouriteButton();
     setStatus(entry ? t("status.loaded") : t("status.newEntry"));
   } catch (err) {
+    // The file exists but could not be decrypted. Lock the editor so the blank
+    // fields cannot be autosaved over the file we just failed to read, and
+    // refresh the broken list so the sidebar shows it too.
     console.error("get_entry failed:", err);
+    await refreshBroken();
+    const nowBroken = brokenEntryFor(date);
+    if (nowBroken) {
+      lockEditor(date, nowBroken.reason);
+      renderList();
+      scrollDateIntoView(date);
+      highlightActive();
+      return;
+    }
     setStatus(t("status.loadFailed"));
   }
 
@@ -764,6 +978,9 @@ async function selectDate(date) {
 /** Persist the current editor content immediately. */
 async function saveNow() {
   if (!currentDate) return;
+  // Never write to a file we could not read: the editor is blank, so saving
+  // would replace the undecryptable bytes with an empty entry.
+  if (lockedDate) return;
   const title = els.title.value;
   const content = els.content.value;
   if (title === savedTitle && content === savedContent) {
@@ -787,6 +1004,9 @@ async function saveNow() {
 
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
+  // A locked entry has nothing to save, and showing "editing" would suggest
+  // otherwise.
+  if (lockedDate) return;
   setStatus(t("status.editing"));
   saveTimer = setTimeout(async () => {
     saveTimer = null;
@@ -796,6 +1016,15 @@ function scheduleSave() {
 
 async function deleteCurrent() {
   if (!currentDate) return;
+
+  // A locked entry is always confirmed, even though the editor looks empty:
+  // the file on disk is not empty, and deleting it is irreversible.
+  if (lockedDate) {
+    if (!confirm(t("broken.deleteConfirm", { date: currentDate }))) return;
+    await deleteBrokenFile(currentDate);
+    return;
+  }
+
   const hasData =
     els.content.value.trim() !== "" || els.title.value.trim() !== "";
   if (hasData && !confirm(t("delete.confirm", { date: currentDate }))) {
@@ -822,6 +1051,58 @@ async function deleteCurrent() {
     setStatus(t("status.deleteFailed"));
   }
 }
+
+// ---------------------------------------------------------------------------
+// Broken entries
+// ---------------------------------------------------------------------------
+
+/**
+ * Copy the broken file somewhere the user picks.
+ *
+ * The backend copies the bytes verbatim, so whatever is in the file survives
+ * even though the app cannot parse it. After a successful export the user is
+ * asked whether to delete the original — never deleted automatically.
+ */
+async function exportBrokenFile(date) {
+  try {
+    const dest = await invoke("export_broken_entry", { date });
+    if (!dest) return; // The user cancelled the save dialog.
+    setStatus(t("broken.exported", { path: dest }), true);
+    if (confirm(t("broken.deleteConfirmAfterExport", { date }))) {
+      await deleteBrokenFile(date);
+    }
+  } catch (err) {
+    console.error("export_broken_entry failed:", err);
+    setStatus(t("broken.exportFailed", { message: String(err) }));
+  }
+}
+
+/** Delete a broken file and leave the editor in a clean state. */
+async function deleteBrokenFile(date) {
+  try {
+    await invoke("delete_entry", { date });
+    if (lockedDate === date) {
+      unlockEditor();
+      suppressInput = true;
+      els.title.value = "";
+      els.content.value = "";
+      suppressInput = false;
+      savedTitle = "";
+      savedContent = "";
+      updateWordCount();
+    }
+    setStatus(t("broken.deleted"));
+    await refreshList();
+    // The broken list may now be empty, in which case `refreshBroken` has
+    // already switched the sidebar back to "all".
+    if (currentView === "broken") renderList();
+    els.deleteBtn.disabled = !allEntries.some((e) => e.date === date);
+    els.favouriteBtn.disabled = els.deleteBtn.disabled;
+  } catch (err) {
+    console.error("delete_entry failed:", err);
+    setStatus(t("broken.deleteFailed", { message: String(err) }));
+  }
+}
 // ---------------------------------------------------------------------------
 // Editor reset / lock helpers
 // ---------------------------------------------------------------------------
@@ -841,9 +1122,26 @@ function resetEditorState() {
   savedTitle = "";
   savedContent = "";
   allEntries = [];
+  brokenEntries = [];
+  unlockEditor();
   resetList();
   els.title.value = "";
   els.content.value = "";
+  if (els.brokenCount) els.brokenCount.textContent = "";
+  if (els.viewBroken) els.viewBroken.hidden = true;
+  if (currentView === "broken") {
+    currentView = "all";
+    for (const [name, btn] of [
+      ["all", els.viewAll],
+      ["favourites", els.viewFavourites],
+      ["broken", els.viewBroken],
+    ]) {
+      if (!btn) continue;
+      const active = name === "all";
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+    }
+  }
 }
 
 /**
@@ -1020,6 +1318,9 @@ async function enterApp() {
   resetAutoLockTimer();
 
   await refreshList();
+  // Tell the user once, on entry, if anything failed to decrypt. The tab badge
+  // stays visible afterwards; this is just the initial notification.
+  await refreshBroken(true);
 
   const today = await invoke("today");
   await selectDate(today);
@@ -1062,6 +1363,7 @@ function wireEvents() {
     deleteCurrent,
     toggleFavourite,
     saveNow,
+    exportBrokenFile: () => exportBrokenFile(currentDate),
     hasPendingSave: () => saveTimer !== null,
     clearPendingSave,
     isInputSuppressed: () => suppressInput,

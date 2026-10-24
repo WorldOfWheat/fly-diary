@@ -104,6 +104,40 @@ pub struct Entry {
     pub favourite: bool,
 }
 
+/// Why an entry file could not be read.
+///
+/// The distinction matters to the user: a `DecryptFailed` file is usually
+/// intact and was merely moved or renamed (the AAD no longer matches), so
+/// renaming it back recovers it. The other variants mean the bytes themselves
+/// are unusable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokenReason {
+    /// The GCM tag did not verify: wrong key, mismatched AAD, or tampering.
+    DecryptFailed,
+    /// The file is not a well-formed entry document.
+    MalformedXml,
+    /// The `iv` or `payload` element is not valid base64.
+    BadEncoding,
+    /// The file could not be read at all (permissions, I/O error).
+    Unreadable,
+}
+
+/// An entry file that exists on disk but cannot be decrypted.
+///
+/// These are deliberately kept out of [`EntryMeta`] and out of the index: a
+/// broken file has no title to show, and mixing it into the normal list would
+/// force every consumer to filter it out again. The sidebar shows them in a
+/// separate view instead.
+#[derive(Debug, Clone, Serialize)]
+pub struct BrokenEntry {
+    /// Date derived from the filename, in `YYYY-MM-DD` form.
+    pub date: String,
+    /// File size in bytes, so the user can judge whether it is worth rescuing.
+    pub size: u64,
+    pub reason: BrokenReason,
+}
+
 /// Validate that `date` is a real calendar date in `YYYY-MM-DD` form.
 ///
 /// This is the single source of truth for what counts as a valid entry key,
@@ -650,8 +684,22 @@ fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, IndexRecord
 /// This is the slow path: it is only used to build the index from scratch, or
 /// to repair it when it is missing or stale.
 fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexRecord>, String> {
+    Ok(scan_entries_with_broken(dir, key)?.0)
+}
+
+/// Scan every entry file, splitting the readable ones from the broken ones.
+///
+/// A file that cannot be decrypted is *not* silently dropped: it is reported in
+/// the second half of the tuple so the UI can offer to rescue or delete it. The
+/// index only ever contains the readable half, so a broken file never shows up
+/// in the normal list.
+fn scan_entries_with_broken(
+    dir: &Path,
+    key: &[u8; 32],
+) -> Result<(BTreeMap<String, IndexRecord>, Vec<BrokenEntry>), String> {
     ensure_dir(dir)?;
     let mut entries = BTreeMap::new();
+    let mut broken = Vec::new();
 
     let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
     for item in read_dir {
@@ -668,26 +716,79 @@ fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexReco
             continue;
         }
 
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
+        let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let mut record_broken = |reason: BrokenReason| {
+            broken.push(BrokenEntry {
+                date: date.to_string(),
+                size,
+                reason,
+            });
         };
-        let Ok(encrypted) = xml::from_xml(&text) else {
-            continue;
+
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(_) => {
+                record_broken(BrokenReason::Unreadable);
+                continue;
+            }
         };
-        let (Ok(iv), Ok(ct)) = (
+        let encrypted = match xml::from_xml(&text) {
+            Ok(encrypted) => encrypted,
+            Err(_) => {
+                record_broken(BrokenReason::MalformedXml);
+                continue;
+            }
+        };
+        let (iv, ct) = match (
             crypto::b64_decode(&encrypted.iv),
             crypto::b64_decode(&encrypted.payload),
-        ) else {
-            continue;
+        ) {
+            (Ok(iv), Ok(ct)) => (iv, ct),
+            _ => {
+                record_broken(BrokenReason::BadEncoding);
+                continue;
+            }
         };
-        let Ok(plain) = decrypt_entry_payload(key, date, &encrypted, &iv, &ct) else {
-            continue;
+        let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct) {
+            Ok(plain) => plain,
+            Err(_) => {
+                record_broken(BrokenReason::DecryptFailed);
+                continue;
+            }
         };
         let (title, _, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
         entries.insert(date.to_string(), IndexRecord { title, favourite });
     }
 
-    Ok(entries)
+    broken.sort_by(|a, b| b.date.cmp(&a.date));
+    Ok((entries, broken))
+}
+
+/// List the entry files that exist on disk but cannot be decrypted.
+///
+/// The index is deliberately not consulted: a broken file is by definition
+/// missing from it. This walks the directory every time, which is fine because
+/// the list is normally empty and the sidebar only asks for it on refresh.
+pub fn list_broken_entries(dir: &Path, key: &[u8; 32]) -> Result<Vec<BrokenEntry>, String> {
+    Ok(scan_entries_with_broken(dir, key)?.1)
+}
+
+/// Copy a broken entry file to a location the user picks, byte for byte.
+///
+/// The file is copied verbatim rather than parsed and re-serialised: the whole
+/// point is to preserve whatever is in there, including elements this version of
+/// the app does not know about. No key is needed, because nothing is decrypted.
+///
+/// Returns the destination path, or `None` if the user cancelled the dialog.
+pub fn export_broken_entry(dir: &Path, date: &str, dest: &Path) -> Result<(), String> {
+    validate_date(date)?;
+    let source = entry_path(dir, date)?;
+    if !source.is_file() {
+        return Err(format!("Entry {date} does not exist"));
+    }
+    fs::copy(&source, dest)
+        .map(|_| ())
+        .map_err(|e| format!("Failed to export entry {date}: {e}"))
 }
 
 /// Rebuild `index.xml` from the entry files and return the fresh index.
@@ -2775,5 +2876,151 @@ mod tests {
 
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "was {:o}", mode & 0o777);
+    }
+
+    // -----------------------------------------------------------------------
+    // Broken entries
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn a_healthy_vault_reports_no_broken_entries() {
+        let dir = temp_dir("broken-none");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        assert!(list_broken_entries(&dir, &key).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_relocated_entry_is_reported_as_a_decrypt_failure() {
+        let dir = temp_dir("broken-relocated");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        // Copy the ciphertext to another date: the AAD no longer matches.
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
+
+        let broken = list_broken_entries(&dir, &key).unwrap();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(broken[0].date, "2026-10-24");
+        assert_eq!(broken[0].reason, BrokenReason::DecryptFailed);
+        assert!(broken[0].size > 0, "size should be reported");
+    }
+
+    #[test]
+    fn a_broken_entry_is_not_in_the_index() {
+        let dir = temp_dir("broken-not-indexed");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
+
+        let listed: Vec<String> = list_entries(&dir, &key)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.date)
+            .collect();
+        assert_eq!(listed, vec!["2026-10-23".to_string()]);
+    }
+
+    #[test]
+    fn a_broken_entry_survives_an_index_rebuild() {
+        let dir = temp_dir("broken-rebuild");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
+
+        let rebuilt = rebuild_index(&dir, &key).unwrap();
+        assert_eq!(rebuilt.len(), 1);
+        assert_eq!(rebuilt[0].date, "2026-10-23");
+
+        // The file is still on disk and still reported.
+        assert!(dir.join("2026-10-24.xml").is_file());
+        assert_eq!(list_broken_entries(&dir, &key).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn malformed_xml_is_reported_as_malformed() {
+        let dir = temp_dir("broken-xml");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        fs::write(dir.join("2026-10-23.xml"), "not xml at all").unwrap();
+
+        let broken = list_broken_entries(&dir, &key).unwrap();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(broken[0].reason, BrokenReason::MalformedXml);
+    }
+
+    #[test]
+    fn bad_base64_is_reported_as_bad_encoding() {
+        let dir = temp_dir("broken-b64");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let doc = xml::EncryptedEntry::new("2026-10-23", "!!!not base64!!!", "!!!also not!!!");
+        fs::write(dir.join("2026-10-23.xml"), xml::to_xml(&doc).unwrap()).unwrap();
+
+        let broken = list_broken_entries(&dir, &key).unwrap();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(broken[0].reason, BrokenReason::BadEncoding);
+    }
+
+    #[test]
+    fn broken_entries_are_sorted_newest_first() {
+        let dir = temp_dir("broken-sorted");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        for date in ["2026-10-21", "2026-10-23", "2026-10-22"] {
+            fs::write(dir.join(format!("{date}.xml")), "junk").unwrap();
+        }
+
+        let dates: Vec<String> = list_broken_entries(&dir, &key)
+            .unwrap()
+            .into_iter()
+            .map(|b| b.date)
+            .collect();
+        assert_eq!(dates, vec!["2026-10-23", "2026-10-22", "2026-10-21"]);
+    }
+
+    #[test]
+    fn a_broken_entry_can_be_exported_byte_for_byte() {
+        let dir = temp_dir("broken-export");
+        create_vault(&dir, "pw", fast()).unwrap();
+        let original = "<diary version=\"9\"><unknown/></diary>";
+        fs::write(dir.join("2026-10-23.xml"), original).unwrap();
+
+        let dest = dir.join("rescued.xml");
+        export_broken_entry(&dir, "2026-10-23", &dest).unwrap();
+
+        assert_eq!(fs::read_to_string(&dest).unwrap(), original);
+        // The source is untouched.
+        assert_eq!(
+            fs::read_to_string(dir.join("2026-10-23.xml")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn exporting_a_missing_entry_fails() {
+        let dir = temp_dir("broken-export-missing");
+        create_vault(&dir, "pw", fast()).unwrap();
+
+        let err = export_broken_entry(&dir, "2026-10-23", &dir.join("out.xml")).unwrap_err();
+        assert!(err.contains("does not exist"), "got: {err}");
+    }
+
+    #[test]
+    fn exporting_rejects_a_bad_date() {
+        let dir = temp_dir("broken-export-bad-date");
+        create_vault(&dir, "pw", fast()).unwrap();
+
+        assert!(export_broken_entry(&dir, "../escape", &dir.join("out.xml")).is_err());
+    }
+
+    #[test]
+    fn deleting_a_broken_entry_removes_it_from_the_list() {
+        let dir = temp_dir("broken-delete");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        fs::write(dir.join("2026-10-23.xml"), "junk").unwrap();
+        assert_eq!(list_broken_entries(&dir, &key).unwrap().len(), 1);
+
+        delete_entry(&dir, &key, "2026-10-23").unwrap();
+
+        assert!(list_broken_entries(&dir, &key).unwrap().is_empty());
     }
 }

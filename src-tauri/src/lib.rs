@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use storage::{Entry, EntryMeta};
+use storage::{BrokenEntry, Entry, EntryMeta};
 use tauri::Manager;
 use zeroize::Zeroizing;
 
@@ -470,6 +470,57 @@ fn rebuild_index(
     storage::rebuild_index(&dir, guard.key()?)
 }
 
+/// List entry files that exist on disk but cannot be decrypted.
+///
+/// These never appear in [`list_entries`]: a broken file has no readable title,
+/// and mixing it into the normal list would make every consumer filter it out
+/// again. The sidebar shows them in their own view instead.
+#[tauri::command]
+fn list_broken_entries(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<BrokenEntry>, String> {
+    let dir = diary_dir(&app)?;
+    let guard = session.lock().unwrap();
+    storage::list_broken_entries(&dir, guard.key()?)
+}
+
+/// Copy a broken entry file to a location the user picks.
+///
+/// The bytes are copied verbatim, so whatever is in the file survives even if
+/// this version of the app cannot parse it. No session key is needed because
+/// nothing is decrypted.
+///
+/// Returns the destination path, or `None` when the user cancels the dialog.
+#[tauri::command]
+async fn export_broken_entry(
+    app: tauri::AppHandle,
+    date: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let dir = diary_dir(&app)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("匯出損壞的日記檔")
+        .set_file_name(format!("{date}.xml"))
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let picked = rx
+        .recv()
+        .map_err(|e| format!("Save dialog failed: {e}"))?;
+
+    let Some(dest) = picked else {
+        return Ok(None);
+    };
+    let dest = PathBuf::from(dest.to_string());
+    storage::export_broken_entry(&dir, &date, &dest)?;
+    Ok(Some(dest.to_string_lossy().into_owned()))
+}
+
 // ---------------------------------------------------------------------------
 // Import commands
 // ---------------------------------------------------------------------------
@@ -790,6 +841,8 @@ pub fn run() {
             list_favourites,
             set_favourite,
             rebuild_index,
+            list_broken_entries,
+            export_broken_entry,
             pick_import_dir,
             scan_import,
             run_import,

@@ -108,13 +108,18 @@
             </header>
             <!-- View switch: the same list, filtered to favourites or not.
                  Both views share the virtual scroller, so switching is just a
-                 re-filter rather than a second list to keep in sync. -->
+                 re-filter rather than a second list to keep in sync. The broken
+                 tab is different: it is hidden until a file fails to decrypt,
+                 and it renders its own (non-virtualised) list. -->
             <div class="view-switch" role="tablist" data-i18n-aria-label="sidebar.viewFavouritesTitle" aria-label="收藏">
                 <button id="view-all" class="view-tab is-active" type="button" role="tab" aria-selected="true"
                     data-i18n="sidebar.viewAll" data-i18n-title="sidebar.viewAllTitle" title="顯示所有日記">全部</button>
                 <button id="view-favourites" class="view-tab" type="button" role="tab" aria-selected="false"
                     data-i18n="sidebar.viewFavourites" data-i18n-title="sidebar.viewFavouritesTitle"
                     title="只顯示收藏的日記">收藏</button>
+                <button id="view-broken" class="view-tab view-tab-broken" type="button" role="tab" aria-selected="false"
+                    data-i18n="sidebar.viewBroken" data-i18n-title="sidebar.viewBrokenTitle" title="無法解密的日記檔"
+                    hidden>損壞<span id="broken-count" class="view-badge"></span></button>
             </div>
             <div class="search-wrap">
                 <input id="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期或標題…"
@@ -193,6 +198,22 @@
                         data-i18n-title="editor.deleteTitle" title="刪除這一天的日記">刪除</button>
                 </div>
             </header>
+
+            <!-- Shown only when the current entry file cannot be decrypted. The
+                 editor stays visible but read-only, so the user can see the date
+                 and decide whether to export or delete. -->
+            <div id="broken-banner" class="broken-banner" role="alert" hidden>
+                <div class="broken-banner-text">
+                    <strong data-i18n="broken.bannerTitle">這個檔案無法解密</strong>
+                    <span id="broken-banner-reason" class="broken-banner-reason"></span>
+                </div>
+                <div class="broken-banner-actions">
+                    <button id="broken-export-btn" class="btn-lock" type="button" data-i18n="broken.export"
+                        data-i18n-title="broken.exportTitle" title="把原始檔案另存一份">匯出備份</button>
+                    <button id="broken-delete-btn" class="btn-danger" type="button" data-i18n="broken.delete"
+                        data-i18n-title="broken.deleteTitle" title="永久刪除這個檔案">刪除檔案</button>
+                </div>
+            </div>
 
             <div class="title-wrap">
                 <input id="title" class="title-input" type="text" data-i18n-placeholder="editor.titlePlaceholder"
