@@ -205,21 +205,58 @@ struct KdfView {
     max_parallelism: u32,
 }
 
+impl KdfView {
+    /// Build a view from stored parameters.
+    ///
+    /// `with_bounds` decides whether the `min_*`/`max_*` fields are filled in.
+    /// They are only meaningful for the UI that lets the user *edit* the
+    /// parameters (the first-run panel and the calibrate button); reporting the
+    /// parameters of an existing vault leaves them at zero, which the frontend
+    /// ignores.
+    fn from_params(params: crypto::KdfParams, with_bounds: bool) -> Self {
+        let (min_memory_kib, max_memory_kib) = if with_bounds {
+            (
+                crypto::KdfParams::MIN_MEMORY_KIB,
+                crypto::KdfParams::MAX_MEMORY_KIB,
+            )
+        } else {
+            (0, 0)
+        };
+        let (min_iterations, max_iterations) = if with_bounds {
+            (
+                crypto::KdfParams::MIN_ITERATIONS,
+                crypto::KdfParams::MAX_ITERATIONS,
+            )
+        } else {
+            (0, 0)
+        };
+        let (min_parallelism, max_parallelism) = if with_bounds {
+            (
+                crypto::KdfParams::MIN_PARALLELISM,
+                crypto::KdfParams::MAX_PARALLELISM,
+            )
+        } else {
+            (0, 0)
+        };
+
+        Self {
+            memory_kib: params.memory_kib,
+            iterations: params.iterations,
+            parallelism: params.parallelism,
+            min_memory_kib,
+            max_memory_kib,
+            min_iterations,
+            max_iterations,
+            min_parallelism,
+            max_parallelism,
+        }
+    }
+}
+
 /// Default and allowed KDF parameters, used to seed the advanced options UI.
 #[tauri::command]
 fn get_kdf_defaults() -> KdfView {
-    let defaults = crypto::KdfParams::default();
-    KdfView {
-        memory_kib: defaults.memory_kib,
-        iterations: defaults.iterations,
-        parallelism: defaults.parallelism,
-        min_memory_kib: crypto::KdfParams::MIN_MEMORY_KIB,
-        max_memory_kib: crypto::KdfParams::MAX_MEMORY_KIB,
-        min_iterations: crypto::KdfParams::MIN_ITERATIONS,
-        max_iterations: crypto::KdfParams::MAX_ITERATIONS,
-        min_parallelism: crypto::KdfParams::MIN_PARALLELISM,
-        max_parallelism: crypto::KdfParams::MAX_PARALLELISM,
-    }
+    KdfView::from_params(crypto::KdfParams::default(), true)
 }
 
 /// Whether a vault file exists yet (first run vs. returning user).
@@ -296,17 +333,7 @@ fn lock(session: tauri::State<'_, SharedSession>) {
 #[tauri::command]
 fn get_vault_kdf(app: tauri::AppHandle) -> Result<Option<KdfView>, String> {
     let dir = diary_dir(&app)?;
-    Ok(storage::vault_kdf_params(&dir)?.map(|p| KdfView {
-        memory_kib: p.memory_kib,
-        iterations: p.iterations,
-        parallelism: p.parallelism,
-        min_memory_kib: 0,
-        max_memory_kib: 0,
-        min_iterations: 0,
-        max_iterations: 0,
-        min_parallelism: 0,
-        max_parallelism: 0,
-    }))
+    Ok(storage::vault_kdf_params(&dir)?.map(|p| KdfView::from_params(p, false)))
 }
 
 /// Measure this machine and return Argon2id parameters that take about a
@@ -318,17 +345,7 @@ async fn calibrate_kdf() -> Result<KdfView, String> {
     let params = tauri::async_runtime::spawn_blocking(crypto::calibrate_kdf)
         .await
         .map_err(|e| format!("Calibration task failed: {e}"))??;
-    Ok(KdfView {
-        memory_kib: params.memory_kib,
-        iterations: params.iterations,
-        parallelism: params.parallelism,
-        min_memory_kib: crypto::KdfParams::MIN_MEMORY_KIB,
-        max_memory_kib: crypto::KdfParams::MAX_MEMORY_KIB,
-        min_iterations: crypto::KdfParams::MIN_ITERATIONS,
-        max_iterations: crypto::KdfParams::MAX_ITERATIONS,
-        min_parallelism: crypto::KdfParams::MIN_PARALLELISM,
-        max_parallelism: crypto::KdfParams::MAX_PARALLELISM,
-    })
+    Ok(KdfView::from_params(params, true))
 }
 
 /// Change the passphrase and/or the Argon2id parameters.

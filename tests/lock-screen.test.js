@@ -372,35 +372,42 @@ test("renderLockScreen explains the picker when the folder has no vault", () => 
 });
 
 // ---------------------------------------------------------------------------
-// enterApp
+// enterApp hand-off
 // ---------------------------------------------------------------------------
+//
+// The lock screen does not implement `enterApp` itself: revealing the app and
+// picking today's entry belongs to `main.js`, which owns the editor state. The
+// only thing to pin down here is that a successful unlock calls the injected
+// callback exactly once.
 
-test("enterApp reveals the app and shows the diary path", async () => {
+test("handleUnlockSubmit hands off to deps.enterApp", async () => {
   await withLock(async ({ lock, els, deps }) => {
-    await lock.enterApp();
+    lock.setConfigured(true);
+    lock.setVaultInitialized(true);
+    els.passphrase.value = "correct horse";
 
-    assert.equal(els.lockScreen.hidden, true);
-    assert.equal(els.app.hidden, false);
-    assert.equal(els.diaryPath.textContent, "/home/u/diary");
-    assert.equal(els.diaryPath.title, "/home/u/diary");
-    assert.equal(deps.resetAutoLockTimer.count(), 1);
-    assert.equal(deps.refreshList.count(), 1);
-    assert.deepEqual(deps.selectDate.args(), [["2026-10-23"]]);
+    await lock.handleUnlockSubmit(submitEvent());
+
+    assert.equal(deps.enterApp.count(), 1);
   });
 });
 
-test("enterApp still opens the diary when diary_path fails", async () => {
+test("handleUnlockSubmit does not hand off when the unlock fails", async () => {
   await withLock(
-    async ({ lock, els }) => {
-      await lock.enterApp();
+    async ({ lock, els, deps }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      els.passphrase.value = "wrong";
 
-      assert.equal(els.app.hidden, false);
-      assert.equal(els.diaryPath.textContent, "");
+      await lock.handleUnlockSubmit(submitEvent());
+
+      assert.equal(deps.enterApp.count(), 0);
+      assert.equal(els.lockError.textContent, "bad passphrase");
     },
     {
       invokeTable: {
-        diary_path: () => {
-          throw "no path";
+        unlock: () => {
+          throw "bad passphrase";
         },
       },
     }
@@ -580,10 +587,8 @@ test("handleUnlockSubmit unlocks an existing vault", async () => {
 
     assert.deepEqual(invoke.argsOf("unlock"), { passphrase: "correct horse" });
     assert.equal(invoke.commands().includes("create_vault"), false);
-    // `handleUnlockSubmit` calls the module's own `enterApp`, which reveals the
-    // app and loads the list rather than going through `deps.enterApp`.
-    assert.equal(els.app.hidden, false);
-    assert.equal(deps.refreshList.count(), 1);
+    // The hand-off into the editor is `main.js`'s job, injected as a dep.
+    assert.equal(deps.enterApp.count(), 1);
     assert.equal(els.lockSubmit.disabled, false);
   });
 });
@@ -605,8 +610,7 @@ test("handleUnlockSubmit creates a vault in a configured empty folder", async ()
       kdf: { memoryKib: 65536, iterations: 3, parallelism: 4 },
     });
     assert.equal(lock.isVaultInitialized(), true);
-    assert.equal(els.app.hidden, false);
-    assert.equal(deps.refreshList.count(), 1);
+    assert.equal(deps.enterApp.count(), 1);
   });
 });
 

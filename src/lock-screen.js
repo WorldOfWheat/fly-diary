@@ -31,7 +31,6 @@
 //   t                  — (key: string, params?: object) => string
 //   setAutoLockMinutes — (minutes: number) => void
 //   enterApp           — () => Promise<void>
-//   upgradeEntries     — () => Promise<void>
 //   resetAutoLockTimer — () => void
 //   stopAutoLockTimer  — () => void
 //   refreshList        — () => Promise<void>
@@ -41,6 +40,11 @@
 //   closeImport        — () => void
 //   closeSettings      — () => void
 //   renderDateLabel    — () => void
+//   lockAndFlush       — () => Promise<void>
+//
+// `enterApp` is *not* implemented here: revealing the app and picking today's
+// entry is the hand-off into the editor, which `main.js` owns. This module only
+// calls it once the backend has accepted the passphrase.
 
 /**
  * Create the lock screen controller.
@@ -204,36 +208,6 @@ export function createLockScreen(deps) {
     els.workspacePath.title = path;
   }
 
-  async function enterApp() {
-    els.lockScreen.hidden = true;
-    els.app.hidden = false;
-
-    try {
-      const path = await deps.invoke("diary_path");
-      els.diaryPath.textContent = path;
-      els.diaryPath.title = path;
-    } catch (err) {
-      console.error("diary_path failed:", err);
-    }
-
-    // Start the idle countdown as soon as the diary is visible. The duration was
-    // read from the settings file during `init()`.
-    deps.resetAutoLockTimer();
-
-    await deps.refreshList();
-
-    const today = await deps.invoke("today");
-    await deps.selectDate(today);
-
-    // Rewrite any entry that predates the current on-disk format. Deliberately
-    // not awaited: the diary is already usable, and a large vault would
-    // otherwise keep the user staring at the editor for seconds. The run is
-    // idempotent, so an interrupted one simply resumes on the next unlock.
-    // Optional so that a host which does not care about upgrades (and the
-    // tests) can leave it out.
-    deps.upgradeEntries?.();
-  }
-
   /** Re-read the settings file and refresh the lock screen state. */
   async function loadSettings() {
     const settings = await deps.invoke("get_settings");
@@ -379,7 +353,7 @@ export function createLockScreen(deps) {
         await deps.invoke("create_vault", { passphrase, kdf });
         vaultInitialized = true;
       }
-      await enterApp();
+      await deps.enterApp();
     } catch (err) {
       console.error("unlock failed:", err);
       els.lockError.textContent =
@@ -461,7 +435,6 @@ export function createLockScreen(deps) {
     updateKdfEstimate,
     renderLockScreen,
     renderWorkspacePath,
-    enterApp,
     loadSettings,
     detectVault,
     refreshVaultState,

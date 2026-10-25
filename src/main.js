@@ -841,15 +841,14 @@ function renderFavouriteButton() {
   }
 }
 
-/** Switch the sidebar between the "all", "favourites" and "broken" views. */
-function setView(view) {
-  if (view !== "all" && view !== "favourites" && view !== "broken") return;
-  // The broken tab is hidden when there is nothing to show, so refuse to switch
-  // to it rather than displaying an empty view with no way back.
-  if (view === "broken" && brokenEntries.length === 0) return;
-  if (currentView === view) return;
-  currentView = view;
-
+/**
+ * Paint the active state on the three sidebar tabs.
+ *
+ * `aria-selected` is the source of truth for assistive tech; the `is-active`
+ * class is what the stylesheet keys off. Both have to move together, which is
+ * why this lives in one place instead of being repeated at each call site.
+ */
+function syncViewTabs(view) {
   for (const [name, btn] of [
     ["all", els.viewAll],
     ["favourites", els.viewFavourites],
@@ -860,6 +859,18 @@ function setView(view) {
     btn.classList.toggle("is-active", active);
     btn.setAttribute("aria-selected", active ? "true" : "false");
   }
+}
+
+/** Switch the sidebar between the "all", "favourites" and "broken" views. */
+function setView(view) {
+  if (view !== "all" && view !== "favourites" && view !== "broken") return;
+  // The broken tab is hidden when there is nothing to show, so refuse to switch
+  // to it rather than displaying an empty view with no way back.
+  if (view === "broken" && brokenEntries.length === 0) return;
+  if (currentView === view) return;
+  currentView = view;
+
+  syncViewTabs(view);
 
   // The row count changes, so the old scroll offset is meaningless.
   els.listScroll.scrollTop = 0;
@@ -906,6 +917,23 @@ async function toggleFavourite() {
 }
 
 /**
+ * Blank the editor without triggering autosave.
+ *
+ * `suppressInput` is what stops the `input` listener from scheduling a write,
+ * and it must be cleared again on every path — a stuck `true` would silently
+ * disable autosave for the rest of the session. Keeping the pair in one place
+ * is the point of this helper.
+ */
+function clearEditorFields() {
+  suppressInput = true;
+  els.title.value = "";
+  els.content.value = "";
+  suppressInput = false;
+  savedTitle = "";
+  savedContent = "";
+}
+
+/**
  * Put the editor into read-only mode for `date`.
  *
  * The fields are disabled rather than merely ignored so the browser cannot
@@ -914,12 +942,7 @@ async function toggleFavourite() {
  */
 function lockEditor(date, reason) {
   lockedDate = date;
-  suppressInput = true;
-  els.title.value = "";
-  els.content.value = "";
-  suppressInput = false;
-  savedTitle = "";
-  savedContent = "";
+  clearEditorFields();
   els.title.disabled = true;
   els.content.disabled = true;
   if (els.editor) els.editor.classList.add("is-locked");
@@ -1075,12 +1098,7 @@ async function deleteCurrent() {
 
   try {
     await invoke("delete_entry", { date: currentDate });
-    suppressInput = true;
-    els.title.value = "";
-    els.content.value = "";
-    suppressInput = false;
-    savedTitle = "";
-    savedContent = "";
+    clearEditorFields();
     updateWordCount();
     setStatus(t("status.deleted"));
     els.deleteBtn.disabled = true;
@@ -1125,12 +1143,7 @@ async function deleteBrokenFile(date) {
     await invoke("delete_entry", { date });
     if (lockedDate === date) {
       unlockEditor();
-      suppressInput = true;
-      els.title.value = "";
-      els.content.value = "";
-      suppressInput = false;
-      savedTitle = "";
-      savedContent = "";
+      clearEditorFields();
       updateWordCount();
     }
     setStatus(t("broken.deleted"));
@@ -1173,16 +1186,7 @@ function resetEditorState() {
   if (els.viewBroken) els.viewBroken.hidden = true;
   if (currentView === "broken") {
     currentView = "all";
-    for (const [name, btn] of [
-      ["all", els.viewAll],
-      ["favourites", els.viewFavourites],
-      ["broken", els.viewBroken],
-    ]) {
-      if (!btn) continue;
-      const active = name === "all";
-      btn.classList.toggle("is-active", active);
-      btn.setAttribute("aria-selected", active ? "true" : "false");
-    }
+    syncViewTabs("all");
   }
 }
 
@@ -1323,7 +1327,6 @@ function createControllers() {
     t,
     setAutoLockMinutes,
     enterApp,
-    upgradeEntries,
     resetAutoLockTimer,
     stopAutoLockTimer,
     refreshList,
@@ -1342,7 +1345,8 @@ function createControllers() {
  *
  * Lives here rather than in `lock-screen.js` because it is the hand-off point
  * between the lock screen and the editor: it reveals the app, then lets the
- * editor pick today's entry.
+ * editor pick today's entry. The lock screen calls it through `deps.enterApp`,
+ * so this is the single implementation of the unlock hand-off.
  */
 async function enterApp() {
   els.lockScreen.hidden = true;
@@ -1367,6 +1371,12 @@ async function enterApp() {
 
   const today = await invoke("today");
   await selectDate(today);
+
+  // Rewrite any entry that predates the current on-disk format. Deliberately
+  // not awaited: the diary is already usable, and a large vault would otherwise
+  // keep the user staring at the editor for seconds. The run is idempotent, so
+  // an interrupted one simply resumes on the next unlock.
+  upgradeEntries();
 }
 
 // ---------------------------------------------------------------------------
