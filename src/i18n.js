@@ -201,6 +201,8 @@ const zhHant = {
   "editor.calSummary": "{month} · 寫了 {n} 天",
   "editor.calSummaryEmpty": "{month} · 這個月還沒有日記",
   "editor.deleteTitle": "刪除這一天的日記",
+  "editor.unlock": "解鎖編輯",
+  "editor.unlockTitle": "這一天的日記已鎖定，點一下開始編輯",
   "editor.favourite": "收藏",
   "editor.favouriteOn": "已收藏",
   "editor.favouriteTitle": "加入收藏 (Ctrl/Cmd+D)",
@@ -235,6 +237,7 @@ const zhHant = {
 
   // --- Status --------------------------------------------------------------
   "status.loaded": "已載入",
+  "status.readOnly": "唯讀 · 點右上角解鎖編輯",
   "status.newEntry": "新日記",
   "status.loadFailed": "載入失敗",
   "status.saving": "儲存中…",
@@ -461,6 +464,8 @@ const en = {
   "editor.calSummary": "{month} · {n} days written",
   "editor.calSummaryEmpty": "{month} · no entries this month",
   "editor.deleteTitle": "Delete this day's entry",
+  "editor.unlock": "Unlock to edit",
+  "editor.unlockTitle": "This entry is locked; click to start editing",
   "editor.favourite": "Favourite",
   "editor.favouriteOn": "Favourited",
   "editor.favouriteTitle": "Add to favourites (Ctrl/Cmd+D)",
@@ -493,6 +498,7 @@ const en = {
 
   // --- Status --------------------------------------------------------------
   "status.loaded": "Loaded",
+  "status.readOnly": "Read-only · unlock in the header to edit",
   "status.newEntry": "New entry",
   "status.loadFailed": "Load failed",
   "status.saving": "Saving…",

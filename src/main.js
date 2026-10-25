@@ -67,6 +67,19 @@ let brokenEntries = [];
  * by deleting the file (or by locking the app).
  */
 let lockedDate = "";
+/**
+ * Whether the entry on screen is open in read-only mode.
+ *
+ * Distinct from `lockedDate` on purpose. `lockedDate` means "this file cannot be
+ * decrypted" — a failure state that only deleting the file can clear. This flag
+ * means "this entry is fine, but the user has not asked to edit it yet": an entry
+ * that already has content opens read-only so a stray keystroke cannot rewrite a
+ * finished page, and clicking the unlock button in the header clears the flag.
+ *
+ * The two are mutually exclusive in practice — a broken file never reaches the
+ * read-only path, because `selectDate` returns from the broken branch first.
+ */
+let readOnlyEntry = false;
 /** Whether the entry currently open in the editor is a favourite. */
 let currentFavourite = false;
 /** Set while a favourite toggle is in flight, to ignore double clicks. */
@@ -890,6 +903,23 @@ function setView(view) {
   renderList();
 }
 
+/**
+ * Enable or disable the two header actions for the current date.
+ *
+ * Both depend on the same fact — whether an entry file exists for this date —
+ * so they are set together. The favourite button is disabled on a brand-new
+ * date because `set_favourite` is a no-op for a missing file: it returns
+ * `Ok(false)` rather than creating one, so the star would silently do nothing.
+ *
+ * Called from `selectDate` after loading, and from `saveNow` after a write,
+ * which is the moment a new entry starts existing.
+ */
+function syncHeaderActions() {
+  const exists = allEntries.some((e) => e.date === currentDate);
+  els.deleteBtn.disabled = !exists;
+  els.favouriteBtn.disabled = !exists;
+}
+
 /** Toggle the bookmark on the entry currently open in the editor. */
 async function toggleFavourite() {
   if (!currentDate || favouriteBusy) return;
@@ -982,6 +1012,38 @@ function unlockEditor() {
   if (els.brokenBanner) els.brokenBanner.hidden = true;
 }
 
+/**
+ * Show an existing entry without letting it be edited yet.
+ *
+ * `readOnly` rather than `disabled`: the text stays selectable and scrollable, so
+ * the user can read and copy from the entry, and the caret cannot land in it. The
+ * unlock button in the header is the only way out, which makes "I opened a
+ * finished page" and "I am editing it" two visibly different states.
+ *
+ * The fields keep their content — unlike `lockEditor`, nothing is blanked, because
+ * there is nothing wrong with this file.
+ */
+function lockEntryForReading() {
+  readOnlyEntry = true;
+  els.title.readOnly = true;
+  els.content.readOnly = true;
+  if (els.editor) els.editor.classList.add("is-readonly");
+  if (els.editBtn) els.editBtn.hidden = false;
+  setStatus(t("status.readOnly"));
+}
+
+/** Swap the read-only entry into its writable state and put the caret in it. */
+function unlockEntryForEditing() {
+  if (!readOnlyEntry) return;
+  readOnlyEntry = false;
+  els.title.readOnly = false;
+  els.content.readOnly = false;
+  if (els.editor) els.editor.classList.remove("is-readonly");
+  if (els.editBtn) els.editBtn.hidden = true;
+  setStatus(t("status.editing"));
+  els.content.focus();
+}
+
 /** Find the broken-file record for `date`, if there is one. */
 function brokenEntryFor(date) {
   return brokenEntries.find((b) => b.date === date) || null;
@@ -1013,6 +1075,14 @@ async function selectDate(date) {
   }
 
   unlockEditor();
+  // Every load starts writable; the read-only gate is re-applied below only if
+  // this particular entry turns out to have content. Without this reset, moving
+  // from a locked entry to a brand-new date would leave the new date locked too.
+  readOnlyEntry = false;
+  els.title.readOnly = false;
+  els.content.readOnly = false;
+  if (els.editor) els.editor.classList.remove("is-readonly");
+  if (els.editBtn) els.editBtn.hidden = true;
 
   try {
     const entry = await invoke("get_entry", { date });
@@ -1026,7 +1096,14 @@ async function selectDate(date) {
     savedContent = content;
     currentFavourite = entry ? Boolean(entry.favourite) : false;
     renderFavouriteButton();
-    setStatus(entry ? t("status.loaded") : t("status.newEntry"));
+    // An entry that already has something in it opens read-only: the user asked
+    // to read it, not to change it. A blank date stays editable so a new entry
+    // can be typed straight away.
+    if (title.trim() !== "" || content.trim() !== "") {
+      lockEntryForReading();
+    } else {
+      setStatus(t("status.newEntry"));
+    }
   } catch (err) {
     // The file exists but could not be decrypted. Lock the editor so the blank
     // fields cannot be autosaved over the file we just failed to read, and
@@ -1044,13 +1121,18 @@ async function selectDate(date) {
     setStatus(t("status.loadFailed"));
   }
 
-  els.deleteBtn.disabled = !allEntries.some((e) => e.date === date);
-  // A brand-new date has nothing to bookmark yet.
-  els.favouriteBtn.disabled = els.deleteBtn.disabled;
+  syncHeaderActions();
   updateWordCount();
   scrollDateIntoView(date);
   highlightActive();
-  els.content.focus();
+  // Focusing a read-only field would put a caret in text the user cannot change,
+  // which reads as "editable but broken". The unlock button takes the focus
+  // instead, so Enter or Space opens the entry for editing.
+  if (readOnlyEntry) {
+    if (els.editBtn) els.editBtn.focus();
+  } else {
+    els.content.focus();
+  }
 }
 
 /** Persist the current editor content immediately. */
@@ -1059,10 +1141,16 @@ async function saveNow() {
   // Never write to a file we could not read: the editor is blank, so saving
   // would replace the undecryptable bytes with an empty entry.
   if (lockedDate) return;
+  // A read-only entry has not been touched, so there is nothing to write. This
+  // also covers the flush that `selectDate` performs when navigating away.
+  if (readOnlyEntry) return;
   const title = els.title.value;
   const content = els.content.value;
   if (title === savedTitle && content === savedContent) {
     setStatus(t("status.saved"), true);
+    // Nothing was written, but the header may still be stale — for example when
+    // this is the flush that follows a save which already created the entry.
+    syncHeaderActions();
     return;
   }
 
@@ -1076,7 +1164,11 @@ async function saveNow() {
     // cannot have produced an unreadable one. Rescanning the whole vault here
     // is what made autosave stutter on a large diary.
     await refreshList({ scanBroken: false });
-    els.deleteBtn.disabled = content.trim() === "" && title.trim() === "";
+    // The entry exists on disk now, so both header actions become usable. The
+    // favourite button in particular starts disabled on a brand-new date (there
+    // is nothing to bookmark yet) and used to stay that way until the user
+    // navigated away and back, because only `selectDate` ever re-enabled it.
+    syncHeaderActions();
   } catch (err) {
     console.error("save_entry failed:", err);
     setStatus(t("status.saveFailed"));
@@ -1088,6 +1180,9 @@ function scheduleSave() {
   // A locked entry has nothing to save, and showing "editing" would suggest
   // otherwise.
   if (lockedDate) return;
+  // Same for a read-only entry: the fields cannot produce an `input` event, but
+  // a stray programmatic call should not flip the status to "editing" either.
+  if (readOnlyEntry) return;
   setStatus(t("status.editing"));
   saveTimer = setTimeout(async () => {
     saveTimer = null;
@@ -1167,8 +1262,7 @@ async function deleteBrokenFile(date) {
     // The broken list may now be empty, in which case `refreshBroken` has
     // already switched the sidebar back to "all".
     if (currentView === "broken") renderList();
-    els.deleteBtn.disabled = !allEntries.some((e) => e.date === date);
-    els.favouriteBtn.disabled = els.deleteBtn.disabled;
+    syncHeaderActions();
   } catch (err) {
     console.error("delete_entry failed:", err);
     setStatus(t("broken.deleteFailed", { message: String(err) }));
@@ -1195,6 +1289,12 @@ function resetEditorState() {
   allEntries = [];
   brokenEntries = [];
   unlockEditor();
+  // The read-only gate belongs to the entry that was open, so it goes with it.
+  readOnlyEntry = false;
+  els.title.readOnly = false;
+  els.content.readOnly = false;
+  if (els.editor) els.editor.classList.remove("is-readonly");
+  if (els.editBtn) els.editBtn.hidden = true;
   resetList();
   els.title.value = "";
   els.content.value = "";
@@ -1434,6 +1534,7 @@ function wireEvents() {
     selectDate,
     deleteCurrent,
     toggleFavourite,
+    unlockEntryForEditing,
     saveNow,
     exportBrokenFile: () => exportBrokenFile(currentDate),
     hasPendingSave: () => saveTimer !== null,

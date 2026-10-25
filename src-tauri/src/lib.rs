@@ -883,10 +883,37 @@ mod tests {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Build the application menu.
+///
+/// Tauri installs a default menu on Linux and macOS, and its `Edit` submenu
+/// claims the `Ctrl+Z` / `Ctrl+Shift+Z` accelerators. Those default items are
+/// inert placeholders: they swallow the keystroke before the webview sees it and
+/// then do nothing, which is why undo appeared to be broken in the editor.
+///
+/// Rebuilding the submenu with [`PredefinedMenuItem`] gives each item a real
+/// action — the predefined variants forward to the focused webview's own editing
+/// commands, so undo/redo/cut/copy/paste behave exactly as they do in a browser.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
+
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, None)?)
+        .item(&PredefinedMenuItem::redo(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, None)?)
+        .item(&PredefinedMenuItem::copy(app, None)?)
+        .item(&PredefinedMenuItem::paste(app, None)?)
+        .item(&PredefinedMenuItem::select_all(app, None)?)
+        .build()?;
+
+    MenuBuilder::new(app).item(&edit).build()
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(SharedSession::default())
+        .menu(build_menu)
         .invoke_handler(tauri::generate_handler![
             get_settings,
             set_diary_dir,

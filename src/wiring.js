@@ -140,6 +140,9 @@ export function initEventWiring(deps) {
 
   on(els.deleteBtn, "click", deps.deleteCurrent);
   on(els.favouriteBtn, "click", deps.toggleFavourite);
+  // The header's unlock button is the only way out of the read-only state, so it
+  // is wired here rather than inside `main.js`'s own event setup.
+  if (els.editBtn) on(els.editBtn, "click", deps.unlockEntryForEditing);
 
   // The banner only exists for a locked entry, so its buttons are optional.
   if (els.brokenExportBtn) {
@@ -291,6 +294,23 @@ export function initEventWiring(deps) {
 
   on(document, "keydown", (e) => {
     const mod = e.ctrlKey || e.metaKey;
+
+    // Undo/redo inside the editor. The native Edit menu now forwards these to
+    // the webview, but the menu is not present on every platform build, and a
+    // menu accelerator never reaches JS at all. Handling the chord here keeps
+    // the behaviour identical everywhere, and only when the editor has focus —
+    // elsewhere the browser default is the right thing.
+    if (mod && !e.altKey && e.key.toLowerCase() === "z") {
+      const field = e.target;
+      const inEditor = field === els.title || field === els.content;
+      if (inEditor && !field.disabled) {
+        e.preventDefault();
+        // Ctrl+Shift+Z is the conventional redo on Linux and macOS; Ctrl+Y is
+        // handled by the webview itself on Windows.
+        document.execCommand(e.shiftKey ? "redo" : "undo");
+      }
+      return;
+    }
 
     if (e.key === "Escape" && deps.isStatsOpen()) {
       e.preventDefault();

@@ -87,6 +87,7 @@ const ELEMENT_IDS = [
   "newToday",
   "deleteBtn",
   "favouriteBtn",
+  "editBtn",
   "lockBtn",
   "changeDirBtn",
   "calPrevYear",
@@ -174,6 +175,7 @@ function harness(overrides = {}) {
     selectDate: spy("selectDate"),
     deleteCurrent: spy("deleteCurrent"),
     toggleFavourite: spy("toggleFavourite"),
+    unlockEntryForEditing: spy("unlockEntryForEditing"),
     lockNow: spy("lockNow"),
     changeDiaryDir: spy("changeDiaryDir"),
     openSettings: spy("openSettings"),
@@ -210,6 +212,15 @@ function harness(overrides = {}) {
   const windowTarget = fakeTarget();
   const documentTarget = fakeTarget();
 
+  // `wiring.js` drives undo/redo through `document.execCommand`, which the fake
+  // document does not provide. Record the commands so the tests can assert on
+  // them without a real editing surface.
+  const execCommands = [];
+  documentTarget.execCommand = (command) => {
+    execCommands.push(command);
+    return true;
+  };
+
   const previous = {
     window: globalThis.window,
     document: globalThis.document,
@@ -223,6 +234,7 @@ function harness(overrides = {}) {
     els,
     deps,
     calls,
+    execCommands,
     window: windowTarget,
     document: documentTarget,
     /** Names of the callbacks invoked so far, in order. */
@@ -755,6 +767,94 @@ test("the calendar month label falls back to today when no date is selected", ()
 });
 
 // ---------------------------------------------------------------------------
+// Undo / redo
+// ---------------------------------------------------------------------------
+
+test("Ctrl+Z undoes inside the content editor", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("keydown", {
+      key: "z",
+      ctrlKey: true,
+      target: h.els.content,
+    });
+    assert.deepEqual(h.execCommands, ["undo"]);
+    assert.equal(event.defaultPrevented, true);
+  });
+});
+
+test("Ctrl+Z undoes inside the title field", () => {
+  withHarness((h) => {
+    h.document.dispatch("keydown", {
+      key: "z",
+      ctrlKey: true,
+      target: h.els.title,
+    });
+    assert.deepEqual(h.execCommands, ["undo"]);
+  });
+});
+
+test("Ctrl+Shift+Z redoes", () => {
+  withHarness((h) => {
+    h.document.dispatch("keydown", {
+      key: "z",
+      ctrlKey: true,
+      shiftKey: true,
+      target: h.els.content,
+    });
+    assert.deepEqual(h.execCommands, ["redo"]);
+  });
+});
+
+test("Cmd+Z works on macOS", () => {
+  withHarness((h) => {
+    h.document.dispatch("keydown", {
+      key: "z",
+      metaKey: true,
+      target: h.els.content,
+    });
+    assert.deepEqual(h.execCommands, ["undo"]);
+  });
+});
+
+test("Ctrl+Z outside the editor is left to the browser", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("keydown", {
+      key: "z",
+      ctrlKey: true,
+      target: h.els.search,
+    });
+    assert.deepEqual(h.execCommands, []);
+    assert.equal(event.defaultPrevented, false);
+  });
+});
+
+test("Ctrl+Z does nothing while the editor is locked", () => {
+  withHarness((h) => {
+    // A broken entry disables both fields; undo must not pretend to work.
+    h.els.content.disabled = true;
+    const event = h.document.dispatch("keydown", {
+      key: "z",
+      ctrlKey: true,
+      target: h.els.content,
+    });
+    assert.deepEqual(h.execCommands, []);
+    assert.equal(event.defaultPrevented, false);
+  });
+});
+
+test("Ctrl+Alt+Z is not treated as undo", () => {
+  withHarness((h) => {
+    h.document.dispatch("keydown", {
+      key: "z",
+      ctrlKey: true,
+      altKey: true,
+      target: h.els.content,
+    });
+    assert.deepEqual(h.execCommands, []);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Path detection debounce
 // ---------------------------------------------------------------------------
 
@@ -852,6 +952,41 @@ test("the broken banner buttons never reach the save path", () => {
       "a broken entry must never schedule an autosave"
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// Read-only entries
+// ---------------------------------------------------------------------------
+//
+// An entry that already has content opens read-only, and the header's unlock
+// button is the only way into the writable state. These tests cover the binding
+// itself; the state machine lives in `main.js`.
+
+test("the unlock button asks main.js to open the entry for editing", () => {
+  withHarness((h) => {
+    h.els.editBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["unlockEntryForEditing"]);
+  });
+});
+
+test("the unlock button never reaches the save path", () => {
+  // Unlocking only flips a flag; the first keystroke is what schedules a write.
+  withHarness((h) => {
+    h.els.editBtn.dispatch("click");
+    assert.ok(!h.names().includes("saveNow"));
+    assert.ok(!h.names().includes("scheduleSave"));
+  });
+});
+
+test("the unlock button is optional so an older DOM still wires up", () => {
+  const h = harness();
+  try {
+    delete h.els.editBtn;
+    h.cleanup();
+    assert.deepEqual(h.names(), []);
+  } finally {
+    h.restore();
+  }
 });
 
 test("the broken tab is optional so an older DOM still wires up", () => {

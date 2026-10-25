@@ -167,6 +167,13 @@
                 </div>
                 <div class="status">
                     <span id="status" class="status-text"></span>
+                    <!-- An entry that already has content opens read-only, so a
+                         stray keystroke cannot rewrite a finished page. Clicking
+                         this swaps the editor into its writable state; the button
+                         disappears once unlocked and comes back on the next
+                         entry that opens locked. -->
+                    <button id="edit-btn" class="btn-edit" type="button" data-i18n="editor.unlock"
+                        data-i18n-title="editor.unlockTitle" title="解鎖編輯" hidden>解鎖編輯</button>
                     <!-- Bookmark toggle. `aria-pressed` carries the state so
                          screen readers announce it without a separate label. -->
                     <button id="favourite-btn" class="btn-favourite" type="button" aria-pressed="false"
