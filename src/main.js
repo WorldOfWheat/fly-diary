@@ -793,7 +793,20 @@ async function upgradeEntries() {
   }
 }
 
-async function refreshList() {
+/**
+ * Reload the sidebar from disk.
+ *
+ * `scanBroken` controls whether the broken-file list is refreshed too. That
+ * refresh is expensive: `list_broken_entries` reads, parses and decrypts *every*
+ * entry file in the vault, because a broken file is by definition absent from
+ * the index and can only be found by walking the directory.
+ *
+ * Saving cannot create a broken file — the app just wrote it with the key it
+ * holds — so the autosave path passes `false` and skips the scan entirely. The
+ * scan still runs on unlock, when the user opens the broken view, and whenever
+ * an entry fails to read.
+ */
+async function refreshList({ scanBroken = true } = {}) {
   // Titles are encrypted, so listing only works while unlocked. Never leave
   // stale titles on screen after the key has been dropped.
   if (!lockScreen.isVaultInitialized()) {
@@ -804,7 +817,7 @@ async function refreshList() {
   }
   try {
     allEntries = await invoke("list_entries");
-    await refreshBroken();
+    if (scanBroken) await refreshBroken();
     renderList();
   } catch (err) {
     console.error("list_entries failed:", err);
@@ -1059,7 +1072,10 @@ async function saveNow() {
     savedTitle = title;
     savedContent = content;
     setStatus(t("status.saved"), true);
-    await refreshList();
+    // Skip the broken-file scan: this save just wrote the file itself, so it
+    // cannot have produced an unreadable one. Rescanning the whole vault here
+    // is what made autosave stutter on a large diary.
+    await refreshList({ scanBroken: false });
     els.deleteBtn.disabled = content.trim() === "" && title.trim() === "";
   } catch (err) {
     console.error("save_entry failed:", err);
@@ -1364,10 +1380,13 @@ async function enterApp() {
   // read from the settings file during `init()`.
   resetAutoLockTimer();
 
+  // The first load is the one place that must scan: files may have been edited
+  // or moved while the app was closed. `announce` tells the user once, on entry,
+  // if anything failed to decrypt; the tab badge stays visible afterwards.
   await refreshList();
-  // Tell the user once, on entry, if anything failed to decrypt. The tab badge
-  // stays visible afterwards; this is just the initial notification.
-  await refreshBroken(true);
+  if (brokenEntries.length > 0) {
+    setStatus(t("broken.notify", { n: brokenEntries.length }));
+  }
 
   const today = await invoke("today");
   await selectDate(today);

@@ -411,8 +411,14 @@ fn get_entry(
     storage::read_entry(&dir, guard.key()?, &date)
 }
 
+/// Encrypt and write one entry, then update the index.
+///
+/// `async` on purpose: the body does several blocking file reads and writes plus
+/// three AES-GCM operations, and the editor autosaves on a short debounce. A
+/// synchronous command would run all of that on the main thread and stall the
+/// webview while the user is still typing.
 #[tauri::command]
-fn save_entry(
+async fn save_entry(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     date: String,
