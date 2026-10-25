@@ -4,6 +4,7 @@ on:
   push:
     branches: [master, develope]
   pull_request:
+    branches: [master, develope]
 
 concurrency:
   group: ci-${{ github.ref }}

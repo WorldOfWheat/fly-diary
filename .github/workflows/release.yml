@@ -17,7 +17,12 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     steps:
+      # A release tag can point at any commit, including one on a branch that
+      # predates the test suites (e.g. master, which has no tests/ or test.sh).
+      # Check out the tag itself so the tests match the code being released.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Linux deps
         run: |
