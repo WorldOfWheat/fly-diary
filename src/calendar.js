@@ -194,6 +194,18 @@ export function createCalendar(deps) {
     renderCalendar();
   }
 
+  /**
+   * Move the calendar view by `years`, keeping the month on screen.
+   *
+   * Expressed as twelve month steps rather than by rewriting the year, so the
+   * month cursor stays a plain `YYYY-MM-01` string and the leap-year and
+   * year-boundary handling in `shiftMonth` is the only place that does date
+   * arithmetic.
+   */
+  function stepCalendarYear(years) {
+    stepCalendarMonth(years * 12);
+  }
+
   /** Move focus to the day `days` away from the currently focused cell. */
   function moveCalendarFocus(days) {
     const cells = [...els.calGrid.querySelectorAll(".cal-day")];
@@ -245,6 +257,7 @@ export function createCalendar(deps) {
     closeCalendar,
     toggleCalendar,
     stepCalendarMonth,
+    stepCalendarYear,
     moveCalendarFocus,
     pickCalendarDate,
     jumpToSelectedMonth,

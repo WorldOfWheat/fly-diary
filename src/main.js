@@ -1423,6 +1423,7 @@ function wireEvents() {
     // Calendar
     toggleCalendar: calendar.toggleCalendar,
     stepCalendarMonth: calendar.stepCalendarMonth,
+    stepCalendarYear: calendar.stepCalendarYear,
     pickCalendarDate: calendar.pickCalendarDate,
     moveCalendarFocus: calendar.moveCalendarFocus,
     isCalendarOpen: calendar.isCalendarOpen,

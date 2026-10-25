@@ -510,6 +510,48 @@ test("stepCalendarMonth re-renders the grid", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Year stepping
+// ---------------------------------------------------------------------------
+
+test("stepCalendarYear keeps the month and moves the year", () => {
+  withCalendar(({ calendar }) => {
+    calendar.setCalendarMonth("2026-10-01");
+
+    calendar.stepCalendarYear(1);
+    assert.equal(calendar.getCalendarMonth(), "2027-10-01");
+
+    calendar.stepCalendarYear(-3);
+    assert.equal(calendar.getCalendarMonth(), "2024-10-01");
+  });
+});
+
+test("stepCalendarYear re-renders the grid", () => {
+  withCalendar(({ calendar, els }) => {
+    calendar.setCalendarMonth("2026-10-01");
+    calendar.renderCalendar();
+
+    calendar.stepCalendarYear(1);
+    assert.equal(els.calTitle.textContent, "month:2027-10-01");
+    assert.equal(els.calMonth.textContent, "month:2027-10-01");
+  });
+});
+
+test("stepCalendarYear from a leap February lands on a non-leap February", () => {
+  // 2024 is a leap year, 2025 is not. The cursor is always the 1st, so the
+  // clamp in `shiftMonth` never has to shorten the month — but the grid must
+  // still be rebuilt for the shorter February.
+  withCalendar(({ calendar, dates }) => {
+    calendar.setCalendarMonth("2024-02-01");
+    calendar.stepCalendarYear(1);
+    calendar.renderCalendar();
+
+    assert.equal(calendar.getCalendarMonth(), "2025-02-01");
+    assert.equal(dates().length, 42);
+    assert.ok(!dates().includes("2025-02-29"), "2025 has no 29 February");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Keyboard navigation
 // ---------------------------------------------------------------------------
 

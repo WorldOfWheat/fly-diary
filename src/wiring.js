@@ -24,6 +24,7 @@
 //   updateWordCount     — () => void
 //   toggleCalendar      — () => void
 //   stepCalendarMonth   — (months: number) => void
+//   stepCalendarYear    — (years: number) => void
 //   pickCalendarDate    — (iso: string) => void
 //   moveCalendarFocus   — (days: number) => void
 //   isCalendarOpen      — () => boolean
@@ -156,6 +157,15 @@ export function initEventWiring(deps) {
 
   on(els.calPrev, "click", () => deps.stepCalendarMonth(-1));
   on(els.calNext, "click", () => deps.stepCalendarMonth(1));
+
+  // The outer pair jumps a whole year. Optional so a stripped-down markup
+  // without the year stepper still wires up.
+  if (els.calPrevYear) {
+    on(els.calPrevYear, "click", () => deps.stepCalendarYear(-1));
+  }
+  if (els.calNextYear) {
+    on(els.calNextYear, "click", () => deps.stepCalendarYear(1));
+  }
 
   // Clicking the month label jumps back to the month of the selected date.
   on(els.calMonth, "click", () => {

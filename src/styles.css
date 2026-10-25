@@ -1063,6 +1063,19 @@ body.calendar-open {
   background: var(--hover-strong);
 }
 
+/* The year stepper sits outside the month stepper and is deliberately quieter:
+   it is the coarse control, used far less often than the month arrows. */
+.cal-step-year {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.cal-step-year:hover {
+  opacity: 1;
+}
+
 .cal-month {
   padding: 0.25rem 0.75rem;
   font-size: 0.9375rem;

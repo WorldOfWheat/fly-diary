@@ -261,7 +261,18 @@
                 </button>
             </header>
 
+            <!-- Two steppers: the outer pair jumps a whole year, the inner pair a
+                 single month. A vault can span many years, and clicking the month
+                 arrow twelve times to reach last year is the one thing the
+                 full-screen grid could not do comfortably. -->
             <div class="calendar-month">
+                <button id="cal-prev-year" class="cal-step cal-step-year" type="button"
+                    data-i18n-title="editor.calPrevYear" data-i18n-aria-label="editor.calPrevYear"
+                    title="上一年" aria-label="上一年">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M11 5l-7 7 7 7M18 5l-7 7 7 7" />
+                    </svg>
+                </button>
                 <button id="cal-prev" class="cal-step" type="button" data-i18n-title="editor.calPrev"
                     data-i18n-aria-label="editor.calPrev" title="上個月" aria-label="上個月">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -274,6 +285,13 @@
                     data-i18n-aria-label="editor.calNext" title="下個月" aria-label="下個月">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M9 5l7 7-7 7" />
+                    </svg>
+                </button>
+                <button id="cal-next-year" class="cal-step cal-step-year" type="button"
+                    data-i18n-title="editor.calNextYear" data-i18n-aria-label="editor.calNextYear"
+                    title="下一年" aria-label="下一年">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 5l7 7-7 7M13 5l7 7-7 7" />
                     </svg>
                 </button>
             </div>

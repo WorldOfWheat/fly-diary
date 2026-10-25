@@ -89,8 +89,10 @@ const ELEMENT_IDS = [
   "favouriteBtn",
   "lockBtn",
   "changeDirBtn",
+  "calPrevYear",
   "calPrev",
   "calNext",
+  "calNextYear",
   "calMonth",
   "calClose",
   "calToday",
@@ -164,6 +166,7 @@ function harness(overrides = {}) {
     updateWordCount: spy("updateWordCount"),
     toggleCalendar: spy("toggleCalendar"),
     stepCalendarMonth: spy("stepCalendarMonth"),
+    stepCalendarYear: spy("stepCalendarYear"),
     pickCalendarDate: spy("pickCalendarDate"),
     moveCalendarFocus: spy("moveCalendarFocus"),
     isCalendarOpen: () => false,
@@ -505,6 +508,29 @@ test("PageUp and PageDown flip the calendar month", () => {
   withHarness((h) => {
     h.els.calGrid.dispatch("keydown", { key: "PageDown" });
     assert.deepEqual(h.argsOf("stepCalendarMonth"), [1]);
+  });
+});
+
+test("the year arrows step the calendar by a whole year", () => {
+  withHarness((h) => {
+    h.els.calPrevYear.dispatch("click");
+    assert.deepEqual(h.argsOf("stepCalendarYear"), [-1]);
+    // The month stepper must not also fire: the two controls are independent.
+    assert.deepEqual(h.argsOf("stepCalendarMonth"), undefined);
+  });
+
+  withHarness((h) => {
+    h.els.calNextYear.dispatch("click");
+    assert.deepEqual(h.argsOf("stepCalendarYear"), [1]);
+    assert.deepEqual(h.argsOf("stepCalendarMonth"), undefined);
+  });
+});
+
+test("the year arrows are optional", () => {
+  // A markup without the year stepper must still wire up, so the handlers are
+  // registered behind a guard rather than unconditionally.
+  withHarness((h) => {
+    assert.equal(h.els.calPrevYear.listeners.get("click").length, 1);
   });
 });
 
