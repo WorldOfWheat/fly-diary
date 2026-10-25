@@ -2,8 +2,13 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.2.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -73,8 +78,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Fly Diary ${{ github.ref_name }}'
-          releaseBody: 'See the assets below to download and install.'
+          tagName: ${{ inputs.tag || github.ref_name }}
+          releaseName: "Fly Diary ${{ inputs.tag || github.ref_name }}"
+          releaseBody: "See the assets below to download and install."
           releaseDraft: true
           prerelease: false

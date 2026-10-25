@@ -20,6 +20,14 @@ if [[ "${1:-}" == "--no-cov" ]]; then
 fi
 
 echo "==> Frontend tests"
+# Node's test runner treats an unmatched glob as a hard error, which turns a
+# wrong checkout (e.g. a branch without tests/) into a confusing "Could not
+# find ..." failure. Fail with a message that says what is actually wrong.
+if ! compgen -G "tests/*.test.js" >/dev/null; then
+  echo "error: no tests/*.test.js found in $(pwd)" >&2
+  echo "       (is this the right branch? tests/ lives on develope)" >&2
+  exit 1
+fi
 if [[ $COVERAGE -eq 1 ]]; then
   node --test --experimental-test-coverage "tests/*.test.js"
 else
