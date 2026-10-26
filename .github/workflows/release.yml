@@ -62,7 +62,12 @@ jobs:
           - platform: windows-latest
     runs-on: ${{ matrix.platform }}
     steps:
+      # Check out the same ref the test job validated, otherwise a
+      # workflow_dispatch run with a tag input can leave the workspace empty
+      # and pnpm/action-setup then fails with "No pnpm version is specified".
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-22.04'
@@ -73,10 +78,14 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config
 
       # pnpm must be installed before setup-node, otherwise `cache: pnpm`
-      # cannot resolve `pnpm store path`. The version comes from the
-      # `packageManager` field in package.json; declaring it here as well makes
-      # pnpm/action-setup fail with ERR_PNPM_BAD_PM_VERSION.
+      # cannot resolve `pnpm store path`. The version is pinned to the same
+      # value as `packageManager` in package.json; declaring a *different*
+      # version there makes pnpm/action-setup fail with
+      # ERR_PNPM_BAD_PM_VERSION, and omitting it entirely makes the action
+      # fail with "No pnpm version is specified" if package.json is missing.
       - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
 
       - uses: actions/setup-node@v4
         with:
