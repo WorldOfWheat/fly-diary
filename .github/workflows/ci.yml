@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [master, develope]
+    branches: [master]
   pull_request:
-    branches: [master, develope]
+    branches: [master]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
