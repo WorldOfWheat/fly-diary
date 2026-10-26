@@ -6,6 +6,7 @@
 # Node
 node_modules
 /dist
+.pnpm-store
 
 # Editor / OS
 .DS_Store
