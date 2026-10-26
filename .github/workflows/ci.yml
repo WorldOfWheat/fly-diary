@@ -24,10 +24,10 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config
 
       # pnpm must be installed before setup-node, otherwise `cache: pnpm`
-      # cannot resolve `pnpm store path`.
+      # cannot resolve `pnpm store path`. The version comes from the
+      # `packageManager` field in package.json; declaring it here as well makes
+      # pnpm/action-setup fail with ERR_PNPM_BAD_PM_VERSION.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
