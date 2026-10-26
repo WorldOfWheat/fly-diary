@@ -1,0 +1,2209 @@
+/* ===========================================================================
+   Fly Diary — stylesheet
+
+   Scaling model
+   -------------
+   Every size in this file is expressed in `rem`, and `html` carries a
+   `font-size` that is derived from the viewport. That gives us three things at
+   once:
+
+   1. The whole UI scales with the window, so a maximised 2560px display does
+      not show a 900px-sized app marooned in the middle of the screen.
+   2. The user's OS/browser font-size preference is respected, because `rem`
+      is relative to the root font size and we only ever *clamp* it.
+   3. Accessibility zoom still works: the `clamp()` bounds stop the layout from
+      collapsing on tiny windows or ballooning on huge ones.
+
+   On top of the fluid base there is a user-controlled multiplier,
+   `--font-scale`, driven by the A−/A+ buttons in the editor footer. Because
+   every size is in `rem`, bumping the root font size scales the entire UI —
+   text, padding, icons, the calendar — in one step, and the virtual-scroll row
+   height follows automatically.
+
+   The one place that cannot use `rem` is the virtual-scroll row height, which
+   JavaScript needs as a number. It is published as `--row-h` and read back with
+   `getComputedStyle`, so CSS stays the single source of truth.
+   =========================================================================== */
+
+:root {
+  /* ---------- Palette ----------
+     Every colour in this file goes through a variable so the whole app can be
+     re-themed by swapping this block. The tokens are semantic rather than
+     literal: `--hover` is "a faint wash over whatever is behind it", not
+     "4% black", which is what lets the dark theme invert it. */
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --sidebar-bg: #f0efec;
+  --border: #e2e0db;
+  --text: #2b2a27;
+  --text-muted: #8a8780;
+  --accent: #4a7c59;
+  --accent-hover: #3d6849;
+  --danger: #b4544a;
+  --warn: #b8860b;
+  --warn-text: #8a6508;
+
+  /* Text and marks drawn on top of `--accent`. */
+  --on-accent: #ffffff;
+
+  /* Interaction washes. These are translucent so they tint whatever surface
+     they sit on, which is why they work unchanged in both themes. */
+  --hover: rgba(0, 0, 0, 0.04);
+  --hover-strong: rgba(0, 0, 0, 0.06);
+  --pressed: rgba(0, 0, 0, 0.09);
+  --hover-faint: rgba(0, 0, 0, 0.03);
+
+  /* Tinted washes for the accent / warn / danger badges. */
+  --accent-wash: rgba(74, 124, 89, 0.12);
+  --accent-wash-strong: rgba(74, 124, 89, 0.1);
+  --warn-wash: rgba(184, 134, 11, 0.14);
+  --danger-wash: rgba(180, 84, 74, 0.12);
+
+  /* Elevation. Dark themes need heavier shadows to read as depth. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.08);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.2);
+
+  /* Scrim behind modal dialogs. */
+  --overlay: rgba(30, 29, 27, 0.32);
+
+  /* Scrollbar thumb. */
+  --scrollbar: rgba(0, 0, 0, 0.15);
+  --scrollbar-hover: rgba(0, 0, 0, 0.25);
+
+  /* Favourite highlight: a bright, high-visibility wash used on bookmarked
+     rows in the sidebar. */
+  --favourite-bg: #fff3a8;
+  --favourite-bg-hover: #ffe97a;
+  --favourite-edge: #f0c419;
+
+  /* Lets the webview draw native widgets (scrollbars, form controls, the
+     `<details>` marker) in the matching scheme. */
+  color-scheme: light;
+}
+
+/* ---------- Dark theme ----------
+   Applied by `main.js` as `data-theme="dark"` on `<html>`. The attribute is
+   used instead of a bare `prefers-color-scheme` query because the user can
+   override the system setting from the lock screen.
+
+   The accent is lightened from #4a7c59: the light-theme green only reaches
+   about 3:1 against a dark background, which is too low for body text. */
+:root[data-theme="dark"] {
+  --bg: #1b1a18;
+  --panel: #262523;
+  --sidebar-bg: #201f1d;
+  --border: #3a3835;
+  --text: #e9e7e2;
+  --text-muted: #9c988f;
+  --accent: #74b287;
+  --accent-hover: #8cc49c;
+  --danger: #d97b70;
+  --warn: #d9a520;
+  --warn-text: #e0b545;
+
+  /* Dark text on the lightened accent keeps the primary button readable. */
+  --on-accent: #14201a;
+
+  --hover: rgba(255, 255, 255, 0.06);
+  --hover-strong: rgba(255, 255, 255, 0.09);
+  --pressed: rgba(255, 255, 255, 0.13);
+  --hover-faint: rgba(255, 255, 255, 0.04);
+
+  --accent-wash: rgba(116, 178, 135, 0.16);
+  --accent-wash-strong: rgba(116, 178, 135, 0.14);
+  --warn-wash: rgba(217, 165, 32, 0.18);
+  --danger-wash: rgba(217, 123, 112, 0.16);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.65);
+
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --scrollbar-hover: rgba(255, 255, 255, 0.28);
+
+  /* The light-theme neon yellow glows unpleasantly on a dark surface, so the
+     dark variant is a muted warm brown with a brighter edge bar. The bookmark
+     is still obvious, but it no longer outshines the text. */
+  --favourite-bg: #453a1c;
+  --favourite-bg-hover: #54461f;
+  --favourite-edge: #d9a520;
+
+  color-scheme: dark;
+
+  /* ---------- Typography ---------- */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+    "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* ---------- Metrics (all rem, so they follow the root size) ---------- */
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* Sidebar width: grows with the window but never eats the editor. */
+  --sidebar-w: clamp(15rem, 22vw, 21rem);
+
+  /* Virtual-scroll row pitch. Read by main.js via getComputedStyle: rows are
+     absolutely positioned at `index * --row-h`, so this is the distance from
+     one row's top to the next, not the painted height. */
+  --row-h: 3.25rem;
+
+  /* Breathing room between rows. The painted box is `--row-h - --row-gap`, so
+     the gap lives inside the pitch and the scroll math stays exact. */
+  --row-gap: 0.25rem;
+
+  /* Editor measure: long lines are hard to read, so cap the text column and
+     centre it once the window gets wide. */
+  --measure: 46rem;
+}
+
+/* Fluid root size. 0.9375rem (15px) at 900px wide, growing to 1.0625rem
+   (17px) at 1600px, never below 0.875rem (14px) or above 1.125rem (18px).
+   `--font-scale` (0.8–1.6) is the user's own multiplier, set from the footer
+   control and persisted in localStorage. */
+html {
+  --font-scale: 1;
+  font-size: calc(
+    clamp(0.875rem, 0.78rem + 0.28vw, 1.125rem) * var(--font-scale)
+  );
+  height: 100%;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  height: 100%;
+  font-family: var(--font);
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Shared primitives ---------- */
+
+/* Every text input in the app shares this look. */
+.lock-input,
+#search,
+.title-input,
+#content {
+  font-family: inherit;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------- App shell ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+}
+
+.app[hidden] {
+  display: none;
+}
+
+/* ---------- Lock screen ---------- */
+
+/* Same `hidden` trap as `.calendar-overlay`: a `display` on the base rule would
+   outrank the UA `[hidden]` rule and keep this fixed, full-window layer on
+   screen. Layout lives on `:not([hidden])` instead. */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.lock-screen:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.lock-screen[hidden] {
+  display: none !important;
+}
+
+.lock-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  width: 24rem;
+  max-width: 100%;
+  padding: 2rem 1.75rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+/* Title and the two switches share a row. The switches are pinned to the right
+   so the title stays optically centred in the card. */
+.lock-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.lock-title {
+  grid-column: 2;
+  font-size: 1.25rem;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* Theme and language switches, side by side in the right-hand column. */
+.lock-actions {
+  grid-column: 3;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Round icon button used for the theme switch. Only one of its three icons is
+   visible at a time, chosen by the `data-theme-mode` attribute that main.js
+   sets on the button itself. */
+.icon-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.icon-toggle:hover {
+  color: var(--accent);
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.icon-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon-toggle svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* The "auto" icon is a half-filled circle, so its fill is a shape rather than
+   a stroke. */
+.icon-toggle .icon-auto-fill {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* Exactly one icon shows, matching the current mode. */
+.icon-toggle .icon-sun,
+.icon-toggle .icon-moon,
+.icon-toggle .icon-auto {
+  display: none;
+}
+
+.icon-toggle[data-theme-mode="light"] .icon-sun,
+.icon-toggle[data-theme-mode="dark"] .icon-moon,
+.icon-toggle[data-theme-mode="system"] .icon-auto {
+  display: block;
+}
+
+/* Language switch: a small pill showing the *other* language. */
+.lang-toggle {
+  min-width: 2.25rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.lang-toggle:hover {
+  color: var(--accent);
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.lang-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.lock-subtitle {
+  margin-bottom: 0.375rem;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.lock-input {
+  width: 100%;
+  padding: 0.5625rem 0.75rem;
+  font-size: 0.875rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lock-input:focus {
+  border-color: var(--accent);
+}
+
+.lock-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.lock-field[hidden] {
+  display: none;
+}
+
+.lock-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+
+.lock-path-row {
+  display: flex;
+  gap: 0.375rem;
+}
+
+/* Current workspace: the folder in use, plus the button that opens the picker.
+   Shown only once a folder has been configured, so a returning user can see
+   which diary they are unlocking and switch to another one before unlocking. */
+.lock-workspace {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lock-workspace[hidden] {
+  display: none;
+}
+
+.lock-workspace-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* Long paths are truncated from the left, so the folder name stays visible. */
+  direction: rtl;
+  text-align: left;
+}
+
+.lock-cancel-workspace {
+  align-self: flex-start;
+}
+
+.lock-path-row .lock-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.btn-browse {
+  flex: none;
+  padding: 0 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+
+.btn-browse:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lock-hint {
+  font-size: 0.625rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Advanced KDF options (first run only). */
+.lock-advanced {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.lock-advanced[hidden] {
+  display: none;
+}
+
+.lock-advanced-summary {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.lock-advanced-summary:hover {
+  color: var(--accent);
+}
+
+.lock-advanced-grid {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+  margin: 0.5rem 0;
+}
+
+.lock-advanced-grid .lock-input {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.lock-error {
+  min-height: 1rem;
+  font-size: 0.75rem;
+  color: var(--danger);
+  text-align: center;
+}
+
+.lock-submit {
+  padding: 0.5625rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.lock-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0.75rem;
+}
+
+.sidebar-header h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Segmented control that switches the sidebar between "all" and "favourites".
+   Both tabs drive the same virtual scroller, so this is purely a filter. */
+.view-switch {
+  display: flex;
+  gap: 0.125rem;
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.125rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.view-tab {
+  flex: 1;
+  padding: 0.3125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: calc(var(--radius) - 0.125rem);
+}
+
+.view-tab:hover {
+  color: var(--text);
+}
+
+.view-tab.is-active {
+  color: var(--text);
+  background: var(--sidebar-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The broken-files tab only exists while something is broken, so it is styled
+   as a warning rather than a peer of the other two. */
+.view-tab-broken {
+  color: var(--danger);
+}
+
+.view-tab-broken.is-active {
+  color: var(--danger);
+}
+
+.view-badge {
+  display: inline-block;
+  min-width: 1.125rem;
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  color: #fff;
+  text-align: center;
+  background: var(--danger);
+  border-radius: 0.5625rem;
+}
+
+.view-badge:empty {
+  display: none;
+}
+
+.search-wrap {
+  padding: 0 0.75rem 0.5rem;
+}
+
+#search {
+  width: 100%;
+  padding: 0.4375rem 0.625rem;
+  font-size: 0.8125rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+#search:focus {
+  border-color: var(--accent);
+}
+
+/* Virtual scrolling viewport. `entry-spacer` is sized to the full list height
+   so the native scrollbar behaves normally, while `entry-list` only holds the
+   handful of rows currently visible. */
+.entry-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.entry-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.entry-list {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.25rem 0.5rem 0.5rem;
+  list-style: none;
+}
+
+/* Rows are absolutely positioned by `renderList()` at `index * --row-h`. The
+   painted box is one gap shorter than that pitch, which is what separates the
+   rows visually without breaking the scroll math. */
+.entry-item {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: calc(var(--row-h) - var(--row-gap));
+  padding: 0.4375rem 0.625rem;
+  overflow: hidden;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.entry-item:hover {
+  background: var(--hover);
+}
+
+.entry-item.active {
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.entry-item .entry-date {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.entry-item .entry-weekday {
+  flex: none;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.entry-item .entry-preview {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Favourited rows get a bright highlight instead of an icon, so the bookmark
+   is readable at a glance while scanning the list. The inset bar on the left
+   keeps the state visible even when the row is also the active one. */
+.entry-item.favourite {
+  background: var(--favourite-bg);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge);
+}
+
+.entry-item.favourite:hover {
+  background: var(--favourite-bg-hover);
+}
+
+/* The active row keeps its panel colour but retains the left bar, so the
+   current entry is still distinguishable from the other favourites. */
+.entry-item.favourite.active {
+  background: var(--panel);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge), var(--shadow-sm);
+}
+
+.entry-item .entry-preview.empty {
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* The empty-state row lives inside the absolutely positioned `entry-list`, so
+   it needs `position: static` to flow normally. */
+.list-empty {
+  position: static;
+  padding: 1.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.btn-lock {
+  flex: none;
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
+.btn-lock:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+/* The sidebar actions, now living in the editor footer. They keep their own
+   row so the path can shrink between them and the word count. */
+.footer-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Storage path in the editor footer. It is the only flexible item there, so it
+   takes the slack between the word count and the actions and truncates first.
+   `direction: rtl` keeps the tail of a long path visible (the folder name
+   matters more than the root), while `unicode-bidi: plaintext` stops short
+   paths from being reordered. */
+.path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  text-align: left;
+}
+
+/* ---------- Editor ---------- */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---------- Date navigator ---------- */
+
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/* Round step buttons with an inline chevron. */
+.date-step {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.date-step svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.date-step:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+.date-step:active {
+  background: var(--pressed);
+}
+
+/* The visible pill. Clicking it opens our own calendar; the native input is
+   only a hidden value holder because its popup is drawn by the OS. */
+.date-display {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.date-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.date-label:hover {
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+.date-main {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.date-sub {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* The native input is never shown; it only carries the value so the rest of
+   the app can keep reading `els.datePicker.value`. */
+.date-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+  border: none;
+  pointer-events: none;
+}
+
+/* ---------- Calendar overlay ----------
+   The date selector takes over the whole window instead of hanging off the
+   date pill. A month at full size is readable at a glance, which is the point:
+   the dots marking days that already have an entry become a visible pattern
+   rather than a detail you have to hunt for. */
+
+/* `display` is deliberately *not* set on the base rule. The `hidden` attribute
+   only maps to the UA rule `[hidden] { display: none }`, which has the same
+   specificity as a class selector and loses to author styles. Setting
+   `display: flex` here would therefore keep the overlay laid out — and, being
+   `position: fixed; inset: 0`, silently swallowing every click in the app.
+   Gating the layout on `:not([hidden])` keeps the two states mutually
+   exclusive no matter what else is added later. */
+.calendar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.calendar-overlay:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(0.75rem, 3vw, 2.5rem);
+}
+
+.calendar-overlay[hidden] {
+  display: none !important;
+}
+
+/* The scrim is a sibling of the panel so a click on it can be told apart from
+   a click inside the panel, and so the panel can animate independently. */
+.calendar-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  animation: overlay-in 0.12s ease-out;
+}
+
+.calendar-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(46rem, 100%);
+  max-height: 100%;
+  padding: clamp(1rem, 2.5vw, 1.75rem);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  animation: calendar-in 0.14s ease-out;
+}
+
+@keyframes calendar-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* The editor behind the overlay must not scroll while it is open. */
+body.calendar-open {
+  overflow: hidden;
+}
+
+.calendar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.calendar-heading {
+  min-width: 0;
+}
+
+.cal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cal-summary {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.cal-close svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.cal-close:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+/* Month stepper: the label in the middle doubles as "back to the selected
+   month", which is why it is a button rather than a heading. */
+.calendar-month {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.cal-step {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.cal-step svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cal-step:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+/* The year stepper sits outside the month stepper and is deliberately quieter:
+   it is the coarse control, used far less often than the month arrows. */
+.cal-step-year {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.cal-step-year:hover {
+  opacity: 1;
+}
+
+.cal-month {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  border-radius: 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-month:hover {
+  background: var(--hover);
+}
+
+.cal-weekdays,
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.cal-weekdays span {
+  padding: 0.125rem 0;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* The grid takes the leftover height, so the cells grow with the window
+   instead of staying a fixed 2rem tall in the middle of a large screen. */
+.cal-grid {
+  flex: 1;
+  min-height: 0;
+  grid-auto-rows: minmax(2.25rem, 1fr);
+}
+
+.cal-day {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text);
+  border-radius: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-day:hover {
+  background: var(--hover-strong);
+}
+
+.cal-day:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Days outside the displayed month stay clickable but recede. */
+.cal-day.outside {
+  color: var(--text-muted);
+  opacity: 0.55;
+}
+
+.cal-day.today {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.cal-day.selected {
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.cal-day.selected:hover {
+  background: var(--accent-hover);
+}
+
+/* Dot marking a day that already has a diary entry. At full-screen size it is
+   the primary signal, so it is a little larger than the old popup version. */
+.cal-day.has-entry::after {
+  content: "";
+  position: absolute;
+  bottom: 0.3125rem;
+  left: 50%;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  margin-left: -0.15625rem;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.cal-day.selected.has-entry::after {
+  background: var(--on-accent);
+}
+
+.calendar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--border);
+}
+
+.cal-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.cal-legend-dot {
+  width: 0.3125rem;
+  height: 0.3125rem;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.cal-today {
+  padding: 0.3125rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+  border-radius: 999px;
+}
+
+.cal-today:hover {
+  background: var(--accent-wash-strong);
+}
+
+/* ---------- Editor body ---------- */
+
+.status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.status-text {
+  min-width: 3.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: right;
+  transition: opacity 0.2s ease;
+}
+
+.status-text.saved {
+  color: var(--accent);
+}
+
+/* Unlock control in the editor header. It only exists while an existing entry
+   is open read-only, so it is styled as the one obvious action rather than as
+   another quiet icon button. */
+.btn-edit {
+  padding: 0.3125rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.btn-edit:hover {
+  color: var(--accent-contrast, #fff);
+  background: var(--accent);
+}
+
+.btn-edit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Bookmark toggle in the editor status bar. The star is outlined while the
+   entry is not a favourite and filled once it is, so the state is readable
+   without relying on colour alone. */
+.btn-favourite {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+
+.btn-favourite:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.btn-favourite .star {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  transition: fill 0.12s ease, stroke 0.12s ease;
+}
+
+.btn-favourite[aria-pressed="true"] {
+  color: var(--warn-text);
+}
+
+.btn-favourite[aria-pressed="true"] .star {
+  fill: var(--warn);
+  stroke: var(--warn);
+}
+
+.btn-favourite:disabled {
+  opacity: 0.35;
+  cursor: default;
+  border-color: transparent;
+}
+
+/* Shown when the current entry file cannot be decrypted. It sits between the
+   header and the title, inside the same centred column, so it reads as part of
+   the editor rather than as a floating toast. */
+.broken-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  max-width: calc(var(--measure) + 3.5rem);
+  margin: 0.75rem auto 0;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.8125rem;
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: var(--radius);
+}
+
+.broken-banner[hidden] {
+  /* The base rule sets `display: flex`, which outranks the UA `[hidden]`
+     rule. Without `!important` the warning would show on every entry. */
+  display: none !important;
+}
+
+.broken-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.broken-banner-text strong {
+  color: var(--danger);
+}
+
+.broken-banner-reason {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.broken-banner-actions {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+}
+
+/* The editor is read-only while locked, so make that obvious rather than
+   letting the user type into a field that silently refuses to save. */
+.editor.is-locked .title-input,
+.editor.is-locked #content {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* A read-only entry is a different thing from a broken one: the text is intact
+   and should stay fully legible, so it is dimmed only slightly and the caret is
+   replaced by a text cursor. */
+.editor.is-readonly .title-input,
+.editor.is-readonly #content {
+  cursor: default;
+  opacity: 0.82;
+}
+
+/* The title and the textarea share one centred column so the writing area
+   stays readable on wide screens instead of stretching edge to edge. */
+.title-wrap,
+.editor-body {
+  width: 100%;
+  max-width: calc(var(--measure) + 3.5rem);
+  margin-inline: auto;
+}
+
+.title-wrap {
+  padding: 1.125rem 1.75rem 0;
+}
+
+.title-input {
+  width: 100%;
+  padding: 0.25rem 0 0.5rem;
+  font-size: 1.375rem;
+  font-weight: 600;
+  border-bottom: 1px solid transparent;
+}
+
+.title-input::placeholder {
+  font-weight: 400;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.title-input:focus {
+  border-bottom-color: var(--border);
+}
+
+.editor-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+#content {
+  flex: 1;
+  width: 100%;
+  padding: 1.5rem 1.75rem;
+  font-family: var(--mono);
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  resize: none;
+  tab-size: 2;
+}
+
+#content::placeholder {
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
+.editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 1.25rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+
+/* The footer holds a live counter, the storage path, the sidebar actions and
+   the font-size control. The counter must not reflow its neighbours as the
+   digits change, so it gets tabular figures; the path is the only flexible item
+   and truncates first. */
+.word-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Font size control ---------- */
+
+.font-size {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.0625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.font-step,
+.font-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1;
+  color: var(--text-muted);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.font-step:hover,
+.font-value:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+.font-value {
+  min-width: 2.5rem;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+/* At the ends of the range the button is inert but still readable. */
+.font-step:disabled {
+  opacity: 0.3;
+  cursor: default;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+/* ---------- Buttons ---------- */
+
+.btn-primary {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+.btn-icon:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+.btn-danger {
+  padding: 0.3125rem 0.625rem;
+  font-size: 0.75rem;
+  color: var(--danger);
+  border: 1px solid transparent;
+}
+
+.btn-danger:hover {
+  border-color: var(--danger);
+}
+
+.btn-danger:disabled {
+  opacity: 0.35;
+  cursor: default;
+  border-color: transparent;
+}
+
+/* ---------- Import dialog ---------- */
+
+/* Same `hidden` trap as `.calendar-overlay`: layout is gated on `:not([hidden])`
+   so a hidden dialog can never sit invisibly over the app and eat clicks. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: var(--overlay);
+}
+
+.modal-overlay:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: overlay-in 0.12s ease-out;
+}
+
+.modal-overlay[hidden] {
+  display: none !important;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 35rem;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1.125rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.modal-close {
+  flex: none;
+  width: 1.625rem;
+  height: 1.625rem;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.modal-close:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-height: 0;
+  padding: 0.875rem 1.125rem;
+  overflow-y: auto;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.125rem;
+  border-top: 1px solid var(--border);
+}
+
+.modal-foot .btn-browse,
+.modal-foot .btn-primary {
+  padding: 0.375rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+}
+
+.import-dir {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.import-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.875rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.import-stat {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.import-stat b {
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-stat.ready b {
+  color: var(--accent);
+}
+
+.import-stat.conflict b {
+  color: var(--warn);
+}
+
+.import-stat.failed b {
+  color: var(--danger);
+}
+
+.import-overwrite {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.import-overwrite[hidden] {
+  display: none;
+}
+
+.import-overwrite input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  /* Scales with the window instead of a fixed 320px. */
+  max-height: min(20rem, 45vh);
+  padding: 0.25rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.import-row {
+  display: grid;
+  grid-template-columns: 5.75rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 0.375rem;
+}
+
+.import-row:hover {
+  background: var(--hover-faint);
+}
+
+.import-row .row-date {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-row .row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-row .row-title.empty {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.import-row .row-badge {
+  flex: none;
+  padding: 0.0625rem 0.4375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.import-row.ready .row-badge {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.import-row.conflict .row-badge {
+  color: var(--warn-text);
+  background: var(--warn-wash);
+}
+
+.import-row.failed .row-badge {
+  color: var(--danger);
+  background: var(--danger-wash);
+}
+
+.import-row.failed .row-title {
+  color: var(--danger);
+}
+
+.import-row .row-reason {
+  grid-column: 2 / -1;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.import-row.failed .row-reason {
+  color: var(--danger);
+}
+
+/* ---------- Import progress ---------- */
+
+.import-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+
+.import-progress[hidden] {
+  display: none;
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.import-progress-count {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.import-progress-track {
+  height: 0.375rem;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.import-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.15s linear;
+}
+
+.import-result {
+  padding: 0.5rem 0.625rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.import-result[hidden] {
+  display: none;
+}
+
+.import-result .result-line {
+  color: var(--text);
+}
+
+.import-result .result-fail {
+  color: var(--danger);
+}
+
+.import-error {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* ---------- Settings dialog ---------- */
+
+/* Each block of related controls. A hairline between sections keeps the
+   dialog readable without needing a second level of cards. */
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-section:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.settings-heading {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-hint {
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Label on the left, control on the right. The label column is fixed so the
+   inputs line up down the dialog. */
+.settings-row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.settings-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.settings-input,
+.settings-select {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-input:focus,
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-input[type="number"] {
+  font-family: var(--mono);
+}
+
+/* Read-only summary of the parameters currently stored in the vault. */
+.settings-kdf {
+  padding: 0.5rem 0.625rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-kdf:empty {
+  display: none;
+}
+
+.settings-advanced {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-summary {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.settings-summary:hover {
+  color: var(--accent);
+}
+
+.settings-kdf-grid {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+  margin: 0.5rem 0;
+}
+
+.settings-advanced .btn-browse {
+  font-size: 0.6875rem;
+}
+
+/* Calibration result line; empty until the user runs it. */
+#settings-calibrate-note:empty {
+  display: none;
+}
+
+/* ---------- Statistics dialog ---------- */
+
+/* Four headline numbers. `auto-fit` keeps them on one row on a wide dialog and
+   wraps to two rows on a narrow one without a media query. */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  gap: 0.5rem;
+}
+
+.stats-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stats-value {
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.stats-label {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
+/* First / latest date line. Hidden while there are no entries, because the
+   empty-state message below already says everything. */
+.stats-range {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.stats-range:empty {
+  display: none;
+}
+
+.stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Bar charts are pure CSS: each column is a flex child whose height is a
+   percentage of the tallest bucket, so no chart library is needed. */
+.stats-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.1875rem;
+  height: 5rem;
+  padding: 0.25rem 0.375rem 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stats-bar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.125rem;
+  min-width: 0;
+  height: 100%;
+}
+
+/* The painted column. `--v` is 0–1 and set inline by `renderStats()`. */
+.stats-bar-fill {
+  width: 100%;
+  min-height: 0.125rem;
+  height: calc(var(--v, 0) * 100%);
+  background: var(--accent);
+  border-radius: 0.125rem 0.125rem 0 0;
+  opacity: 0.85;
+  transition: height 0.15s ease;
+}
+
+/* A bucket with no entries still gets a faint stub so the axis reads as a
+   series rather than a gap. */
+.stats-bar-fill.empty {
+  background: var(--border);
+  opacity: 1;
+}
+
+.stats-bar-label {
+  flex: none;
+  font-size: 0.5625rem;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Weekday labels are single characters in Chinese but three letters in
+   English, so they need a little more room to stay legible. */
+.stats-chart.weekdays .stats-bar-label {
+  font-size: 0.5625rem;
+}
+
+.stats-empty {
+  padding: 1.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ---------- Scrollbar ---------- */
+
+::-webkit-scrollbar {
+  width: 0.5rem;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 0.25rem;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+/* ===========================================================================
+   Responsive adjustments
+
+   The fluid root size handles most of the scaling. These breakpoints only fix
+   the things that cannot scale linearly: the two-column shell has to collapse,
+   and the sidebar has to give up width before the editor becomes unusable.
+   =========================================================================== */
+
+/* Narrow window: shrink the sidebar so the editor keeps a workable column. */
+@media (max-width: 900px) {
+  :root {
+    --sidebar-w: clamp(12rem, 30vw, 15rem);
+    --measure: 100%;
+  }
+
+  .editor-header {
+    padding: 0.625rem 0.875rem;
+  }
+
+  .title-wrap {
+    padding: 0.875rem 1rem 0;
+  }
+
+  #content {
+    padding: 1rem;
+  }
+
+  .date-sub {
+    display: none;
+  }
+}
+
+/* Very narrow window: stack the sidebar above the editor. The sidebar becomes
+   a fixed-height strip so the editor still gets the rest of the window. */
+@media (max-width: 640px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 40vh) minmax(0, 1fr);
+  }
+
+  .sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-header {
+    padding: 0.625rem 0.75rem 0.375rem;
+  }
+
+  /* The footer is cramped on a phone-sized viewport, so the path shrinks
+     rather than pushing the font control off the edge. */
+  .path {
+    font-size: 0.5625rem;
+  }
+
+  .modal-overlay {
+    padding: 0.5rem;
+  }
+
+  .modal {
+    width: 100%;
+  }
+
+  /* The overlay already fills the window; on a phone-sized viewport the panel
+     padding is what has to give, not the grid. */
+  .calendar-overlay {
+    padding: 0.5rem;
+  }
+
+  .calendar-panel {
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .cal-grid {
+    grid-auto-rows: minmax(1.75rem, 1fr);
+  }
+
+  .import-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .import-row .row-date {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Short window (e.g. a laptop with the window dragged small): reclaim vertical
+   space from the chrome so the textarea keeps a usable height. */
+@media (max-height: 560px) {
+  .lock-card {
+    padding: 1.25rem 1.25rem;
+  }
+
+  .title-wrap {
+    padding-top: 0.5rem;
+  }
+
+  #content {
+    padding-top: 0.75rem;
+  }
+
+  .import-list {
+    max-height: 30vh;
+  }
+}
+
+/* Wide window: let the sidebar breathe a little, but keep the text column
+   capped by `--measure` so lines never get uncomfortably long. */
+@media (min-width: 1600px) {
+  :root {
+    --sidebar-w: 21rem;
+  }
+}
+
+/* Respect users who asked the OS to reduce motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .import-progress-bar {
+    transition: none;
+  }
+}
