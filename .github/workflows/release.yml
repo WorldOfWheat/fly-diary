@@ -31,10 +31,16 @@ jobs:
             curl wget file libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config
 
+      # pnpm must be installed before setup-node, otherwise `cache: pnpm`
+      # cannot resolve `pnpm store path`.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -42,7 +48,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - run: ./test.sh --no-cov
 
   publish:
@@ -66,10 +72,16 @@ jobs:
             curl wget file libxdo-dev libssl-dev \
             libayatana-appindicator3-dev librsvg2-dev libdbus-1-dev pkg-config
 
+      # pnpm must be installed before setup-node, otherwise `cache: pnpm`
+      # cannot resolve `pnpm store path`.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -77,7 +89,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - uses: tauri-apps/tauri-action@v0
         env:
