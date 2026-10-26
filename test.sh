@@ -28,10 +28,13 @@ if ! compgen -G "tests/*.test.js" >/dev/null; then
   echo "       (is this the right branch? tests/ lives on develope)" >&2
   exit 1
 fi
+# Leave the glob unquoted so the shell expands it into a file list. Node's
+# `--test` only understands glob patterns from v21 onwards, so quoting it
+# breaks on Node 20 runners with "Could not find '.../tests/*.test.js'".
 if [[ $COVERAGE -eq 1 ]]; then
-  node --test --experimental-test-coverage "tests/*.test.js"
+  node --test --experimental-test-coverage tests/*.test.js
 else
-  node --test "tests/*.test.js"
+  node --test tests/*.test.js
 fi
 
 echo
