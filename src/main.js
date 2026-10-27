@@ -1307,6 +1307,23 @@ function resetEditorState() {
 }
 
 /**
+ * Turn screenshot / screen-recording protection on or off.
+ *
+ * The window starts protected (`contentProtected: true` in `tauri.conf.json`),
+ * so this only ever needs to *relax* it — while the workspace picker is open,
+ * where the user may legitimately want to share their screen — and then restore
+ * it. Failures are logged, never surfaced: on Linux the backend call is a no-op
+ * and the app must keep working.
+ */
+async function setScreenshotProtection(protected_) {
+  try {
+    await invoke("set_screenshot_protection", { protected: protected_ });
+  } catch (err) {
+    console.error("set_screenshot_protection failed:", err);
+  }
+}
+
+/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
@@ -1453,6 +1470,7 @@ function createControllers() {
     closeSettings: () => settingsDialog.closeSettings(),
     renderDateLabel,
     lockAndFlush,
+    setScreenshotProtection,
   });
 }
 
@@ -1467,6 +1485,10 @@ function createControllers() {
 async function enterApp() {
   els.lockScreen.hidden = true;
   els.app.hidden = false;
+
+  // The window is created with `contentProtected: true`, so the lock screen is
+  // covered too. Re-assert it here in case the workspace picker turned it off.
+  setScreenshotProtection(true);
 
   try {
     const path = await invoke("diary_path");

@@ -682,6 +682,29 @@ fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// Enable or disable screenshot / screen-recording protection for the window.
+///
+/// Tauri maps this to `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on
+/// Windows and `NSWindow.setSharingType(.none)` on macOS. Linux has no
+/// equivalent in `tao`, so the call is a no-op there.
+///
+/// The window is created with `contentProtected: true` in `tauri.conf.json` so
+/// the lock screen is covered too; the frontend flips it off only while the
+/// workspace picker is open, where the user may want to share their screen.
+///
+/// The command is named `set_screenshot_protection` rather than
+/// `set_content_protected` because Tauri already exports a built-in command of
+/// the latter name, and the generated macro names would collide.
+#[tauri::command]
+fn set_screenshot_protection(
+    window: tauri::WebviewWindow,
+    protected: bool,
+) -> Result<(), String> {
+    window
+        .set_content_protected(protected)
+        .map_err(|e| e.to_string())
+}
+
 /// Absolute path of the diary directory, shown in the UI for transparency.
 #[tauri::command]
 fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
@@ -941,7 +964,8 @@ pub fn run() {
             run_import,
             upgrade_entries,
             today,
-            diary_path
+            diary_path,
+            set_screenshot_protection
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

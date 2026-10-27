@@ -93,6 +93,7 @@ function harness(overrides = {}) {
     closeSettings: spy(),
     renderDateLabel: spy(),
     lockAndFlush: spy(async () => {}),
+    setScreenshotProtection: spy(async () => {}),
     ...overrides.deps,
   };
 
@@ -1015,5 +1016,6 @@ function lockDeps(els) {
     closeSettings: spy(),
     renderDateLabel: spy(),
     lockAndFlush: spy(async () => {}),
+    setScreenshotProtection: spy(async () => {}),
   };
 }
