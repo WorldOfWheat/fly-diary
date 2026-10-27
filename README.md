@@ -585,6 +585,8 @@ fly-diary/
 - **閒置計時器只有一個**：所有活動事件都只是重設同一個 `setTimeout`，不累積計時器；鎖定與關閉設定頁時一併清除，避免背景殘留。
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
+- **抹除貫穿整條金鑰路徑**：`unlock_vault` / `create_vault` / `rewrap_vault` / `migrate_legacy_vault` 都直接回傳 `Zeroizing<[u8; 32]>`，不再經過裸 `[u8; 32]` 的堆疊副本；`crypto::decrypt` / `decrypt_with_aad` 回傳 `Zeroizing<Vec<u8>>`，所以解出來的明文（包含被包裝的 diary key）在離開作用域時自動歸零。`pack` / `pack_index` 產生的明文緩衝同樣是 `Zeroizing`，`Entry` 實作 `Drop` 抹除 `title` 與 `content`。`run_import` / `upgrade_entries` 從 session 取出的金鑰副本也包在 `Zeroizing` 裡，批次結束即抹除。
+- **關閉 core dump**：`main()` 在 Unix 上把 `RLIMIT_CORE` 設為 0。解鎖期間金鑰在記憶體中，若程式崩潰而寫出 core dump，等於把金鑰明文留在磁碟上；關閉 core dump 是最低成本的一道防線。
 - **密文綁定日期與版本（AAD）**：日記 payload 以 `日期 || 0x00 || 版本` 作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案、或改寫 `<diary version="…">` 想降級成較弱的 AAD 規則，都會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
 - **背景升級不擋 UI**：`upgrade_entries` 是 `async` 命令，實際改寫跑在 `spawn_blocking`，並以 `upgrade-progress` 事件回報 `(done, total)`。`enterApp()` 刻意不 await，所以解鎖後立刻能寫日記，升級在背後慢慢跑完。
 - **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入走「暫存檔 + `rename`」，並在寫入前把新密文解回來比對明文、在 `rename` 前比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
@@ -610,4 +612,8 @@ fly-diary/
 - 設定檔本身未加密，任何人可讀到日記資料夾位置（但沒有密碼仍無法解密內容）。
 - 檔案權限收緊只在 Unix 生效（`0600` / `0700`）。Windows 上沿用 `%APPDATA%` 既有的 per-user ACL，程式本身不額外設定 ACL；若把日記放在共用磁碟或同步資料夾，請自行確認該處的權限設定。
 - AAD 綁定只保護「搬檔」與「索引／日記互換」這類攻擊。若攻擊者同時能改寫檔名與檔案內容，仍可把某一天的密文連同檔名一起搬走——AAD 綁的是檔案自稱的日期，不是外部可信的時間來源。
+- 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `Zeroizing` 的抹除不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
+- 金鑰仍可能被作業系統換出到 swap 或休眠檔。程式未使用 `mlock` / `madvise(MADV_DONTDUMP)`，若需要更強的保證，請在系統層停用 swap 或啟用加密 swap。
+- 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
+- `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。

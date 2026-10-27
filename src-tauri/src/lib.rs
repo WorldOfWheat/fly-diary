@@ -299,9 +299,7 @@ fn create_vault(
 
     let dir = diary_dir(&app)?;
     let key = storage::create_vault(&dir, &passphrase, params)?;
-    *session.lock().unwrap() = Session {
-        key: Some(Zeroizing::new(key)),
-    };
+    *session.lock().unwrap() = Session { key: Some(key) };
     Ok(())
 }
 
@@ -314,9 +312,7 @@ fn unlock(
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
     let key = storage::unlock_vault(&dir, &passphrase)?;
-    *session.lock().unwrap() = Session {
-        key: Some(Zeroizing::new(key)),
-    };
+    *session.lock().unwrap() = Session { key: Some(key) };
     Ok(())
 }
 
@@ -384,9 +380,7 @@ fn change_passphrase(
 
     // The diary key is unchanged, but refresh the session anyway so the
     // in-memory copy is the one the vault now wraps.
-    *session.lock().unwrap() = Session {
-        key: Some(Zeroizing::new(key)),
-    };
+    *session.lock().unwrap() = Session { key: Some(key) };
     Ok(())
 }
 
@@ -616,9 +610,11 @@ async fn run_import(
     }
 
     // Copy the key out so the session lock is not held across the whole import.
+    // The copy is wrapped in `Zeroizing` so it is wiped when the batch ends,
+    // even though it outlives the session lock.
     let key = {
         let guard = session.lock().unwrap();
-        *guard.key()?
+        Zeroizing::new(*guard.key()?)
     };
 
     let emitter = app.clone();
@@ -662,10 +658,10 @@ async fn upgrade_entries(
 
     // Copy the key out so the session lock is not held for the whole run. The
     // copy stays valid even if the diary is locked mid-upgrade; the run simply
-    // finishes on its own copy.
+    // finishes on its own copy, which is wiped when the closure returns.
     let key = {
         let guard = session.lock().unwrap();
-        *guard.key()?
+        Zeroizing::new(*guard.key()?)
     };
 
     let emitter = app.clone();
