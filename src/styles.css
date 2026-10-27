@@ -807,22 +807,37 @@ summary:focus-visible {
   background: var(--panel);
 }
 
+/* The header holds the date navigator and the status cluster. Both are
+   intrinsically wide (a nowrap date pill plus four buttons), and neither can
+   shrink without losing content, so the row is allowed to wrap instead of
+   letting the two halves overlap. `.editor` is a column flex container whose
+   body is `flex: 1`, so a taller header simply takes height from the textarea. */
 .editor-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  row-gap: 0.5rem;
   padding: 0.75rem 1.25rem;
   border-bottom: 1px solid var(--border);
 }
 
 /* ---------- Date navigator ---------- */
 
+/* `flex: none` keeps the navigator at its natural width. Without it the
+   `min-width: 0` below lets flexbox compress the box narrower than its
+   contents, and because the step buttons and the nowrap date pill cannot
+   shrink, they spill out of the box and paint over the status cluster.
+   `overflow: hidden` is the backstop: if the navigator ever does run out of
+   room, it clips rather than overlapping its neighbour. */
 .date-nav {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 0.25rem;
   min-width: 0;
+  overflow: hidden;
 }
 
 /* Round step buttons with an inline chevron. */
@@ -1413,21 +1428,28 @@ body.calendar-open {
   opacity: 0.6;
 }
 
+/* The footer holds a live counter, the storage path, five action buttons and
+   the font-size control. Only the path can shrink, so once it has collapsed to
+   zero the fixed-width items no longer fit and — with `body` set to
+   `overflow: hidden` — the right-hand end was silently clipped. Wrapping lets
+   the actions and the font control drop to a second row instead. */
 .editor-footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  row-gap: 0.375rem;
+  min-width: 0;
+  overflow: hidden;
   padding: 0.5rem 1.25rem;
   font-size: 0.6875rem;
   color: var(--text-muted);
   border-top: 1px solid var(--border);
 }
 
-/* The footer holds a live counter, the storage path, the sidebar actions and
-   the font-size control. The counter must not reflow its neighbours as the
-   digits change, so it gets tabular figures; the path is the only flexible item
-   and truncates first. */
+/* The counter must not reflow its neighbours as the digits change, so it gets
+   tabular figures. */
 .word-count {
   flex: none;
   font-variant-numeric: tabular-nums;
@@ -2107,6 +2129,26 @@ body.calendar-open {
 
   .date-sub {
     display: none;
+  }
+
+  /* The five footer actions are the widest fixed-width block in the app. Once
+     the sidebar has taken its share of a narrow window they no longer fit on
+     one row, so tighten their padding before resorting to wrapping. */
+  .footer-actions .btn-lock {
+    padding: 0.1875rem 0.375rem;
+  }
+}
+
+/* Narrower still: the font-size control is a convenience, not a primary
+   action, so its numeric readout is the first thing to go. The A−/A+ buttons
+   keep working and the current scale is still visible in the settings dialog. */
+@media (max-width: 720px) {
+  .font-size .font-value {
+    display: none;
+  }
+
+  .footer-actions {
+    gap: 0.25rem;
   }
 }
 
