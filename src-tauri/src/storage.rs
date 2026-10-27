@@ -1732,32 +1732,22 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Err(e) => return fail(format!("Failed to serialise entry {date}: {e}")),
     };
 
-    // Write beside the original, then rename. `rename` is atomic on POSIX, so a
-    // crash leaves either the old file or the new one — never a truncated one.
-    let tmp_path = path.with_extension("xml.upgrade");
-    if let Err(e) = fsutil::write_private(&tmp_path, document) {
-        let _ = fs::remove_file(&tmp_path);
-        return fail(format!("Failed to write entry {date}: {e}"));
-    }
-
     // The user may have saved this entry while we were encrypting it. Their
-    // content wins: drop our copy and let the next run pick it up.
+    // content wins: drop our copy and let the next run pick it up. The check
+    // has to happen *before* the write, because `write_private` replaces the
+    // file in one atomic step and there is no window left to back out of.
     let after = fs::metadata(&path).and_then(|m| m.modified());
     match after {
         Ok(after) if after == before => {}
-        Ok(_) => {
-            let _ = fs::remove_file(&tmp_path);
-            return UpgradeOutcome::Skipped(date.to_string());
-        }
-        Err(e) => {
-            let _ = fs::remove_file(&tmp_path);
-            return fail(format!("Failed to stat entry {date}: {e}"));
-        }
+        Ok(_) => return UpgradeOutcome::Skipped(date.to_string()),
+        Err(e) => return fail(format!("Failed to stat entry {date}: {e}")),
     }
 
-    if let Err(e) = fs::rename(&tmp_path, &path) {
-        let _ = fs::remove_file(&tmp_path);
-        return fail(format!("Failed to replace entry {date}: {e}"));
+    // `write_private` writes a sibling temporary file, flushes it and renames
+    // it over the original, so a crash leaves either the old file or the new
+    // one — never a truncated one.
+    if let Err(e) = fsutil::write_private(&path, document) {
+        return fail(format!("Failed to write entry {date}: {e}"));
     }
 
     UpgradeOutcome::Upgraded(date.to_string())
@@ -3582,8 +3572,47 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|name| name.contains("upgrade"))
+            .filter(|name| name.contains("upgrade") || name.contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn saving_an_entry_leaves_no_temporary_files_behind() {
+        let dir = temp_dir("save-tmp");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t2", "c2").unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn a_failed_vault_write_keeps_the_old_vault_usable() {
+        let dir = temp_dir("vault-atomic");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+
+        // Make the vault path un-replaceable by turning it into a directory
+        // that cannot be renamed over. The old vault must survive untouched.
+        let vault = dir.join("vault.xml");
+        let saved = fs::read(&vault).unwrap();
+        fs::remove_file(&vault).unwrap();
+        fs::create_dir(&vault).unwrap();
+
+        assert!(rewrap_vault(&dir, "pw", "pw2", fast()).is_err());
+
+        // Restore the original file and confirm it still unlocks the diary.
+        fs::remove_dir(&vault).unwrap();
+        fs::write(&vault, &saved).unwrap();
+        let reopened = unlock_vault(&dir, "pw").unwrap();
+        assert_eq!(reopened.as_ref(), key.as_ref());
     }
 }

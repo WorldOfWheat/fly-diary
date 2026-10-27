@@ -590,8 +590,9 @@ fly-diary/
 - **關閉 core dump**：`main()` 在 Unix 上把 `RLIMIT_CORE` 設為 0。解鎖期間金鑰在記憶體中，若程式崩潰而寫出 core dump，等於把金鑰明文留在磁碟上；關閉 core dump 是最低成本的一道防線。
 - **密文綁定日期與版本（AAD）**：日記 payload 以 `日期 || 0x00 || 版本` 作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案、或改寫 `<diary version="…">` 想降級成較弱的 AAD 規則，都會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
 - **背景升級不擋 UI**：`upgrade_entries` 是 `async` 命令，實際改寫跑在 `spawn_blocking`，並以 `upgrade-progress` 事件回報 `(done, total)`。`enterApp()` 刻意不 await，所以解鎖後立刻能寫日記，升級在背後慢慢跑完。
-- **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入走「暫存檔 + `rename`」，並在寫入前把新密文解回來比對明文、在 `rename` 前比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
-- **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此寫入後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
+- **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入前會把新密文解回來比對明文、並比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
+- **所有寫入都是原子的**：`fsutil::write_private` 一律「寫同目錄暫存檔 → `sync_all()` → `rename` 覆蓋」。`rename` 在 POSIX 上是原子操作，所以斷電、磁碟滿、行程被 kill 都只會留下「完整的舊檔」或「完整的新檔」，不會出現截斷的檔案。`sync_all()` 不可省：少了它，`rename` 可能先於資料落地，斷電後會得到一個檔名正確但內容為空的檔案。暫存檔名帶有 pid 與遞增序號，因此平行匯入（rayon 池同時寫多篇）不會互撞同一個暫存檔。失敗路徑會清掉暫存檔，不留下垃圾。這對 `vault.xml` 尤其關鍵——它只有幾百 bytes，卻裝著 salt、KDF 參數與包裝後的金鑰，一旦截斷就等於日記永久無法解鎖。
+- **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此 `rename` 之後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
@@ -605,7 +606,9 @@ fly-diary/
 - 格式升級在解鎖後於背景進行，日記量大時會持續數秒到數十秒；期間狀態列會顯示進度，但日記本身已可正常使用。若升級途中關閉程式，下次解鎖會從剩下的舊格式檔案繼續。
 - 自動鎖定只在 App 視窗內計時：若把視窗縮到最小或切到別的程式，仍會照常計時並鎖定（這是刻意的）。
 - KDF 校準的結果取決於當下機器負載，忙碌時可能選到偏保守的參數；重新校準即可。
-- `index.xml` 與日記檔分開寫入，若程式在兩次寫入之間被強制終止，索引可能落後；下次寫入或呼叫 `rebuild_index()` 即可修復。
+- 每個檔案本身是原子寫入，但**跨檔案的交易不是**：`index.xml` 與日記檔分開寫入，若程式在兩次寫入之間被強制終止，索引可能落後（日記本身已完整寫入）；下次寫入或呼叫 `rebuild_index()` 即可修復。`delete_entry` 的「刪檔 + 改索引」同理。
+- 原子寫入的 `rename` 在 Windows 上無法覆蓋既有檔案，因此該平台會先刪除舊檔再改名，中間存在極短的「兩者都不存在」空窗。POSIX 沒有這個問題。要完全消除得改用 `ReplaceFileW`，目前選擇不為此引入 raw FFI。
+- 原子寫入保證的是「檔案內容不會被截斷」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
 - 平行匯入的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。
