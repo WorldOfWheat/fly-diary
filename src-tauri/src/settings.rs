@@ -31,6 +31,10 @@ const SETTINGS_FILE: &str = "settings.xml";
 pub const DEFAULT_AUTO_LOCK_MINUTES: u32 = 10;
 
 /// Sentinel stored in `<auto-lock-minutes>` meaning "never lock".
+///
+/// Only referenced from tests and from the `set_auto_lock` doc comment, so the
+/// production build would otherwise flag it as dead code.
+#[allow(dead_code)]
 pub const AUTO_LOCK_NEVER: u32 = 0;
 
 /// Allowed auto-lock values, in minutes. `0` means never.
