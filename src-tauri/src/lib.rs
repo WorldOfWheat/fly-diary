@@ -637,9 +637,12 @@ async fn run_import(
 ///
 /// Entries written before version 3 are not bound to their date through AES-GCM
 /// associated data, so their ciphertext can be copied to another day and will
-/// decrypt there. New writes always produce version 3, which means an entry is
-/// upgraded the first time it is saved — but an entry that is never opened
-/// again would stay unprotected forever.
+/// decrypt there. Entries written before version 4 are bound to their date but
+/// not to the version byte, so an attacker could rewrite `<diary version="4">`
+/// to `3` and make the reader fall back to the weaker bare-date AAD. New writes
+/// always produce version 4, whose AAD is `date || 0x00 || version`, so both
+/// attacks fail the GCM tag. An entry is upgraded the first time it is saved —
+/// but an entry that is never opened again would stay unprotected forever.
 ///
 /// This command closes that gap. The frontend calls it right after unlocking and
 /// deliberately does not await it, so the diary is usable immediately. The work

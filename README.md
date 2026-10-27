@@ -204,7 +204,7 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diary version="3">
+<diary version="4">
   <date>2026-10-23</date>
   <iv>BASE64(12 bytes)</iv>
   <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
@@ -217,36 +217,50 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 ### 版本與 AAD
 
-`version="3"` 的 payload 以 AES-GCM 的 **associated data（AAD）** 綁定到它所屬的日期：
-加密時把 `date` 當成 AAD 傳入，解密時再傳一次。AAD 會被 GCM 的驗證標籤涵蓋但不被加密，
-所以只要日期對不上，解密就會失敗。
+`version="4"` 的 payload 以 AES-GCM 的 **associated data（AAD）** 綁定到它所屬的日期**與版本號**：
 
-這擋掉的是「搬檔」攻擊：把 `2026-10-23.xml` 複製成 `2026-10-24.xml`，
-在沒有 AAD 的舊格式下會安靜地顯示 10/23 的內容（因為 `read_entry` 回傳的是**被要求的**日期），
-現在則會直接解密失敗。同理，`index.xml` 用 `b"fly-diary/index"` 當 AAD，
-所以索引密文與日記密文即使使用同一把 diary key 也**不能互換**。
+```
+AAD = date || 0x00 || version
+```
+
+加密時把這段位元組當成 AAD 傳入，解密時再傳一次。AAD 會被 GCM 的驗證標籤涵蓋但不被加密，
+所以只要日期或版本對不上，解密就會失敗。中間的 `0x00` 是分隔符，確保
+`("2026-10-2", 34)` 與 `("2026-10-23", 4)` 不會拼出同一段 AAD。
+
+這擋掉兩種攻擊：
+
+1. **搬檔**：把 `2026-10-23.xml` 複製成 `2026-10-24.xml`。在沒有 AAD 的舊格式下會安靜地顯示
+   10/23 的內容（因為 `read_entry` 回傳的是**被要求的**日期），現在會直接解密失敗。
+2. **降級**：把 `<diary version="4">` 改寫成 `version="3"` 或 `version="2"`，誘導讀取端改用
+   較弱（或完全沒有）的 AAD 來解密，再搭配搬檔把別天的密文塞進來。因為版本號本身也在 AAD 裡，
+   改寫版本屬性會讓驗證標籤失效，該篇日記會被歸類為**損壞**而不是被安靜地解開。
+
+同理，`index.xml` 用 `b"fly-diary/index"` 當 AAD，所以索引密文與日記密文即使使用同一把
+diary key 也**不能互換**。
 
 | 版本 | payload 內容                              | AAD                                     |
 | ---- | ----------------------------------------- | --------------------------------------- |
+| `4`  | `\x01` + 旗標 + `\n` + 標題 + `\n` + 內容 | `日期 \|\| 0x00 \|\| 版本`（日記）／`fly-diary/index`（索引） |
 | `3`  | `\x01` + 旗標 + `\n` + 標題 + `\n` + 內容 | 日期（日記）／`fly-diary/index`（索引） |
 | `2`  | 標題 + `\n` + 內容（無旗標，視為未收藏）  | 無                                      |
 | `1`  | `<title>` 明文、`<content>` 密文          | 無                                      |
 
 > 舊版（`version="2"`）payload 是 `標題 + "\n" + 內容`，沒有收藏旗標，讀取時視為「未收藏」；
-> 更舊的 `version="1"` 把 `<title>` 存成明文、`<content>` 存密文。兩者都仍相容，
-> 讀取時依文件上的 `version` 決定要不要帶 AAD，下次儲存該篇日記就會自動改寫成 `version="3"`。
-> 舊 vault 遷移時也會一併把日記改寫成 AAD 綁定的格式。
+> 更舊的 `version="1"` 把 `<title>` 存成明文、`<content>` 存密文。`version="3"` 只綁日期、
+> 沒有把版本號納入 AAD，因此仍可被降級改寫。三者都仍可讀取，讀取時依文件上的 `version`
+> 決定要帶哪一種 AAD，下次儲存該篇日記就會自動改寫成 `version="4"`。
+> 舊 vault 遷移時也會一併把日記改寫成版本綁定的格式。
 
 #### 解鎖後自動升級格式
 
 除了「寫到哪篇就升級哪篇」的懶惰升級，每次解鎖成功後都會在**背景**跑一次全庫升級，
-把還停在 `version="1"` / `version="2"` 的日記一次改寫成 `version="3"`：
+把還停在 `version="1"` / `version="2"` / `version="3"` 的日記一次改寫成 `version="4"`：
 
 - 由 `enterApp()` 觸發，**不 await**：日記立刻可用，升級在 `spawn_blocking` 裡跑，
   不會讓使用者盯著編輯器等整個資料夾改寫完。
 - 進度透過 `upgrade-progress` 事件回報 `(done, total)`，狀態列顯示「正在升級日記格式… 12/340」；
   結束後顯示「已升級 N 篇」或「已升級 X 篇，Y 篇失敗（原檔未更動）」。
-- **冪等**：已經是 `version="3"` 的檔案直接跳過，所以中斷後下次解鎖會自動續跑，
+- **冪等**：已經是 `version="4"` 的檔案直接跳過，所以中斷後下次解鎖會自動續跑，
   也不會每次解鎖都重寫整個資料夾。
 - **原子替換**：先寫到 `YYYY-MM-DD.xml.upgrade`（同樣 `0600`），再 `rename` 覆蓋原檔。
   POSIX 的 `rename` 是原子的，中途斷電只會留下舊檔或新檔，不會有半截檔案。
@@ -279,7 +293,7 @@ Vault 檔（`vault.xml`）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diary version="3">
+<diary version="4">
   <date>index</date>
   <iv>BASE64(12 bytes)</iv>
   <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
@@ -537,7 +551,7 @@ fly-diary/
 | `pick_import_dir()`                       | 開啟原生資料夾選擇器，回傳匯入來源路徑                                       |
 | `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入                               |
 | `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告                                   |
-| `upgrade_entries()`                       | 把舊格式日記改寫成 `version="3"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
+| `upgrade_entries()`                       | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
 | `today()`                                 | 回傳本地時區的今天日期                                                       |
 | `diary_path()`                            | 回傳日記資料夾絕對路徑                                                       |
 
@@ -569,7 +583,7 @@ fly-diary/
 - **閒置計時器只有一個**：所有活動事件都只是重設同一個 `setTimeout`，不累積計時器；鎖定與關閉設定頁時一併清除，避免背景殘留。
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
-- **密文綁定日期（AAD）**：日記 payload 以日期作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
+- **密文綁定日期與版本（AAD）**：日記 payload 以 `日期 || 0x00 || 版本` 作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案、或改寫 `<diary version="…">` 想降級成較弱的 AAD 規則，都會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
 - **背景升級不擋 UI**：`upgrade_entries` 是 `async` 命令，實際改寫跑在 `spawn_blocking`，並以 `upgrade-progress` 事件回報 `(done, total)`。`enterApp()` 刻意不 await，所以解鎖後立刻能寫日記，升級在背後慢慢跑完。
 - **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入走「暫存檔 + `rename`」，並在寫入前把新密文解回來比對明文、在 `rename` 前比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
 - **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此寫入後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。

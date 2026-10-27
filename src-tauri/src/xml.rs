@@ -4,7 +4,7 @@
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
-//! <diary version="3">
+//! <diary version="4">
 //!   <date>2026-10-23</date>
 //!   <iv>BASE64</iv>
 //!   <payload>BASE64(AES-256-GCM ciphertext)</payload>
@@ -17,12 +17,17 @@
 //!
 //! ## Versions
 //!
-//! * **3** — `payload` is encrypted with the entry's date as AES-GCM
-//!   associated data, so a ciphertext cannot be moved to another day.
+//! * **4** — `payload` is encrypted with [`entry_aad`] as AES-GCM associated
+//!   data: the entry's date *and* the document version. Binding the version
+//!   means the `version` attribute cannot be edited to talk a reader into
+//!   using a weaker (or no) AAD scheme.
+//! * **3** — `payload` is encrypted with the entry's date as associated data,
+//!   so a ciphertext cannot be moved to another day. The version itself is
+//!   *not* authenticated, which is what version 4 fixes.
 //! * **2** — `payload` is encrypted without associated data.
 //! * **1** — `<title>` in the clear, body in `<content>`.
 //!
-//! [`from_xml`] accepts all three so existing diaries keep working; the next
+//! [`from_xml`] accepts all four so existing diaries keep working; the next
 //! save rewrites the file in the current layout.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -30,10 +35,31 @@ use quick_xml::{Reader, Writer};
 
 /// The document version written by [`to_xml`].
 ///
-/// Version 3 means the payload was encrypted with the entry's date as
-/// associated data. Readers use this to decide whether to pass AAD when
-/// decrypting.
-pub const CURRENT_VERSION: u8 = 3;
+/// Version 4 means the payload was encrypted with [`entry_aad`] — the entry's
+/// date plus the version byte — as associated data. Readers use this to decide
+/// which AAD (if any) to pass when decrypting.
+pub const CURRENT_VERSION: u8 = 4;
+
+/// Separator between the date and the version inside the AAD.
+///
+/// A byte that cannot appear in an ISO date, so `("2026-10-23", 4)` and
+/// `("2026-10-2", 34)` can never produce the same associated data.
+const AAD_SEPARATOR: u8 = 0x00;
+
+/// The associated data a version 4 payload is bound to.
+///
+/// `date || 0x00 || version`. Including the version closes the downgrade hole
+/// that version 3 left open: rewriting `<diary version="4">` to `3` (or `2`)
+/// changes the AAD the reader derives, so the GCM tag no longer verifies and
+/// the entry is reported as broken instead of being silently decrypted under
+/// weaker rules.
+pub fn entry_aad(date: &str, version: u8) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(date.len() + 2);
+    aad.extend_from_slice(date.as_bytes());
+    aad.push(AAD_SEPARATOR);
+    aad.push(version);
+    aad
+}
 
 /// An encrypted diary entry as it lives on disk.
 #[derive(Debug, Clone)]
@@ -43,18 +69,19 @@ pub struct EncryptedEntry {
     pub iv: String,
     /// Base64 encoded ciphertext (includes the GCM tag).
     ///
-    /// In versions 2 and 3 this is the encrypted `title` + `content` bundle.
-    /// In version 1 files it is the encrypted body only.
+    /// In versions 2, 3 and 4 this is the encrypted `title` + `content`
+    /// bundle. In version 1 files it is the encrypted body only.
     pub payload: String,
     /// Version 1 only: the title, which used to be stored in the clear.
     pub legacy_title: Option<String>,
     /// Version of the document this entry was read from (or will be written
-    /// as). Version 3 payloads are AAD-bound; 1 and 2 are not.
+    /// as). Version 4 payloads are bound to date *and* version; version 3 to
+    /// the date only; 1 and 2 are not bound at all.
     pub version: u8,
 }
 
 impl EncryptedEntry {
-    /// Build a version 3 entry from an already encrypted payload.
+    /// Build a version 4 entry from an already encrypted payload.
     pub fn new(date: impl Into<String>, iv: impl Into<String>, payload: impl Into<String>) -> Self {
         Self {
             date: date.into(),
@@ -68,8 +95,9 @@ impl EncryptedEntry {
     /// Override the document version.
     ///
     /// Only useful for tests that need to hand-build a document in an older
-    /// layout: a version 1 or 2 payload is *not* AAD-bound, so writing one with
-    /// the default version 3 header would produce a file that cannot be read.
+    /// layout: a version 1 or 2 payload is *not* AAD-bound, and a version 3
+    /// payload is bound to the date alone, so writing one with the default
+    /// version 4 header would produce a file that cannot be read.
     /// Production code always writes [`CURRENT_VERSION`], so this is test-only.
     #[cfg(test)]
     pub fn with_version(mut self, version: u8) -> Self {
@@ -77,9 +105,31 @@ impl EncryptedEntry {
         self
     }
 
-    /// Whether the payload was encrypted with associated data.
+    /// Whether the payload was encrypted with associated data at all.
+    ///
+    /// True for versions 3 and 4. Use [`Self::uses_version_aad`] to tell the
+    /// two apart.
     pub fn is_aad_bound(&self) -> bool {
         self.version >= 3
+    }
+
+    /// Whether the payload is bound to the document version as well as the
+    /// date (version 4 and up).
+    pub fn uses_version_aad(&self) -> bool {
+        self.version >= 4
+    }
+
+    /// The associated data this entry's payload must be decrypted with.
+    ///
+    /// Returns `None` for versions 1 and 2, which carry no AAD.
+    pub fn aad(&self, date: &str) -> Option<Vec<u8>> {
+        if self.uses_version_aad() {
+            Some(entry_aad(date, self.version))
+        } else if self.is_aad_bound() {
+            Some(date.as_bytes().to_vec())
+        } else {
+            None
+        }
     }
 }
 
@@ -343,7 +393,7 @@ mod tests {
     fn output_declares_utf8_and_version() {
         let xml = to_xml(&entry("c")).unwrap();
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        assert!(xml.contains("<diary version=\"3\">"), "xml was: {xml}");
+        assert!(xml.contains("<diary version=\"4\">"), "xml was: {xml}");
     }
 
     #[test]
@@ -358,7 +408,49 @@ mod tests {
         assert!(!entry("c").with_version(1).is_aad_bound());
         assert!(!entry("c").with_version(2).is_aad_bound());
         assert!(entry("c").with_version(3).is_aad_bound());
+        assert!(entry("c").with_version(4).is_aad_bound());
         assert!(entry("c").is_aad_bound());
+    }
+
+    #[test]
+    fn only_version_4_and_up_binds_the_version() {
+        assert!(!entry("c").with_version(1).uses_version_aad());
+        assert!(!entry("c").with_version(2).uses_version_aad());
+        assert!(!entry("c").with_version(3).uses_version_aad());
+        assert!(entry("c").with_version(4).uses_version_aad());
+        assert!(entry("c").uses_version_aad());
+    }
+
+    #[test]
+    fn aad_is_none_for_versions_without_associated_data() {
+        assert!(entry("c").with_version(1).aad("2026-10-23").is_none());
+        assert!(entry("c").with_version(2).aad("2026-10-23").is_none());
+    }
+
+    #[test]
+    fn version_3_aad_is_the_bare_date() {
+        let aad = entry("c").with_version(3).aad("2026-10-23").unwrap();
+        assert_eq!(aad, b"2026-10-23".to_vec());
+    }
+
+    #[test]
+    fn version_4_aad_is_date_then_version() {
+        let aad = entry("c").with_version(4).aad("2026-10-23").unwrap();
+        assert_eq!(aad, entry_aad("2026-10-23", 4));
+        assert_eq!(aad.len(), "2026-10-23".len() + 2);
+        assert_eq!(aad[aad.len() - 2], 0x00);
+        assert_eq!(aad[aad.len() - 1], 4);
+    }
+
+    #[test]
+    fn aad_separator_prevents_date_version_ambiguity() {
+        // Without a separator these two would collide.
+        assert_ne!(entry_aad("2026-10-2", 34), entry_aad("2026-10-23", 4));
+    }
+
+    #[test]
+    fn aad_differs_between_versions() {
+        assert_ne!(entry_aad("2026-10-23", 3), entry_aad("2026-10-23", 4));
     }
 
     #[test]

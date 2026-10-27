@@ -542,8 +542,10 @@ fn migrate_entries(
         let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct)
             .map_err(|_| format!("Entry {date} could not be decrypted during migration"))?;
 
-        // Rewrite in the current format, so the migrated entry gains AAD too.
-        let (new_iv, new_ct) = crypto::encrypt_with_aad(new_key, date.as_bytes(), &plain)?;
+        // Rewrite in the current format, so the migrated entry gains the
+        // version-bound AAD too.
+        let aad = xml::entry_aad(date, xml::CURRENT_VERSION);
+        let (new_iv, new_ct) = crypto::encrypt_with_aad(new_key, &aad, &plain)?;
         let rewritten = xml::EncryptedEntry::new(
             date,
             crypto::b64_encode(&new_iv),
@@ -884,9 +886,11 @@ fn unpack(plain: &[u8], legacy_title: Option<&str>) -> (String, String, bool) {
 
 /// Decrypt an entry payload, honouring the document's version.
 ///
-/// Version 3 payloads are bound to `date` through AES-GCM associated data, so
-/// a file copied to another day fails to decrypt instead of silently showing
-/// the wrong entry. Versions 1 and 2 predate AAD and are read without it.
+/// Version 4 payloads are bound to `date` *and* the version byte through
+/// AES-GCM associated data, so neither a file copied to another day nor a
+/// rewritten `<diary version="…">` attribute can be made to decrypt. Version 3
+/// payloads are bound to `date` alone. Versions 1 and 2 predate AAD and are
+/// read without it.
 fn decrypt_entry_payload(
     key: &[u8; 32],
     date: &str,
@@ -894,10 +898,9 @@ fn decrypt_entry_payload(
     iv: &[u8],
     ct: &[u8],
 ) -> Result<Vec<u8>, String> {
-    if encrypted.is_aad_bound() {
-        crypto::decrypt_with_aad(key, date.as_bytes(), iv, ct)
-    } else {
-        crypto::decrypt(key, iv, ct)
+    match encrypted.aad(date) {
+        Some(aad) => crypto::decrypt_with_aad(key, &aad, iv, ct),
+        None => crypto::decrypt(key, iv, ct),
     }
 }
 
@@ -943,8 +946,11 @@ fn write_entry_file(
     ensure_dir(dir)?;
     let path = entry_path(dir, date)?;
 
-    // Bind the ciphertext to its date so it cannot be relocated to another day.
-    let (iv, ct) = crypto::encrypt_with_aad(key, date.as_bytes(), &pack(title, content, favourite))?;
+    // Bind the ciphertext to its date *and* to the document version, so it can
+    // neither be relocated to another day nor re-labelled as an older format
+    // that would be decrypted with weaker (or no) associated data.
+    let aad = xml::entry_aad(date, xml::CURRENT_VERSION);
+    let (iv, ct) = crypto::encrypt_with_aad(key, &aad, &pack(title, content, favourite))?;
     let encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
     let document = xml::to_xml(&encrypted)?;
     fsutil::write_private(&path, document)
@@ -1595,7 +1601,10 @@ pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, Stri
         let Ok(encrypted) = xml::from_xml(&text) else {
             continue;
         };
-        if encrypted.is_aad_bound() {
+        // Anything below the current version is a candidate: version 3 is
+        // AAD-bound but does not authenticate the version byte, so it still
+        // needs rewriting to close the downgrade hole.
+        if encrypted.version >= xml::CURRENT_VERSION {
             continue;
         }
         // Only plan an upgrade for entries we can actually read. A file that
@@ -1645,7 +1654,7 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Ok(encrypted) => encrypted,
         Err(e) => return fail(format!("Failed to parse entry {date}: {e}")),
     };
-    if encrypted.is_aad_bound() {
+    if encrypted.version >= xml::CURRENT_VERSION {
         return UpgradeOutcome::Skipped(date.to_string());
     }
 
@@ -1672,14 +1681,16 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         plain
     };
 
-    // Re-encrypt with the date as AAD, then read it straight back. The round
-    // trip is what makes an unattended upgrade trustworthy: if the new
-    // ciphertext does not decrypt to the exact same bytes, we refuse to write.
-    let (new_iv, new_ct) = match crypto::encrypt_with_aad(key, date.as_bytes(), &plain) {
+    // Re-encrypt with the current AAD (date + version), then read it straight
+    // back. The round trip is what makes an unattended upgrade trustworthy: if
+    // the new ciphertext does not decrypt to the exact same bytes, we refuse to
+    // write.
+    let aad = xml::entry_aad(date, xml::CURRENT_VERSION);
+    let (new_iv, new_ct) = match crypto::encrypt_with_aad(key, &aad, &plain) {
         Ok(pair) => pair,
         Err(e) => return fail(format!("Failed to encrypt entry {date}: {e}")),
     };
-    match crypto::decrypt_with_aad(key, date.as_bytes(), &new_iv, &new_ct) {
+    match crypto::decrypt_with_aad(key, &aad, &new_iv, &new_ct) {
         Ok(check) if check == plain => {}
         Ok(_) => return fail(format!("Round-trip check failed for entry {date}")),
         Err(e) => return fail(format!("Round-trip check failed for entry {date}: {e}")),
@@ -1890,11 +1901,11 @@ mod tests {
         assert_eq!(list[0].title, "舊標題");
 
         // Saving rewrites the file in the current layout, with the title
-        // encrypted and the payload bound to the date.
+        // encrypted and the payload bound to the date and version.
         write_entry(&dir, &key, "2026-10-23", "舊標題", "legacy body").unwrap();
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
         assert!(!raw.contains("舊標題"));
-        assert!(raw.contains("version=\"3\""), "raw was: {raw}");
+        assert!(raw.contains("version=\"4\""), "raw was: {raw}");
     }
 
     #[test]
@@ -3078,14 +3089,36 @@ mod tests {
     }
 
     #[test]
-    fn new_entries_are_written_as_version_3() {
+    fn new_entries_are_written_as_version_4() {
         let dir = temp_dir("aad-version");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
 
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
-        assert!(raw.contains("version=\"3\""), "raw was: {raw}");
-        assert_eq!(xml::from_xml(&raw).unwrap().version, 3);
+        assert!(raw.contains("version=\"4\""), "raw was: {raw}");
+        let parsed = xml::from_xml(&raw).unwrap();
+        assert_eq!(parsed.version, 4);
+        assert!(parsed.uses_version_aad());
+    }
+
+    #[test]
+    fn downgrading_the_version_attribute_breaks_decryption() {
+        let dir = temp_dir("aad-downgrade");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
+
+        // Rewrite the header to claim the file is an older format. Because the
+        // version byte is part of the AAD, the tag no longer verifies.
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        for claimed in ["3", "2"] {
+            let forged = raw.replace("version=\"4\"", &format!("version=\"{claimed}\""));
+            assert_ne!(forged, raw, "version attribute not found");
+            fs::write(dir.join("2026-10-23.xml"), &forged).unwrap();
+            assert!(
+                read_entry(&dir, &key, "2026-10-23").is_err(),
+                "a version {claimed} header must not decrypt a version 4 payload"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -3302,6 +3335,20 @@ mod tests {
         fs::write(dir.join(format!("{date}.xml")), xml::to_xml(&entry).unwrap()).unwrap();
     }
 
+    /// Write a version 3 entry: AAD-bound to the date, but the version byte is
+    /// not authenticated.
+    fn write_v3_entry(dir: &Path, key: &[u8; 32], date: &str, title: &str, content: &str) {
+        let plain = format!("\u{1}0\n{title}\n{content}");
+        let (iv, ct) = crypto::encrypt_with_aad(key, date.as_bytes(), plain.as_bytes()).unwrap();
+        let entry = EncryptedEntry::new(
+            date,
+            crypto::b64_encode(&iv),
+            crypto::b64_encode(&ct),
+        )
+        .with_version(3);
+        fs::write(dir.join(format!("{date}.xml")), xml::to_xml(&entry).unwrap()).unwrap();
+    }
+
     /// Write a version 1 entry: cleartext title, encrypted body only.
     fn write_v1_entry(dir: &Path, key: &[u8; 32], date: &str, title: &str, content: &str) {
         let (iv, ct) = crypto::encrypt(key, content.as_bytes()).unwrap();
@@ -3343,16 +3390,48 @@ mod tests {
         assert_eq!(report.upgraded, vec!["2026-10-23"]);
         assert!(report.failed.is_empty());
 
-        // The file now declares version 3 and is AAD-bound.
+        // The file now declares the current version and binds the version byte.
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
-        assert!(raw.contains("version=\"3\""), "got: {raw}");
-        assert!(xml::from_xml(&raw).unwrap().is_aad_bound());
+        assert!(raw.contains("version=\"4\""), "got: {raw}");
+        assert!(xml::from_xml(&raw).unwrap().uses_version_aad());
 
         // Content survived the rewrite.
         let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
         assert_eq!(entry.title, "舊標題");
         assert_eq!(entry.content, "舊內容");
         assert!(!entry.favourite);
+    }
+
+    #[test]
+    fn a_version_3_entry_is_upgraded_to_version_4() {
+        let dir = temp_dir("upgrade-v3");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v3_entry(&dir, &key, "2026-10-23", "標題", "內容");
+
+        // Version 3 is readable but still needs the version-bound AAD.
+        assert_eq!(scan_upgrade_plan(&dir, &key).unwrap(), vec!["2026-10-23"]);
+
+        let report = upgrade_entries(&dir, &key).unwrap();
+        assert_eq!(report.upgraded, vec!["2026-10-23"]);
+        assert!(report.failed.is_empty());
+
+        let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
+        assert!(raw.contains("version=\"4\""), "got: {raw}");
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "標題");
+        assert_eq!(entry.content, "內容");
+    }
+
+    #[test]
+    fn a_version_3_entry_can_still_be_read_before_upgrading() {
+        let dir = temp_dir("read-v3");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_v3_entry(&dir, &key, "2026-10-23", "舊標題", "舊內容");
+
+        let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "舊標題");
+        assert_eq!(entry.content, "舊內容");
     }
 
     #[test]
