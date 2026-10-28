@@ -23,6 +23,19 @@
 //! leaves either the complete old file or the complete new one — never a
 //! half-written one. This matters most for `vault.xml`: losing it means losing
 //! the salt and the wrapped diary key, i.e. the diary becomes unopenable.
+//!
+//! Two details make the guarantee hold across a power loss, not just across a
+//! process crash:
+//!
+//! - The temporary file is flushed with `sync_all()` *before* the rename, so
+//!   the rename can never be reordered ahead of the data reaching the disk.
+//! - The parent directory is flushed *after* the rename, so the new directory
+//!   entry is durable too. Without that second flush the file contents survive
+//!   but the name change may not, which on a synced folder means the other
+//!   device can see the old file come back.
+//!
+//! [`copy_private`] applies the same treatment to a file-to-file copy, so an
+//! interrupted export leaves the destination untouched instead of truncated.
 
 use std::fs;
 use std::io::Write;
@@ -58,11 +71,12 @@ fn temp_path(path: &Path) -> PathBuf {
 /// Write `data` to `path` atomically, readable only by the current user.
 ///
 /// The bytes go to a temporary sibling first, which is flushed with
-/// `sync_all()` and then renamed over `path`. Two consequences:
+/// `sync_all()` and then renamed over `path`. Three consequences:
 ///
 /// - A failure at any point leaves the previous contents of `path` intact.
 /// - A power loss after the rename cannot leave an empty file behind, because
 ///   the data was already on disk before the directory entry changed.
+/// - The rename itself is flushed, so the new name is durable as well.
 ///
 /// The mode is applied on creation *and* re-applied afterwards. `OpenOptions`
 /// only honours `mode` when it actually creates the file, so an existing file
@@ -80,6 +94,25 @@ pub fn write_private(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()>
     result
 }
 
+/// Copy `source` to `dest` atomically, readable only by the current user.
+///
+/// Used for exporting a broken entry: the user is rescuing the only copy of a
+/// day they cannot open, so a truncated destination would be worse than no
+/// destination at all. The copy goes to a sibling temporary file, is flushed,
+/// and is then renamed into place — exactly like [`write_private`].
+///
+/// `source` is read in chunks rather than with `fs::copy` so the bytes pass
+/// through the same flush-then-rename path as every other write.
+pub fn copy_private(source: &Path, dest: &Path) -> std::io::Result<()> {
+    let tmp = temp_path(dest);
+
+    let result = copy_temp(source, &tmp).and_then(|()| replace(&tmp, dest));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
 /// Create `tmp` with the private mode, write `data` and flush it to disk.
 fn write_temp(tmp: &Path, data: &[u8]) -> std::io::Result<()> {
     let mut file = open_private(tmp)?;
@@ -87,6 +120,15 @@ fn write_temp(tmp: &Path, data: &[u8]) -> std::io::Result<()> {
     // Without this the rename could be reordered ahead of the data reaching
     // the disk, and a power loss would leave a correctly named empty file.
     file.sync_all()?;
+    Ok(())
+}
+
+/// Create `tmp` with the private mode, stream `source` into it and flush it.
+fn copy_temp(source: &Path, tmp: &Path) -> std::io::Result<()> {
+    let mut input = fs::File::open(source)?;
+    let mut output = open_private(tmp)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
     Ok(())
 }
 
@@ -111,7 +153,7 @@ fn open_private(path: &Path) -> std::io::Result<fs::File> {
         .open(path)
 }
 
-/// Move `tmp` onto `path`, replacing it.
+/// Move `tmp` onto `path`, replacing it, and flush the directory entry.
 #[cfg(unix)]
 fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -120,15 +162,25 @@ fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
     // `rename` keeps the temporary file's mode, which `open_private` already
     // set to 0600. Re-applying it also tightens a destination that an older
     // build left world-readable, since the rename replaced it wholesale.
-    fs::set_permissions(path, fs::Permissions::from_mode(FILE_MODE))
+    fs::set_permissions(path, fs::Permissions::from_mode(FILE_MODE))?;
+    sync_parent_dir(path)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
-    // `fs::rename` fails on Windows when the destination exists, so the old
-    // file is removed first. That reopens a tiny window where neither file
-    // exists, but the alternative — `ReplaceFileW` — needs a raw FFI call for
-    // a platform where `%APPDATA%` is already ACL-protected.
+    // `fs::rename` fails on Windows when the destination exists, and the
+    // remove-then-rename workaround leaves a window where neither file exists.
+    // `ReplaceFileW` swaps the two in one call, so a crash at any point leaves
+    // either the old file or the new one under the real name.
+    if !path.exists() {
+        // Nothing to replace: a plain rename is already atomic.
+        return fs::rename(tmp, path);
+    }
+    replace_file_w(tmp, path)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
     match fs::rename(tmp, path) {
         Ok(()) => Ok(()),
         Err(_) if path.exists() => {
@@ -136,6 +188,90 @@ fn replace(tmp: &Path, path: &Path) -> std::io::Result<()> {
             fs::rename(tmp, path)
         }
         Err(e) => Err(e),
+    }
+}
+
+/// Swap `replacement` in for `path` with `ReplaceFileW`.
+///
+/// The destination keeps its ACLs and attributes, which is what we want: the
+/// file was already owner-only. `REPLACEFILE_WRITE_THROUGH` makes the call
+/// return only once the change is on disk, so no separate directory flush is
+/// needed on this platform.
+#[cfg(windows)]
+fn replace_file_w(replacement: &Path, path: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn ReplaceFileW(
+            replaced: *const u16,
+            replacement: *const u16,
+            backup: *const u16,
+            flags: u32,
+            exclude: *mut core::ffi::c_void,
+            reserved: *mut core::ffi::c_void,
+        ) -> i32;
+    }
+
+    const REPLACEFILE_WRITE_THROUGH: u32 = 0x0000_0001;
+
+    let wide = |p: &Path| -> Vec<u16> {
+        p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+    };
+    let replaced = wide(path);
+    let replacement = wide(replacement);
+
+    // SAFETY: both pointers come from NUL-terminated `Vec<u16>` buffers that
+    // outlive the call, and the two optional pointer arguments are null, which
+    // the API documents as "no backup file" and "no exclusion callback".
+    let ok = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            REPLACEFILE_WRITE_THROUGH,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Flush `dir`, making a rename or unlink inside it durable.
+///
+/// `sync_all()` on a file only guarantees its *contents* reached the disk. A
+/// rename or a delete changes the directory, and POSIX only promises that
+/// survives a power loss once the directory itself is flushed. Skipping this is
+/// how a synced folder ends up resurrecting a deleted entry on the other
+/// device.
+///
+/// Windows has no directory handle to flush; `ReplaceFileW` with
+/// `REPLACEFILE_WRITE_THROUGH` covers renames there, and a delete is durable
+/// once the handle is closed.
+#[cfg(unix)]
+pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    // Opening a directory read-only is enough to fsync it.
+    fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+pub fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Flush the directory that contains `path`.
+///
+/// Only the Unix `replace` needs this: the Windows path goes through
+/// `ReplaceFileW` with `REPLACEFILE_WRITE_THROUGH`, and the fallback platform
+/// has no directory handle to flush.
+#[cfg(unix)]
+fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
+    match path.parent() {
+        Some(parent) => sync_dir(parent),
+        None => Ok(()),
     }
 }
 
@@ -398,6 +534,83 @@ mod tests {
             .iter()
             .all(|name| name.ends_with(".xml")));
         let _ = fs::remove_dir_all(&*dir);
+    }
+
+    #[test]
+    fn copy_private_copies_the_bytes() {
+        let dir = temp_dir("copy");
+        let source = dir.join("2026-10-23.xml");
+        let dest = dir.join("export.xml");
+        fs::write(&source, b"<entry>broken</entry>").unwrap();
+
+        copy_private(&source, &dest).unwrap();
+
+        assert_eq!(fs::read(&dest).unwrap(), b"<entry>broken</entry>");
+        // The source is untouched.
+        assert_eq!(fs::read(&source).unwrap(), b"<entry>broken</entry>");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_private_leaves_no_temporary_file_behind() {
+        let dir = temp_dir("copy-no-temp");
+        let source = dir.join("2026-10-23.xml");
+        let dest = dir.join("export.xml");
+        fs::write(&source, b"payload").unwrap();
+
+        copy_private(&source, &dest).unwrap();
+
+        assert_eq!(names_starting_with(&dir, "export.xml"), vec!["export.xml"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_copy_keeps_the_previous_destination() {
+        let dir = temp_dir("copy-failed");
+        let dest = dir.join("export.xml");
+        fs::write(&dest, b"previous export").unwrap();
+
+        // A missing source fails before anything is written.
+        let missing = dir.join("does-not-exist.xml");
+        assert!(copy_private(&missing, &dest).is_err());
+
+        assert_eq!(fs::read(&dest).unwrap(), b"previous export");
+        assert!(names_starting_with(&dir, "export.xml.tmp").is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_private_creates_a_file_only_the_owner_can_read() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("copy-mode");
+        let source = dir.join("2026-10-23.xml");
+        let dest = dir.join("export.xml");
+        fs::write(&source, b"payload").unwrap();
+
+        copy_private(&source, &dest).unwrap();
+
+        let mode = fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0600, got {mode:o}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_dir_flushes_an_existing_directory() {
+        let dir = temp_dir("sync-dir");
+        sync_dir(&dir).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_dir_reports_a_missing_directory() {
+        let dir = temp_dir("sync-missing");
+        let missing = dir.join("nope");
+        assert!(sync_dir(&missing).is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

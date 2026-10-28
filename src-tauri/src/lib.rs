@@ -834,6 +834,74 @@ async fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
     .await
 }
 
+/// Build the application menu.
+///
+/// Tauri installs a default menu on Linux and macOS, and its `Edit` submenu
+/// claims the `Ctrl+Z` / `Ctrl+Shift+Z` accelerators. Those default items are
+/// inert placeholders: they swallow the keystroke before the webview sees it and
+/// then do nothing, which is why undo appeared to be broken in the editor.
+///
+/// Rebuilding the submenu with [`PredefinedMenuItem`] gives each item a real
+/// action — the predefined variants forward to the focused webview's own editing
+/// commands, so undo/redo/cut/copy/paste behave exactly as they do in a browser.
+fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
+
+    let edit = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, None)?)
+        .item(&PredefinedMenuItem::redo(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, None)?)
+        .item(&PredefinedMenuItem::copy(app, None)?)
+        .item(&PredefinedMenuItem::paste(app, None)?)
+        .item(&PredefinedMenuItem::select_all(app, None)?)
+        .build()?;
+
+    MenuBuilder::new(app).item(&edit).build()
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .manage(SharedSession::default())
+        .menu(build_menu)
+        .invoke_handler(tauri::generate_handler![
+            get_settings,
+            set_diary_dir,
+            set_auto_lock,
+            set_autosave_delay,
+            pick_diary_dir,
+            get_kdf_defaults,
+            vault_exists,
+            create_vault,
+            unlock,
+            lock,
+            is_unlocked,
+            get_vault_kdf,
+            calibrate_kdf,
+            change_passphrase,
+            get_entry,
+            save_entry,
+            delete_entry,
+            list_entries,
+            list_favourites,
+            set_favourite,
+            rebuild_index,
+            list_broken_entries,
+            export_broken_entry,
+            pick_import_dir,
+            scan_import,
+            run_import,
+            upgrade_entries,
+            today,
+            diary_path,
+            set_screenshot_protection
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1023,72 +1091,4 @@ mod tests {
         let expected = chrono::Local::now().format("%Y-%m-%d").to_string();
         assert_eq!(today(), expected);
     }
-}
-
-/// Build the application menu.
-///
-/// Tauri installs a default menu on Linux and macOS, and its `Edit` submenu
-/// claims the `Ctrl+Z` / `Ctrl+Shift+Z` accelerators. Those default items are
-/// inert placeholders: they swallow the keystroke before the webview sees it and
-/// then do nothing, which is why undo appeared to be broken in the editor.
-///
-/// Rebuilding the submenu with [`PredefinedMenuItem`] gives each item a real
-/// action — the predefined variants forward to the focused webview's own editing
-/// commands, so undo/redo/cut/copy/paste behave exactly as they do in a browser.
-fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
-    use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
-
-    let edit = SubmenuBuilder::new(app, "Edit")
-        .item(&PredefinedMenuItem::undo(app, None)?)
-        .item(&PredefinedMenuItem::redo(app, None)?)
-        .separator()
-        .item(&PredefinedMenuItem::cut(app, None)?)
-        .item(&PredefinedMenuItem::copy(app, None)?)
-        .item(&PredefinedMenuItem::paste(app, None)?)
-        .item(&PredefinedMenuItem::select_all(app, None)?)
-        .build()?;
-
-    MenuBuilder::new(app).item(&edit).build()
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .manage(SharedSession::default())
-        .menu(build_menu)
-        .invoke_handler(tauri::generate_handler![
-            get_settings,
-            set_diary_dir,
-            set_auto_lock,
-            set_autosave_delay,
-            pick_diary_dir,
-            get_kdf_defaults,
-            vault_exists,
-            create_vault,
-            unlock,
-            lock,
-            is_unlocked,
-            get_vault_kdf,
-            calibrate_kdf,
-            change_passphrase,
-            get_entry,
-            save_entry,
-            delete_entry,
-            list_entries,
-            list_favourites,
-            set_favourite,
-            rebuild_index,
-            list_broken_entries,
-            export_broken_entry,
-            pick_import_dir,
-            scan_import,
-            run_import,
-            upgrade_entries,
-            today,
-            diary_path,
-            set_screenshot_protection
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
 }
