@@ -227,9 +227,13 @@ fn vault_path(dir: &Path) -> PathBuf {
     dir.join(VAULT_FILE)
 }
 
-fn write_vault(dir: &Path, vault: &Vault) -> Result<(), String> {
-    ensure_dir(dir)?;
-    let xml = format!(
+/// Serialise a vault record into the version 2 XML document.
+///
+/// Shared by [`write_vault`] and the migration journal, so the journal holds
+/// exactly the bytes that will end up in `vault.xml` once the migration
+/// commits.
+fn vault_to_xml(vault: &Vault) -> String {
+    format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <vault version=\"2\">\n\
          \x20 <kdf>argon2id</kdf>\n\
@@ -246,10 +250,14 @@ fn write_vault(dir: &Path, vault: &Vault) -> Result<(), String> {
         vault.salt_b64,
         vault.wrapped_key_iv_b64,
         vault.wrapped_key_b64
-    );
+    )
+}
+
+fn write_vault(dir: &Path, vault: &Vault) -> Result<(), String> {
+    ensure_dir(dir)?;
     // `vault.xml` holds the salt, the KDF cost parameters and the wrapped diary
     // key: everything an offline cracker needs. It must never be world-readable.
-    fsutil::write_private(&vault_path(dir), xml)
+    fsutil::write_private(&vault_path(dir), vault_to_xml(vault))
         .map_err(|e| format!("Failed to write vault: {e}"))
 }
 
@@ -260,7 +268,14 @@ fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to read vault: {e}")),
     };
+    parse_vault(&text).map(Some)
+}
 
+/// Parse a vault document.
+///
+/// Split out from [`read_vault`] so the migration journal — which stores the
+/// same document shape — can be parsed without going through the filesystem.
+fn parse_vault(text: &str) -> Result<Vault, String> {
     let mut version = String::new();
     let mut kdf = None;
     let mut memory = None;
@@ -274,7 +289,7 @@ fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
     let mut verifier = None;
     let mut current = String::new();
 
-    let mut reader = quick_xml::Reader::from_str(&text);
+    let mut reader = quick_xml::Reader::from_str(text);
     reader.config_mut().trim_text(true);
     loop {
         match reader.read_event() {
@@ -320,14 +335,14 @@ fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
     // wrapped key. Treat them as legacy so they can be migrated on unlock.
     let is_legacy = kdf.is_none() || version == "1";
     if is_legacy {
-        return Ok(Some(Vault {
+        return Ok(Vault {
             kdf: Kdf::LegacySha256,
             params: crypto::KdfParams::default(),
             salt_b64,
             wrapped_key_iv_b64: verifier_iv
                 .ok_or_else(|| "Vault is missing <verifier-iv>".to_string())?,
             wrapped_key_b64: verifier.ok_or_else(|| "Vault is missing <verifier>".to_string())?,
-        }));
+        });
     }
 
     let kdf_name = kdf.unwrap_or_default();
@@ -342,7 +357,7 @@ fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
             .map_err(|e| format!("Invalid <{field}> value: {e}"))
     };
 
-    Ok(Some(Vault {
+    Ok(Vault {
         kdf: Kdf::Argon2id,
         params: crypto::KdfParams {
             memory_kib: parse_u32(memory, "kdf-memory")?,
@@ -354,7 +369,7 @@ fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
             .ok_or_else(|| "Vault is missing <wrapped-key-iv>".to_string())?,
         wrapped_key_b64: wrapped_key
             .ok_or_else(|| "Vault is missing <wrapped-key>".to_string())?,
-    }))
+    })
 }
 
 /// Whether a vault already exists (i.e. the diary has been initialised).
@@ -471,6 +486,13 @@ pub fn create_vault(
 /// Argon2id master key. Because the diary key changes, **every entry must be
 /// re-encrypted** — [`migrate_entries`] does that.
 pub fn unlock_vault(dir: &Path, passphrase: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    // A journal means a previous migration was interrupted. Finish it before
+    // reading the vault, because the vault may still describe the old format
+    // while some entries are already under the new key.
+    if let Some(journal) = read_migration_journal(dir) {
+        return resume_migration(dir, passphrase, &journal);
+    }
+
     let vault = read_vault(dir)?.ok_or_else(|| "No vault found".to_string())?;
     let salt = crypto::b64_decode(&vault.salt_b64)?;
     let iv = crypto::b64_decode(&vault.wrapped_key_iv_b64)?;
@@ -506,10 +528,23 @@ fn unwrap_diary_key(plain: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
     Ok(Zeroizing::new(bytes))
 }
 
+/// Name of the migration journal.
+///
+/// A version 1 vault stores a single legacy key that decrypts every entry. The
+/// upgrade re-encrypts all of them under a fresh diary key and only then
+/// rewrites `vault.xml`. If the process dies halfway, some entries are under
+/// the new key and some under the old one, and the vault still says "version
+/// 1" — the old passphrase can no longer open the diary. The journal records
+/// the new key (wrapped under the master key) *before* the first entry is
+/// touched, so the next unlock can finish the job instead of losing the data.
+const MIGRATION_JOURNAL: &str = "migration.journal";
+
 /// Upgrade a version 1 vault to Argon2id + wrapped diary key.
 ///
-/// Re-encrypts every entry under the new diary key. If any step fails the
-/// vault file is left untouched, so the old passphrase still works.
+/// Re-encrypts every entry under the new diary key. The new key is written to
+/// [`MIGRATION_JOURNAL`] first, so an interrupted migration can be resumed by
+/// [`resume_migration`] on the next unlock rather than leaving the diary in a
+/// state where neither the old nor the new passphrase opens every entry.
 fn migrate_legacy_vault(
     dir: &Path,
     passphrase: &str,
@@ -520,9 +555,6 @@ fn migrate_legacy_vault(
     let master = crypto::derive_master_key(passphrase, salt, params)?;
     let diary_key = crypto::new_diary_key();
 
-    // Re-encrypt all entries first: if this fails, the vault is still v1.
-    migrate_entries(dir, &legacy_key, &diary_key)?;
-
     let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref())?;
     let vault = Vault {
         kdf: Kdf::Argon2id,
@@ -531,12 +563,85 @@ fn migrate_legacy_vault(
         wrapped_key_iv_b64: crypto::b64_encode(&iv),
         wrapped_key_b64: crypto::b64_encode(&ct),
     };
+
+    // Record the destination state before touching a single entry. From here
+    // on, a crash is recoverable: the journal holds everything needed to
+    // finish the migration, including the new key.
+    write_migration_journal(dir, &vault)?;
+
+    migrate_entries(dir, &legacy_key, &diary_key)?;
+
+    // The vault is the commit point: once it says "version 2", the entries are
+    // all under the new key and the journal is no longer needed.
     write_vault(dir, &vault)?;
+    clear_migration_journal(dir)?;
 
     Ok(diary_key)
 }
 
+/// Finish a migration that was interrupted after the journal was written.
+///
+/// Called from [`unlock_vault`] when a journal is present. The journal holds
+/// the *new* vault record, so the diary key can be recovered with the same
+/// passphrase the user just typed — no data is lost even if the process died
+/// between the first entry rewrite and the vault write.
+///
+/// Entries that are already under the new key fail to decrypt with the legacy
+/// key; those are left alone. Entries still under the legacy key are rewritten.
+/// The operation is idempotent, so a second crash simply resumes again.
+fn resume_migration(
+    dir: &Path,
+    passphrase: &str,
+    journal: &Vault,
+) -> Result<Zeroizing<[u8; 32]>, String> {
+    let salt = crypto::b64_decode(&journal.salt_b64)?;
+    let iv = crypto::b64_decode(&journal.wrapped_key_iv_b64)?;
+    let ct = crypto::b64_decode(&journal.wrapped_key_b64)?;
+    let master = crypto::derive_master_key(passphrase, &salt, journal.params)?;
+    let plain = crypto::decrypt(&master, &iv, &ct)
+        .map_err(|_| "Incorrect passphrase".to_string())?;
+    let diary_key = unwrap_diary_key(&plain)?;
+
+    // The legacy key is derived from the same passphrase and salt the journal
+    // recorded, so it can still decrypt whatever the first attempt did not
+    // reach.
+    let legacy_key = crypto::derive_legacy_key(passphrase, &salt);
+    migrate_entries(dir, &legacy_key, &diary_key)?;
+
+    write_vault(dir, journal)?;
+    clear_migration_journal(dir)?;
+
+    Ok(diary_key)
+}
+
+/// Persist the migration destination so an interrupted run can be resumed.
+fn write_migration_journal(dir: &Path, vault: &Vault) -> Result<(), String> {
+    let xml = vault_to_xml(vault);
+    fsutil::write_private(&dir.join(MIGRATION_JOURNAL), xml)
+        .map_err(|e| format!("Failed to write migration journal: {e}"))
+}
+
+/// Read the journal, if one is present.
+fn read_migration_journal(dir: &Path) -> Option<Vault> {
+    let text = fs::read_to_string(dir.join(MIGRATION_JOURNAL)).ok()?;
+    parse_vault(&text).ok()
+}
+
+/// Remove the journal once the vault has been committed.
+fn clear_migration_journal(dir: &Path) -> Result<(), String> {
+    match fs::remove_file(dir.join(MIGRATION_JOURNAL)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to remove migration journal: {e}")),
+    }
+}
+
 /// Re-encrypt every entry from `old_key` to `new_key`.
+///
+/// Entries that already decrypt under `new_key` are skipped, which is what
+/// makes [`resume_migration`] safe to run after a partial migration. An entry
+/// that decrypts under neither key is an error: it means the file was damaged
+/// or belongs to another vault, and silently skipping it would hide that.
 fn migrate_entries(
     dir: &Path,
     old_key: &[u8; 32],
@@ -561,6 +666,12 @@ fn migrate_entries(
         let encrypted = xml::from_xml(&text)?;
         let iv = crypto::b64_decode(&encrypted.iv)?;
         let ct = crypto::b64_decode(&encrypted.payload)?;
+
+        // Already migrated by an earlier, interrupted run.
+        if decrypt_entry_payload(new_key, date, &encrypted, &iv, &ct).is_ok() {
+            continue;
+        }
+
         let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct)
             .map_err(|_| format!("Entry {date} could not be decrypted during migration"))?;
 
@@ -811,8 +922,10 @@ pub fn export_broken_entry(dir: &Path, date: &str, dest: &Path) -> Result<(), St
     if !source.is_file() {
         return Err(format!("Entry {date} does not exist"));
     }
-    fs::copy(&source, dest)
-        .map(|_| ())
+    // The user is rescuing the only copy of a day they cannot open, so the
+    // export goes through a temporary file and a rename: an interrupted copy
+    // leaves the destination untouched rather than truncated.
+    fsutil::copy_private(&source, dest)
         .map_err(|e| format!("Failed to export entry {date}: {e}"))
 }
 
@@ -990,6 +1103,14 @@ fn write_entry_file(
 /// The favourite flag is *preserved* across saves: the editor autosaves the
 /// title and body constantly, and it has no business clearing a bookmark the
 /// user set. Use [`set_favourite`] to change it.
+///
+/// # Ordering
+///
+/// The entry file is written first and the index second. That order is
+/// deliberate: the entry is the data, the index is a cache. If the process dies
+/// between the two writes, the day is still on disk and the stale index is
+/// repaired by [`read_index`]'s callers falling back to [`scan_entries`]. The
+/// reverse order would leave the sidebar advertising a day that does not exist.
 pub fn write_entry(
     dir: &Path,
     key: &[u8; 32],
@@ -1024,6 +1145,10 @@ pub fn write_entry(
 /// (re-encrypting the title and body with a fresh IV) and then updates the
 /// index. Returns the flag that was actually stored, which is `false` when the
 /// entry does not exist.
+///
+/// The flag is authoritative in the entry file, not in the index, so a crash
+/// between the two writes loses nothing: the next index rebuild reads the flag
+/// back out of the payload.
 pub fn set_favourite(
     dir: &Path,
     key: &[u8; 32],
@@ -1051,22 +1176,33 @@ pub fn set_favourite(
 }
 
 /// Delete the entry for a given date. Missing files are treated as success.
+///
+/// # Ordering
+///
+/// The index is updated *before* the file is removed. A crash in between leaves
+/// an index that no longer lists the day while the file is still there — the
+/// day reappears on the next rebuild, which is the safe direction. Removing the
+/// file first would leave the sidebar pointing at a day that cannot be opened,
+/// and on a synced folder the other device would see the deletion before the
+/// index caught up.
 pub fn delete_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<(), String> {
     let path = entry_path(dir, date)?;
-    match fs::remove_file(&path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(format!("Failed to delete entry {date}: {e}")),
-    }
 
-    // Drop the record from the index. If the index is unreadable, rebuild it
-    // from the remaining files instead of leaving a stale entry behind.
+    // Drop the record from the index first. If the index is unreadable, rebuild
+    // it from the remaining files instead of leaving a stale entry behind.
     let mut index = match read_index(dir, key) {
         Some(index) => index,
         None => scan_entries(dir, key)?,
     };
     index.remove(date);
-    write_index(dir, key, &index)
+    write_index(dir, key, &index)?;
+
+    match fs::remove_file(&path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Failed to delete entry {date}: {e}")),
+    }
+    fsutil::sync_dir(dir).map_err(|e| format!("Failed to flush diary directory: {e}"))
 }
 
 /// List all entries, newest first.
@@ -1450,6 +1586,14 @@ fn import_one(
 /// written exactly once at the end, which is what makes the parallel path safe
 /// — [`write_entry`] would otherwise rewrite `index.xml` once per entry and
 /// serialise the whole import on that single file.
+///
+/// # Crash behaviour
+///
+/// The entries land before the index does, so an interrupted import leaves the
+/// imported days on disk with an index that does not mention them. That is the
+/// recoverable direction: the next [`read_index`] miss falls back to
+/// [`scan_entries`] and the sidebar fills itself back in. The alternative —
+/// writing the index first — would advertise days that were never written.
 ///
 /// `progress` is called after each file with `(done, total)` so the UI can show
 /// a counter. It is invoked from worker threads and must be cheap and
@@ -2110,6 +2254,195 @@ mod tests {
         let dir = temp_dir("no-vault");
         let err = unlock_vault(&dir, "pw").unwrap_err();
         assert!(err.contains("No vault"), "got: {err}");
+    }
+
+    /// Build a version 1 vault plus one legacy-encrypted entry, and return the
+    /// legacy key. Shared by the migration-resume tests.
+    fn seed_legacy_vault(dir: &Path, passphrase: &str) -> Zeroizing<[u8; 32]> {
+        let salt_b64 = crypto::new_salt_b64();
+        let salt = crypto::b64_decode(&salt_b64).unwrap();
+        let legacy_key = crypto::derive_legacy_key(passphrase, &salt);
+
+        let (v_iv, v_ct) = crypto::encrypt(&legacy_key, VERIFIER_PLAINTEXT).unwrap();
+        let legacy_vault = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <vault version=\"1\">\n\
+             \x20 <salt>{salt_b64}</salt>\n\
+             \x20 <verifier-iv>{}</verifier-iv>\n\
+             \x20 <verifier>{}</verifier>\n\
+             </vault>\n",
+            crypto::b64_encode(&v_iv),
+            crypto::b64_encode(&v_ct)
+        );
+        fs::write(dir.join(VAULT_FILE), legacy_vault).unwrap();
+
+        let (e_iv, e_ct) = crypto::encrypt(&legacy_key, b"legacy title\nlegacy body").unwrap();
+        let legacy_entry = xml::EncryptedEntry::new(
+            "2026-10-23",
+            crypto::b64_encode(&e_iv),
+            crypto::b64_encode(&e_ct),
+        )
+        .with_version(2);
+        fs::write(
+            dir.join("2026-10-23.xml"),
+            xml::to_xml(&legacy_entry).unwrap(),
+        )
+        .unwrap();
+
+        legacy_key
+    }
+
+    #[test]
+    fn a_completed_migration_leaves_no_journal_behind() {
+        let dir = temp_dir("migrate-no-journal");
+        seed_legacy_vault(&dir, "pw");
+
+        unlock_vault(&dir, "pw").unwrap();
+
+        assert!(
+            !dir.join(MIGRATION_JOURNAL).exists(),
+            "the journal must be removed once the vault is committed"
+        );
+    }
+
+    #[test]
+    fn an_interrupted_migration_is_resumed_on_the_next_unlock() {
+        let dir = temp_dir("migrate-resume");
+        let legacy_key = seed_legacy_vault(&dir, "pw");
+
+        // Simulate a crash after the journal was written but before any entry
+        // was rewritten: the journal holds the destination vault, the vault
+        // file still says version 1, and the entry is still under the legacy
+        // key.
+        let salt = crypto::b64_decode(&read_vault(&dir).unwrap().unwrap().salt_b64).unwrap();
+        let params = crypto::KdfParams::default();
+        let master = crypto::derive_master_key("pw", &salt, params).unwrap();
+        let diary_key = crypto::new_diary_key();
+        let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref()).unwrap();
+        let journal = Vault {
+            kdf: Kdf::Argon2id,
+            params,
+            salt_b64: crypto::b64_encode(&salt),
+            wrapped_key_iv_b64: crypto::b64_encode(&iv),
+            wrapped_key_b64: crypto::b64_encode(&ct),
+        };
+        write_migration_journal(&dir, &journal).unwrap();
+
+        // The next unlock finishes the job instead of failing.
+        let recovered = unlock_vault(&dir, "pw").unwrap();
+        assert_eq!(*recovered, *diary_key);
+
+        let raw_vault = fs::read_to_string(dir.join(VAULT_FILE)).unwrap();
+        assert!(raw_vault.contains("version=\"2\""));
+        assert!(!dir.join(MIGRATION_JOURNAL).exists());
+
+        let entry = read_entry(&dir, &recovered, "2026-10-23").unwrap().unwrap();
+        assert_eq!(entry.title, "legacy title");
+        assert_eq!(entry.content, "legacy body");
+        assert!(read_entry(&dir, &legacy_key, "2026-10-23").is_err());
+    }
+
+    #[test]
+    fn resuming_a_migration_skips_entries_that_are_already_converted() {
+        let dir = temp_dir("migrate-partial");
+        let legacy_key = seed_legacy_vault(&dir, "pw");
+
+        // A second entry that the first attempt already migrated.
+        let salt = crypto::b64_decode(&read_vault(&dir).unwrap().unwrap().salt_b64).unwrap();
+        let params = crypto::KdfParams::default();
+        let master = crypto::derive_master_key("pw", &salt, params).unwrap();
+        let diary_key = crypto::new_diary_key();
+        let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref()).unwrap();
+        let journal = Vault {
+            kdf: Kdf::Argon2id,
+            params,
+            salt_b64: crypto::b64_encode(&salt),
+            wrapped_key_iv_b64: crypto::b64_encode(&iv),
+            wrapped_key_b64: crypto::b64_encode(&ct),
+        };
+        write_migration_journal(&dir, &journal).unwrap();
+
+        let aad = xml::entry_aad("2026-10-22", xml::CURRENT_VERSION);
+        let (n_iv, n_ct) =
+            crypto::encrypt_with_aad(&diary_key, &aad, &pack("new title", "new body", false))
+                .unwrap();
+        let converted = xml::EncryptedEntry::new(
+            "2026-10-22",
+            crypto::b64_encode(&n_iv),
+            crypto::b64_encode(&n_ct),
+        );
+        fs::write(
+            dir.join("2026-10-22.xml"),
+            xml::to_xml(&converted).unwrap(),
+        )
+        .unwrap();
+
+        let recovered = unlock_vault(&dir, "pw").unwrap();
+        assert_eq!(*recovered, *diary_key);
+
+        // Both entries are readable under the new key, and the one that was
+        // already converted was not re-encrypted into garbage.
+        let old = read_entry(&dir, &recovered, "2026-10-23").unwrap().unwrap();
+        assert_eq!(old.title, "legacy title");
+        let new = read_entry(&dir, &recovered, "2026-10-22").unwrap().unwrap();
+        assert_eq!(new.title, "new title");
+        assert!(read_entry(&dir, &legacy_key, "2026-10-23").is_err());
+    }
+
+    #[test]
+    fn a_journal_with_the_wrong_passphrase_is_rejected() {
+        let dir = temp_dir("migrate-wrong-pass");
+        seed_legacy_vault(&dir, "right");
+
+        let salt = crypto::b64_decode(&read_vault(&dir).unwrap().unwrap().salt_b64).unwrap();
+        let params = crypto::KdfParams::default();
+        let master = crypto::derive_master_key("right", &salt, params).unwrap();
+        let diary_key = crypto::new_diary_key();
+        let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref()).unwrap();
+        let journal = Vault {
+            kdf: Kdf::Argon2id,
+            params,
+            salt_b64: crypto::b64_encode(&salt),
+            wrapped_key_iv_b64: crypto::b64_encode(&iv),
+            wrapped_key_b64: crypto::b64_encode(&ct),
+        };
+        write_migration_journal(&dir, &journal).unwrap();
+
+        assert!(unlock_vault(&dir, "wrong").is_err());
+        // The journal survives so the correct passphrase can still finish it.
+        assert!(dir.join(MIGRATION_JOURNAL).exists());
+        assert!(unlock_vault(&dir, "right").is_ok());
+    }
+
+    #[test]
+    fn deleting_an_entry_updates_the_index_before_removing_the_file() {
+        let dir = temp_dir("delete-order");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+
+        delete_entry(&dir, &key, "2026-10-23").unwrap();
+
+        // Both are gone, and the index no longer mentions the day.
+        assert!(!dir.join("2026-10-23.xml").exists());
+        let index = read_index(&dir, &key).unwrap();
+        assert!(!index.contains_key("2026-10-23"));
+    }
+
+    #[test]
+    fn deleting_an_entry_leaves_no_temporary_files_behind() {
+        let dir = temp_dir("delete-no-temp");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+
+        delete_entry(&dir, &key, "2026-10-23").unwrap();
+
+        let leftovers: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temporary files left: {leftovers:?}");
     }
 
     #[test]

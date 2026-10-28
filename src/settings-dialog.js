@@ -2,11 +2,17 @@
 // Settings dialog
 // ---------------------------------------------------------------------------
 //
-// The dialog does two independent jobs: it changes the idle auto-lock duration,
-// and it changes the passphrase (optionally with new Argon2id parameters). The
-// two are deliberately decoupled — the auto-lock value is always written, the
-// passphrase only when the user typed something — so the dialog is usable for
-// either purpose alone.
+// The dialog does three independent jobs: it changes the idle auto-lock
+// duration, it changes the autosave debounce delay, and it changes the
+// passphrase (optionally with new Argon2id parameters). They are deliberately
+// decoupled — the two timing values are always written, the passphrase only
+// when the user typed something — so the dialog is usable for any one of them
+// alone.
+//
+// It also hosts the vault-wide actions that used to be footer buttons: the
+// storage location, import and statistics. Those are not settings, so they do
+// not take part in `saveSettings`; they simply close the dialog and hand over
+// to the controller that owns them.
 //
 // `deps` shape:
 //
@@ -15,9 +21,16 @@
 //   t                  — (key: string, params?: object) => string
 //   setStatus          — (text: string, saved?: boolean) => void
 //   setAutoLockMinutes — (minutes: number) => void
+//   setAutosaveDelay   — (ms: number) => void
+//   openImport         — () => void | Promise<void>
+//   openStats          — () => void
+//   changeDiaryDir     — () => void | Promise<void>
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
+
+/** Fallback autosave delays, mirroring `settings::AUTOSAVE_DELAY_CHOICES`. */
+const DEFAULT_AUTOSAVE_DELAY_CHOICES = [200, 400, 800, 1500, 3000];
 
 /**
  * Create the settings dialog controller.
@@ -44,6 +57,18 @@ export function createSettingsDialog(deps) {
           : deps.t("settings.autoLockMinutes", { n: minutes });
       if (minutes === current) option.selected = true;
       els.autoLockSelect.append(option);
+    }
+  }
+
+  /** Fill the autosave dropdown from the choices the backend allows. */
+  function renderAutosaveChoices(choices, current) {
+    els.autosaveDelaySelect.replaceChildren();
+    for (const ms of choices) {
+      const option = document.createElement("option");
+      option.value = String(ms);
+      option.textContent = deps.t("settings.autosaveMs", { n: ms });
+      if (ms === current) option.selected = true;
+      els.autosaveDelaySelect.append(option);
     }
   }
 
@@ -77,6 +102,18 @@ export function createSettingsDialog(deps) {
     };
   }
 
+  /** Show the folder the diary is stored in. */
+  async function renderDiaryPath() {
+    try {
+      const path = await deps.invoke("diary_path");
+      els.settingsDiaryPath.textContent = path;
+      els.settingsDiaryPath.title = path;
+    } catch (err) {
+      console.error("diary_path failed:", err);
+      els.settingsDiaryPath.textContent = "";
+    }
+  }
+
   /** Open the settings dialog and populate it from the backend. */
   async function openSettings() {
     els.settingsError.textContent = "";
@@ -85,11 +122,19 @@ export function createSettingsDialog(deps) {
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
 
+    // Not awaited: the path is informational, so the dialog should not wait on
+    // a second round trip before it appears.
+    renderDiaryPath();
+
     try {
       const settings = await deps.invoke("get_settings");
       renderAutoLockChoices(
         settings.autoLockChoices ?? DEFAULT_AUTO_LOCK_CHOICES,
         settings.autoLockMinutes ?? 0
+      );
+      renderAutosaveChoices(
+        settings.autosaveDelayChoices ?? DEFAULT_AUTOSAVE_DELAY_CHOICES,
+        settings.autosaveDelayMs ?? DEFAULT_AUTOSAVE_DELAY_CHOICES[2]
       );
       const params = await deps.invoke("get_vault_kdf");
       renderVaultKdf(params);
@@ -113,6 +158,18 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+  }
+
+  /**
+   * Close the dialog, then run one of the vault-wide actions.
+   *
+   * Closing first matters: import and statistics are full-screen overlays of
+   * their own, and the folder picker takes over the lock screen. Leaving the
+   * settings dialog open underneath would leave two modals stacked.
+   */
+  function handOver(action) {
+    closeSettings();
+    return action();
   }
 
   /** Measure this machine and fill the advanced inputs with the result. */
@@ -165,6 +222,10 @@ export function createSettingsDialog(deps) {
       await deps.invoke("set_auto_lock", { minutes });
       deps.setAutoLockMinutes(minutes);
 
+      const delayMs = Number(els.autosaveDelaySelect.value);
+      await deps.invoke("set_autosave_delay", { ms: delayMs });
+      deps.setAutosaveDelay(delayMs);
+
       if (wantsPassChange) {
         const kdf = readSettingsKdf();
         if (
@@ -199,12 +260,17 @@ export function createSettingsDialog(deps) {
   return {
     isSettingsOpen,
     renderAutoLockChoices,
+    renderAutosaveChoices,
     renderVaultKdf,
     fillSettingsKdf,
     readSettingsKdf,
+    renderDiaryPath,
     openSettings,
     closeSettings,
     calibrateKdf,
     saveSettings,
+    openImport: () => handOver(deps.openImport),
+    openStats: () => handOver(deps.openStats),
+    changeDiaryDir: () => handOver(deps.changeDiaryDir),
   };
 }

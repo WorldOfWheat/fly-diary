@@ -8,14 +8,16 @@
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
-//! <settings version="2">
+//! <settings version="3">
 //!   <diary-dir>/home/user/Documents/diary</diary-dir>
 //!   <auto-lock-minutes>10</auto-lock-minutes>
+//!   <autosave-delay-ms>800</autosave-delay-ms>
 //! </settings>
 //! ```
 //!
-//! Version 1 files (no `<auto-lock-minutes>`) are still readable; they fall
-//! back to [`DEFAULT_AUTO_LOCK_MINUTES`].
+//! Older files are still readable: a version 1 file (no `<auto-lock-minutes>`)
+//! falls back to [`DEFAULT_AUTO_LOCK_MINUTES`], and a file without
+//! `<autosave-delay-ms>` falls back to [`DEFAULT_AUTOSAVE_DELAY_MS`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,18 @@ pub const AUTO_LOCK_NEVER: u32 = 0;
 /// something like 3 minutes and then be surprised by the lock screen.
 pub const AUTO_LOCK_CHOICES: [u32; 7] = [0, 1, 5, 10, 15, 30, 60];
 
+/// How long the editor waits after the last keystroke before writing, used when
+/// the settings file predates the configurable autosave delay.
+pub const DEFAULT_AUTOSAVE_DELAY_MS: u32 = 800;
+
+/// Allowed autosave delays, in milliseconds.
+///
+/// The floor is deliberately not zero: autosave cannot be switched off, because
+/// a diary that only saves on `Ctrl+S` loses work when the window is closed
+/// without one. 200 ms is short enough to feel instant, and 3000 ms is long
+/// enough to batch a whole paragraph into a single encrypted write.
+pub const AUTOSAVE_DELAY_CHOICES: [u32; 5] = [200, 400, 800, 1500, 3000];
+
 /// Persisted application settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -50,14 +64,17 @@ pub struct Settings {
     pub diary_dir: PathBuf,
     /// Idle minutes before the diary locks itself; `0` disables auto-lock.
     pub auto_lock_minutes: u32,
+    /// Milliseconds of inactivity before the editor autosaves.
+    pub autosave_delay_ms: u32,
 }
 
 impl Settings {
-    /// Build settings with the default auto-lock value.
+    /// Build settings with the default auto-lock and autosave values.
     pub fn new(diary_dir: PathBuf) -> Self {
         Self {
             diary_dir,
             auto_lock_minutes: DEFAULT_AUTO_LOCK_MINUTES,
+            autosave_delay_ms: DEFAULT_AUTOSAVE_DELAY_MS,
         }
     }
 }
@@ -70,6 +87,18 @@ pub fn validate_auto_lock(minutes: u32) -> Result<(), String> {
         Err(format!(
             "Auto-lock must be one of {:?} minutes",
             AUTO_LOCK_CHOICES
+        ))
+    }
+}
+
+/// Reject autosave delays that are not one of [`AUTOSAVE_DELAY_CHOICES`].
+pub fn validate_autosave_delay(ms: u32) -> Result<(), String> {
+    if AUTOSAVE_DELAY_CHOICES.contains(&ms) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Autosave delay must be one of {:?} milliseconds",
+            AUTOSAVE_DELAY_CHOICES
         ))
     }
 }
@@ -108,6 +137,7 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
     let mut diary_dir = None;
     let mut seen_diary_dir = false;
     let mut auto_lock = None;
+    let mut autosave_delay = None;
     let mut current = String::new();
 
     let mut reader = Reader::from_str(&text);
@@ -129,6 +159,8 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
                     diary_dir = Some(value);
                 } else if current == "auto-lock-minutes" {
                     auto_lock = Some(value);
+                } else if current == "autosave-delay-ms" {
+                    autosave_delay = Some(value);
                 }
             }
             Ok(Event::End(_)) => current.clear(),
@@ -165,9 +197,24 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
         }
     };
 
+    // Same rule as auto-lock: a missing element is an older file and gets the
+    // default, while a present-but-invalid value is a hard error so a
+    // hand-edited mistake is not silently ignored.
+    let autosave_delay_ms = match autosave_delay {
+        None => DEFAULT_AUTOSAVE_DELAY_MS,
+        Some(text) => {
+            let ms: u32 = text.trim().parse().map_err(|_| {
+                format!("Settings file has an invalid <autosave-delay-ms>: {text}")
+            })?;
+            validate_autosave_delay(ms)?;
+            ms
+        }
+    };
+
     Ok(Some(Settings {
         diary_dir: dir,
         auto_lock_minutes,
+        autosave_delay_ms,
     }))
 }
 
@@ -180,7 +227,7 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
         .map_err(|e| format!("Failed to write XML declaration: {e}"))?;
 
     let mut root = BytesStart::new("settings");
-    root.push_attribute(("version", "2"));
+    root.push_attribute(("version", "3"));
     writer
         .write_event(Event::Start(root))
         .map_err(|e| format!("Failed to write <settings>: {e}"))?;
@@ -208,6 +255,18 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
         .map_err(|e| format!("Failed to close <auto-lock-minutes>: {e}"))?;
 
     writer
+        .write_event(Event::Start(BytesStart::new("autosave-delay-ms")))
+        .map_err(|e| format!("Failed to write <autosave-delay-ms>: {e}"))?;
+    writer
+        .write_event(Event::Text(BytesText::new(
+            &settings.autosave_delay_ms.to_string(),
+        )))
+        .map_err(|e| format!("Failed to write autosave delay: {e}"))?;
+    writer
+        .write_event(Event::End(BytesEnd::new("autosave-delay-ms")))
+        .map_err(|e| format!("Failed to close <autosave-delay-ms>: {e}"))?;
+
+    writer
         .write_event(Event::End(BytesEnd::new("settings")))
         .map_err(|e| format!("Failed to close <settings>: {e}"))?;
 
@@ -222,6 +281,7 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
 pub fn write_settings(config_dir: &Path, settings: &Settings) -> Result<(), String> {
     validate_diary_dir(&settings.diary_dir)?;
     validate_auto_lock(settings.auto_lock_minutes)?;
+    validate_autosave_delay(settings.autosave_delay_ms)?;
     crate::fsutil::create_private_dir(config_dir)
         .map_err(|e| format!("Failed to create config directory: {e}"))?;
     let document = to_xml(settings)?;
@@ -316,7 +376,7 @@ mod tests {
         let config = temp_dir("decl");
         let xml = to_xml(&sample(&config)).unwrap();
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        assert!(xml.contains("<settings version=\"2\">"));
+        assert!(xml.contains("<settings version=\"3\">"));
         let _ = fs::remove_dir_all(&config);
     }
 
@@ -470,6 +530,81 @@ mod tests {
         for minutes in AUTO_LOCK_CHOICES {
             assert!(validate_auto_lock(minutes).is_ok(), "rejected {minutes}");
         }
+    }
+
+    #[test]
+    fn autosave_delay_roundtrips() {
+        let config = temp_dir("autosave-delay");
+        let mut settings = sample(&config);
+        settings.autosave_delay_ms = 3000;
+        write_settings(&config, &settings).unwrap();
+        assert_eq!(read_settings(&config).unwrap().unwrap(), settings);
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn a_file_without_autosave_delay_uses_the_default() {
+        let config = temp_dir("autosave-default");
+        fs::write(
+            settings_path(&config),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<settings version=\"2\">\n  <diary-dir>/home/user/diary</diary-dir>\n  <auto-lock-minutes>10</auto-lock-minutes>\n</settings>\n",
+        )
+        .unwrap();
+        let loaded = read_settings(&config).unwrap().unwrap();
+        assert_eq!(loaded.autosave_delay_ms, DEFAULT_AUTOSAVE_DELAY_MS);
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn rejects_autosave_delay_outside_the_allowed_choices() {
+        let config = temp_dir("autosave-bad");
+        fs::write(
+            settings_path(&config),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<settings version=\"3\">\n  <diary-dir>/home/user/diary</diary-dir>\n  <auto-lock-minutes>10</auto-lock-minutes>\n  <autosave-delay-ms>0</autosave-delay-ms>\n</settings>\n",
+        )
+        .unwrap();
+        assert!(read_settings(&config).is_err());
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn rejects_non_numeric_autosave_delay() {
+        let config = temp_dir("autosave-junk");
+        fs::write(
+            settings_path(&config),
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<settings version=\"3\">\n  <diary-dir>/home/user/diary</diary-dir>\n  <auto-lock-minutes>10</auto-lock-minutes>\n  <autosave-delay-ms>soon</autosave-delay-ms>\n</settings>\n",
+        )
+        .unwrap();
+        assert!(read_settings(&config).is_err());
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn write_rejects_invalid_autosave_delay() {
+        let config = temp_dir("autosave-write");
+        let mut settings = sample(&config);
+        settings.autosave_delay_ms = 0;
+        assert!(write_settings(&config, &settings).is_err());
+        assert!(read_settings(&config).unwrap().is_none());
+        let _ = fs::remove_dir_all(&config);
+    }
+
+    #[test]
+    fn validate_autosave_delay_accepts_every_choice() {
+        for ms in AUTOSAVE_DELAY_CHOICES {
+            assert!(validate_autosave_delay(ms).is_ok(), "rejected {ms}");
+        }
+    }
+
+    #[test]
+    fn autosave_delay_choices_include_the_default() {
+        assert!(AUTOSAVE_DELAY_CHOICES.contains(&DEFAULT_AUTOSAVE_DELAY_MS));
+    }
+
+    #[test]
+    fn autosave_cannot_be_disabled() {
+        // Zero would mean "never save", which loses work on close.
+        assert!(validate_autosave_delay(0).is_err());
     }
 
     #[test]

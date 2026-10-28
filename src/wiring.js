@@ -152,7 +152,6 @@ export function initEventWiring(deps) {
     on(els.brokenDeleteBtn, "click", () => deps.deleteCurrent());
   }
   on(els.lockBtn, "click", deps.lockNow);
-  on(els.changeDirBtn, "click", deps.changeDiaryDir);
 
   // -------------------------------------------------------------------------
   // Calendar overlay
@@ -238,8 +237,13 @@ export function initEventWiring(deps) {
     if (e.target === els.settingsOverlay) deps.closeSettings();
   });
 
+  // The vault-wide actions hosted by the settings dialog. Each one closes the
+  // dialog before handing over, so only one overlay is ever on screen.
+  on(els.settingsImportBtn, "click", deps.openImportFromSettings);
+  on(els.settingsStatsBtn, "click", deps.openStatsFromSettings);
+  on(els.settingsChangeDirBtn, "click", deps.changeDiaryDirFromSettings);
+
   // Statistics dialog.
-  on(els.statsBtn, "click", deps.openStats);
   on(els.statsClose, "click", deps.closeStats);
   on(els.statsDone, "click", deps.closeStats);
   on(els.statsOverlay, "mousedown", (e) => {
@@ -247,7 +251,6 @@ export function initEventWiring(deps) {
   });
 
   // Import dialog.
-  on(els.importBtn, "click", deps.startImport);
   on(els.importClose, "click", deps.closeImport);
   on(els.importCancel, "click", deps.closeImport);
   on(els.importConfirm, "click", () => {

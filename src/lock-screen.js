@@ -217,6 +217,11 @@ export function createLockScreen(deps) {
     renderWorkspacePath();
     // Keep the idle timer in sync with whatever is on disk.
     deps.setAutoLockMinutes(settings.autoLockMinutes ?? 0);
+    // Same for the autosave debounce, so the first keystroke after unlocking
+    // already uses the configured delay.
+    if (settings.autosaveDelayMs) {
+      deps.setAutosaveDelay(settings.autosaveDelayMs);
+    }
     return settings;
   }
 

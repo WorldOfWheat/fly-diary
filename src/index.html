@@ -215,22 +215,17 @@
             </div>
 
             <!-- One footer for the whole app: the live word count, the storage
-                 path, the sidebar actions (which used to sit in a second footer
-                 at the bottom of the sidebar) and the font control. The path is
-                 the only flexible item, so a long one truncates instead of
-                 pushing the buttons off the edge. -->
+                 path and the font control. Import, statistics and the folder
+                 picker live in the settings dialog instead, so the footer only
+                 keeps the things you reach for while writing. The path is the
+                 only flexible item, so a long one truncates rather than pushing
+                 the font control off the edge. -->
             <footer class="editor-footer">
                 <span id="word-count" class="word-count"></span>
                 <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
                 <div class="footer-actions">
-                    <button id="import-btn" class="btn-lock" data-i18n="sidebar.import"
-                        data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
-                    <button id="stats-btn" class="btn-lock" data-i18n="sidebar.stats"
-                        data-i18n-title="sidebar.statsTitle" title="查看統計">統計</button>
                     <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
                         data-i18n-title="sidebar.settingsTitle" title="開啟設定">設定</button>
-                    <button id="change-dir-btn" class="btn-lock" data-i18n="sidebar.changeDir"
-                        data-i18n-title="sidebar.changeDirTitle" title="變更日記儲存資料夾">路徑</button>
                     <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
                         title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
                 </div>
@@ -274,8 +269,8 @@
                  full-screen grid could not do comfortably. -->
             <div class="calendar-month">
                 <button id="cal-prev-year" class="cal-step cal-step-year" type="button"
-                    data-i18n-title="editor.calPrevYear" data-i18n-aria-label="editor.calPrevYear"
-                    title="上一年" aria-label="上一年">
+                    data-i18n-title="editor.calPrevYear" data-i18n-aria-label="editor.calPrevYear" title="上一年"
+                    aria-label="上一年">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M11 5l-7 7 7 7M18 5l-7 7 7 7" />
                     </svg>
@@ -295,8 +290,8 @@
                     </svg>
                 </button>
                 <button id="cal-next-year" class="cal-step cal-step-year" type="button"
-                    data-i18n-title="editor.calNextYear" data-i18n-aria-label="editor.calNextYear"
-                    title="下一年" aria-label="下一年">
+                    data-i18n-title="editor.calNextYear" data-i18n-aria-label="editor.calNextYear" title="下一年"
+                    aria-label="下一年">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M6 5l7 7-7 7M13 5l7 7-7 7" />
                     </svg>
@@ -383,6 +378,31 @@
             </header>
 
             <div class="modal-body">
+                <!-- Diary: where it lives, plus the two tools that act on the
+                     whole vault. These used to be footer buttons; they are
+                     settings-shaped rather than writing-shaped, so they belong
+                     here. -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="settings.diary">日記本</h3>
+                    <p class="settings-hint" data-i18n="settings.diaryHint">
+                        日記以加密檔案存放在這個資料夾，換資料夾需要先鎖定。
+                    </p>
+                    <div class="settings-row">
+                        <span class="settings-label" data-i18n="settings.diaryPathLabel">儲存位置</span>
+                        <span id="settings-diary-path" class="settings-path" data-i18n-title="sidebar.pathTitle"
+                            title="日記儲存位置"></span>
+                    </div>
+                    <div class="settings-actions">
+                        <button id="settings-import-btn" class="btn-browse" type="button" data-i18n="sidebar.import"
+                            data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
+                        <button id="settings-stats-btn" class="btn-browse" type="button" data-i18n="sidebar.stats"
+                            data-i18n-title="sidebar.statsTitle" title="查看統計">統計</button>
+                        <button id="settings-change-dir-btn" class="btn-browse" type="button"
+                            data-i18n="sidebar.changeDir" data-i18n-title="sidebar.changeDirTitle"
+                            title="變更日記儲存資料夾">路徑</button>
+                    </div>
+                </section>
+
                 <!-- Auto-lock -->
                 <section class="settings-section">
                     <h3 class="settings-heading" data-i18n="settings.autoLock">閒置自動鎖定</h3>
@@ -392,6 +412,18 @@
                     <label class="settings-row" for="auto-lock-select">
                         <span class="settings-label" data-i18n="settings.autoLockLabel">鎖定時間</span>
                         <select id="auto-lock-select" class="settings-select"></select>
+                    </label>
+                </section>
+
+                <!-- Autosave -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="settings.autosave">自動儲存</h3>
+                    <p class="settings-hint" data-i18n="settings.autosaveHint">
+                        停止輸入後多久寫入磁碟。時間越短越不容易遺失內容，但每次寫入都會重新加密整個檔案。
+                    </p>
+                    <label class="settings-row" for="autosave-delay-select">
+                        <span class="settings-label" data-i18n="settings.autosaveLabel">延遲時間</span>
+                        <select id="autosave-delay-select" class="settings-select"></select>
                     </label>
                 </section>
 

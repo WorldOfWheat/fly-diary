@@ -100,11 +100,19 @@ const zhHant = {
   "sidebar.lockTitle": "鎖定日記 (Ctrl/Cmd+L)",
 
   "settings.title": "設定",
+  "settings.diary": "日記本",
+  "settings.diaryHint": "日記以加密檔案存放在這個資料夾，換資料夾需要先鎖定。",
+  "settings.diaryPathLabel": "儲存位置",
   "settings.autoLock": "閒置自動鎖定",
   "settings.autoLockHint": "閒置超過指定時間後自動鎖定日記，需要重新輸入密碼。",
   "settings.autoLockLabel": "鎖定時間",
   "settings.autoLockNever": "永不",
   "settings.autoLockMinutes": "{n} 分鐘",
+  "settings.autosave": "自動儲存",
+  "settings.autosaveHint":
+    "停止輸入後多久寫入磁碟。時間越短越不容易遺失內容，但每次寫入都會重新加密整個檔案。",
+  "settings.autosaveLabel": "延遲時間",
+  "settings.autosaveMs": "{n} 毫秒",
   "settings.security": "密碼與金鑰派生",
   "settings.securityHint":
     "變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。",
@@ -357,12 +365,21 @@ const en = {
   "sidebar.lockTitle": "Lock the diary (Ctrl/Cmd+L)",
 
   "settings.title": "Settings",
+  "settings.diary": "Diary",
+  "settings.diaryHint":
+    "Entries are stored as encrypted files in this folder. Changing it requires locking first.",
+  "settings.diaryPathLabel": "Location",
   "settings.autoLock": "Idle auto-lock",
   "settings.autoLockHint":
     "Lock the diary after a period of inactivity, requiring the passphrase again.",
   "settings.autoLockLabel": "Lock after",
   "settings.autoLockNever": "Never",
   "settings.autoLockMinutes": "{n} minutes",
+  "settings.autosave": "Autosave",
+  "settings.autosaveHint":
+    "How long to wait after the last keystroke before writing to disk. Shorter is safer, but every write re-encrypts the whole file.",
+  "settings.autosaveLabel": "Delay",
+  "settings.autosaveMs": "{n} ms",
   "settings.security": "Passphrase and key derivation",
   "settings.securityHint":
     "Changing the passphrase only re-wraps the diary key; entries are not re-encrypted, so it is fast.",

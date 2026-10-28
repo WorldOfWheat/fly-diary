@@ -12,13 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createSettingsDialog } from "../src/settings-dialog.js";
-import {
-  installDom,
-  fakeEls,
-  fakeT,
-  fakeInvoke,
-  spy,
-} from "./helpers/dom.js";
+import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
 
 const SETTINGS_IDS = [
   "settingsOverlay",
@@ -29,7 +23,9 @@ const SETTINGS_IDS = [
   "settingsNewPassConfirm",
   "settingsSave",
   "settingsCalibrate",
+  "settingsDiaryPath",
   "autoLockSelect",
+  "autosaveDelaySelect",
   "vaultKdf",
   "settingsKdfMemory",
   "settingsKdfIterations",
@@ -49,9 +45,13 @@ function harness(overrides = {}) {
     get_settings: {
       autoLockChoices: [0, 5, 15],
       autoLockMinutes: 5,
+      autosaveDelayChoices: [200, 800, 3000],
+      autosaveDelayMs: 800,
     },
     get_vault_kdf: KDF,
+    diary_path: "/home/user/Documents/diary",
     set_auto_lock: null,
+    set_autosave_delay: null,
     change_passphrase: null,
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
     ...(overrides.invokeTable ?? {}),
@@ -63,6 +63,10 @@ function harness(overrides = {}) {
     t: fakeT(),
     setStatus: spy(),
     setAutoLockMinutes: spy(),
+    setAutosaveDelay: spy(),
+    openImport: spy(),
+    openStats: spy(),
+    changeDiaryDir: spy(),
     ...overrides.deps,
   };
 
@@ -114,11 +118,76 @@ test("openSettings loads the choices, the vault KDF and shows the dialog", async
       els.autoLockSelect.children.map((option) => option.value),
       ["0", "5", "15"]
     );
+    assert.deepEqual(
+      els.autosaveDelaySelect.children.map((option) => option.value),
+      ["200", "800", "3000"]
+    );
     assert.equal(
       els.vaultKdf.textContent,
       "settings.vaultKdf(memory=64,iterations=3,parallelism=4)"
     );
   });
+});
+
+test("openSettings shows the diary folder", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.openSettings();
+    // `renderDiaryPath` is deliberately not awaited, so let it settle.
+    await Promise.resolve();
+
+    assert.equal(
+      els.settingsDiaryPath.textContent,
+      "/home/user/Documents/diary"
+    );
+    assert.equal(els.settingsDiaryPath.title, "/home/user/Documents/diary");
+  });
+});
+
+test("renderDiaryPath clears the path when the backend fails", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      els.settingsDiaryPath.textContent = "/stale/path";
+      await settings.renderDiaryPath();
+      assert.equal(els.settingsDiaryPath.textContent, "");
+    },
+    {
+      invokeTable: {
+        diary_path: () => {
+          throw "no vault";
+        },
+      },
+    }
+  );
+});
+
+test("openSettings selects the current autosave delay", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.openSettings();
+
+    const selected = els.autosaveDelaySelect.children.filter((o) => o.selected);
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].value, "800");
+  });
+});
+
+test("openSettings falls back to the default autosave delays", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.openSettings();
+
+      assert.deepEqual(
+        els.autosaveDelaySelect.children.map((option) => option.value),
+        ["200", "400", "800", "1500", "3000"]
+      );
+      // The default delay is the one the fallback list marks as current.
+      const selected = els.autosaveDelaySelect.children.filter(
+        (o) => o.selected
+      );
+      assert.equal(selected.length, 1);
+      assert.equal(selected[0].value, "800");
+    },
+    { invokeTable: { get_settings: { autoLockMinutes: 0 } } }
+  );
 });
 
 test("openSettings selects the current auto-lock value", async () => {
@@ -210,7 +279,10 @@ test("renderAutoLockChoices labels zero as Never", () => {
   withSettings(({ settings, els }) => {
     settings.renderAutoLockChoices([0, 5], 0);
 
-    assert.equal(els.autoLockSelect.children[0].textContent, "settings.autoLockNever");
+    assert.equal(
+      els.autoLockSelect.children[0].textContent,
+      "settings.autoLockNever"
+    );
     assert.equal(
       els.autoLockSelect.children[1].textContent,
       "settings.autoLockMinutes(n=5)"
@@ -227,13 +299,43 @@ test("renderAutoLockChoices replaces the previous options", () => {
   });
 });
 
+test("renderAutosaveChoices labels each option in milliseconds", () => {
+  withSettings(({ settings, els }) => {
+    settings.renderAutosaveChoices([200, 800], 200);
+
+    assert.equal(
+      els.autosaveDelaySelect.children[0].textContent,
+      "settings.autosaveMs(n=200)"
+    );
+    assert.equal(
+      els.autosaveDelaySelect.children[1].textContent,
+      "settings.autosaveMs(n=800)"
+    );
+    assert.equal(els.autosaveDelaySelect.children[0].selected, true);
+    assert.equal(els.autosaveDelaySelect.children[1].selected, false);
+  });
+});
+
+test("renderAutosaveChoices replaces the previous options", () => {
+  withSettings(({ settings, els }) => {
+    settings.renderAutosaveChoices([200, 800, 3000], 800);
+    settings.renderAutosaveChoices([200], 200);
+
+    assert.equal(els.autosaveDelaySelect.children.length, 1);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Vault KDF display
 // ---------------------------------------------------------------------------
 
 test("renderVaultKdf converts KiB to MiB", () => {
   withSettings(({ settings, els }) => {
-    settings.renderVaultKdf({ memoryKib: 262144, iterations: 2, parallelism: 1 });
+    settings.renderVaultKdf({
+      memoryKib: 262144,
+      iterations: 2,
+      parallelism: 1,
+    });
     assert.equal(
       els.vaultKdf.textContent,
       "settings.vaultKdf(memory=256,iterations=2,parallelism=1)"
@@ -347,6 +449,7 @@ test("saveSettings writes the auto-lock value and closes", async () => {
   await withSettings(async ({ settings, els, invoke, deps }) => {
     els.settingsOverlay.hidden = false;
     els.autoLockSelect.value = "15";
+    els.autosaveDelaySelect.value = "800";
 
     await settings.saveSettings();
 
@@ -359,9 +462,42 @@ test("saveSettings writes the auto-lock value and closes", async () => {
   });
 });
 
+test("saveSettings writes the autosave delay and applies it", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    els.settingsOverlay.hidden = false;
+    els.autoLockSelect.value = "5";
+    els.autosaveDelaySelect.value = "3000";
+
+    await settings.saveSettings();
+
+    assert.equal(invoke.argsOf("set_autosave_delay").ms, 3000);
+    assert.deepEqual(deps.setAutosaveDelay.args(), [[3000]]);
+    assert.equal(els.settingsOverlay.hidden, true);
+  });
+});
+
+test("saveSettings writes both timing values before the passphrase", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    els.autoLockSelect.value = "15";
+    els.autosaveDelaySelect.value = "200";
+    els.settingsCurrentPass.value = "old";
+    els.settingsNewPass.value = "newpass";
+    els.settingsNewPassConfirm.value = "newpass";
+
+    await settings.saveSettings();
+
+    assert.deepEqual(invoke.commands(), [
+      "set_auto_lock",
+      "set_autosave_delay",
+      "change_passphrase",
+    ]);
+  });
+});
+
 test("saveSettings requires the current passphrase before changing it", async () => {
   await withSettings(async ({ settings, els, invoke }) => {
     els.autoLockSelect.value = "5";
+    els.autosaveDelaySelect.value = "800";
     els.settingsNewPass.value = "newpass";
     els.settingsNewPassConfirm.value = "newpass";
 
@@ -389,6 +525,7 @@ test("saveSettings rejects a mismatched confirmation", async () => {
 test("saveSettings changes the passphrase with the advanced KDF", async () => {
   await withSettings(async ({ settings, els, invoke }) => {
     els.autoLockSelect.value = "5";
+    els.autosaveDelaySelect.value = "800";
     els.settingsCurrentPass.value = "old";
     els.settingsNewPass.value = "newpass";
     els.settingsNewPassConfirm.value = "newpass";
@@ -414,6 +551,7 @@ test("saveSettings changes the passphrase with the advanced KDF", async () => {
 test("saveSettings rejects non-numeric KDF parameters", async () => {
   await withSettings(async ({ settings, els, invoke }) => {
     els.autoLockSelect.value = "5";
+    els.autosaveDelaySelect.value = "800";
     els.settingsCurrentPass.value = "old";
     els.settingsNewPass.value = "newpass";
     els.settingsNewPassConfirm.value = "newpass";
@@ -422,8 +560,11 @@ test("saveSettings rejects non-numeric KDF parameters", async () => {
     await settings.saveSettings();
 
     assert.equal(els.settingsError.textContent, "lock.errKdfNaN");
-    // The auto-lock value was already written, but the passphrase was not.
-    assert.deepEqual(invoke.commands(), ["set_auto_lock"]);
+    // Both timing values were already written, but the passphrase was not.
+    assert.deepEqual(invoke.commands(), [
+      "set_auto_lock",
+      "set_autosave_delay",
+    ]);
   });
 });
 
@@ -432,6 +573,7 @@ test("saveSettings reports a backend failure and keeps the dialog open", async (
     async ({ settings, els }) => {
       els.settingsOverlay.hidden = false;
       els.autoLockSelect.value = "5";
+      els.autosaveDelaySelect.value = "800";
 
       await settings.saveSettings();
 
@@ -468,6 +610,56 @@ test("saveSettings re-enables the save button after a failure", async () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Vault-wide actions
+// ---------------------------------------------------------------------------
+//
+// Import, statistics and the folder picker are not settings, so they must not
+// take part in `saveSettings`. They only close the dialog and hand over.
+
+test("openImport closes the dialog before starting the import", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.openImport();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.openImport.args(), [[]]);
+  });
+});
+
+test("openStats closes the dialog before opening the statistics", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.openStats();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.openStats.args(), [[]]);
+  });
+});
+
+test("changeDiaryDir closes the dialog before locking", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.changeDiaryDir();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.changeDiaryDir.args(), [[]]);
+  });
+});
+
+test("the vault-wide actions never write settings", async () => {
+  await withSettings(async ({ settings, invoke }) => {
+    await settings.openImport();
+    await settings.openStats();
+    await settings.changeDiaryDir();
+
+    assert.deepEqual(invoke.commands(), []);
+  });
+});
+
 /** Shared deps for the tests that build a second controller. */
 function settingsDeps(els) {
   return {
@@ -475,5 +667,9 @@ function settingsDeps(els) {
     t: fakeT(),
     setStatus: spy(),
     setAutoLockMinutes: spy(),
+    setAutosaveDelay: spy(),
+    openImport: spy(),
+    openStats: spy(),
+    changeDiaryDir: spy(),
   };
 }
