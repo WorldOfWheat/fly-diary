@@ -85,9 +85,7 @@ export const els = {
   newToday: $("new-today"),
   deleteBtn: $("delete-btn"),
   lockBtn: $("lock-btn"),
-  changeDirBtn: $("change-dir-btn"),
   settingsBtn: $("settings-btn"),
-  statsBtn: $("stats-btn"),
   // Statistics dialog
   statsOverlay: $("stats-overlay"),
   statsClose: $("stats-close"),
@@ -105,6 +103,10 @@ export const els = {
   settingsCancel: $("settings-cancel"),
   settingsSave: $("settings-save"),
   settingsError: $("settings-error"),
+  settingsDiaryPath: $("settings-diary-path"),
+  settingsImportBtn: $("settings-import-btn"),
+  settingsStatsBtn: $("settings-stats-btn"),
+  settingsChangeDirBtn: $("settings-change-dir-btn"),
   autoLockSelect: $("auto-lock-select"),
   autosaveDelaySelect: $("autosave-delay-select"),
   vaultKdf: $("vault-kdf"),
@@ -117,7 +119,6 @@ export const els = {
   settingsCalibrate: $("settings-calibrate"),
   settingsCalibrateNote: $("settings-calibrate-note"),
   // Import dialog
-  importBtn: $("import-btn"),
   importOverlay: $("import-overlay"),
   importClose: $("import-close"),
   importCancel: $("import-cancel"),

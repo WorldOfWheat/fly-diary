@@ -89,7 +89,6 @@ const ELEMENT_IDS = [
   "favouriteBtn",
   "editBtn",
   "lockBtn",
-  "changeDirBtn",
   "calPrevYear",
   "calPrev",
   "calNext",
@@ -106,11 +105,12 @@ const ELEMENT_IDS = [
   "settingsSave",
   "settingsCalibrate",
   "settingsOverlay",
-  "statsBtn",
+  "settingsImportBtn",
+  "settingsStatsBtn",
+  "settingsChangeDirBtn",
   "statsClose",
   "statsDone",
   "statsOverlay",
-  "importBtn",
   "importClose",
   "importCancel",
   "importConfirm",
@@ -177,17 +177,17 @@ function harness(overrides = {}) {
     toggleFavourite: spy("toggleFavourite"),
     unlockEntryForEditing: spy("unlockEntryForEditing"),
     lockNow: spy("lockNow"),
-    changeDiaryDir: spy("changeDiaryDir"),
     openSettings: spy("openSettings"),
     closeSettings: spy("closeSettings"),
     saveSettings: spy("saveSettings"),
     calibrateKdf: spy("calibrateKdf"),
-    openStats: spy("openStats"),
+    openImportFromSettings: spy("openImportFromSettings"),
+    openStatsFromSettings: spy("openStatsFromSettings"),
+    changeDiaryDirFromSettings: spy("changeDiaryDirFromSettings"),
     closeStats: spy("closeStats"),
     isStatsOpen: () => false,
     setView: spy("setView"),
     exportBrokenFile: spy("exportBrokenFile"),
-    startImport: spy("startImport"),
     closeImport: spy("closeImport"),
     confirmImport: spy("confirmImport"),
     isImportOpen: () => false,
@@ -655,6 +655,23 @@ test("the statistics and import backdrops dismiss their dialogs", () => {
   withHarness((h) => {
     h.els.importOverlay.dispatch("mousedown", { target: h.els.importOverlay });
     assert.deepEqual(h.names(), ["closeImport"]);
+  });
+});
+
+test("the settings dialog hosts import, statistics and the folder picker", () => {
+  withHarness((h) => {
+    h.els.settingsImportBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["openImportFromSettings"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsStatsBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["openStatsFromSettings"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsChangeDirBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["changeDiaryDirFromSettings"]);
   });
 });
 

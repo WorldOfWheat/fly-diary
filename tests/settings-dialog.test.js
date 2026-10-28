@@ -12,13 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createSettingsDialog } from "../src/settings-dialog.js";
-import {
-  installDom,
-  fakeEls,
-  fakeT,
-  fakeInvoke,
-  spy,
-} from "./helpers/dom.js";
+import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
 
 const SETTINGS_IDS = [
   "settingsOverlay",
@@ -29,6 +23,7 @@ const SETTINGS_IDS = [
   "settingsNewPassConfirm",
   "settingsSave",
   "settingsCalibrate",
+  "settingsDiaryPath",
   "autoLockSelect",
   "autosaveDelaySelect",
   "vaultKdf",
@@ -54,6 +49,7 @@ function harness(overrides = {}) {
       autosaveDelayMs: 800,
     },
     get_vault_kdf: KDF,
+    diary_path: "/home/user/Documents/diary",
     set_auto_lock: null,
     set_autosave_delay: null,
     change_passphrase: null,
@@ -68,6 +64,9 @@ function harness(overrides = {}) {
     setStatus: spy(),
     setAutoLockMinutes: spy(),
     setAutosaveDelay: spy(),
+    openImport: spy(),
+    openStats: spy(),
+    changeDiaryDir: spy(),
     ...overrides.deps,
   };
 
@@ -130,6 +129,37 @@ test("openSettings loads the choices, the vault KDF and shows the dialog", async
   });
 });
 
+test("openSettings shows the diary folder", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.openSettings();
+    // `renderDiaryPath` is deliberately not awaited, so let it settle.
+    await Promise.resolve();
+
+    assert.equal(
+      els.settingsDiaryPath.textContent,
+      "/home/user/Documents/diary"
+    );
+    assert.equal(els.settingsDiaryPath.title, "/home/user/Documents/diary");
+  });
+});
+
+test("renderDiaryPath clears the path when the backend fails", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      els.settingsDiaryPath.textContent = "/stale/path";
+      await settings.renderDiaryPath();
+      assert.equal(els.settingsDiaryPath.textContent, "");
+    },
+    {
+      invokeTable: {
+        diary_path: () => {
+          throw "no vault";
+        },
+      },
+    }
+  );
+});
+
 test("openSettings selects the current autosave delay", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
@@ -150,7 +180,9 @@ test("openSettings falls back to the default autosave delays", async () => {
         ["200", "400", "800", "1500", "3000"]
       );
       // The default delay is the one the fallback list marks as current.
-      const selected = els.autosaveDelaySelect.children.filter((o) => o.selected);
+      const selected = els.autosaveDelaySelect.children.filter(
+        (o) => o.selected
+      );
       assert.equal(selected.length, 1);
       assert.equal(selected[0].value, "800");
     },
@@ -247,7 +279,10 @@ test("renderAutoLockChoices labels zero as Never", () => {
   withSettings(({ settings, els }) => {
     settings.renderAutoLockChoices([0, 5], 0);
 
-    assert.equal(els.autoLockSelect.children[0].textContent, "settings.autoLockNever");
+    assert.equal(
+      els.autoLockSelect.children[0].textContent,
+      "settings.autoLockNever"
+    );
     assert.equal(
       els.autoLockSelect.children[1].textContent,
       "settings.autoLockMinutes(n=5)"
@@ -296,7 +331,11 @@ test("renderAutosaveChoices replaces the previous options", () => {
 
 test("renderVaultKdf converts KiB to MiB", () => {
   withSettings(({ settings, els }) => {
-    settings.renderVaultKdf({ memoryKib: 262144, iterations: 2, parallelism: 1 });
+    settings.renderVaultKdf({
+      memoryKib: 262144,
+      iterations: 2,
+      parallelism: 1,
+    });
     assert.equal(
       els.vaultKdf.textContent,
       "settings.vaultKdf(memory=256,iterations=2,parallelism=1)"
@@ -522,7 +561,10 @@ test("saveSettings rejects non-numeric KDF parameters", async () => {
 
     assert.equal(els.settingsError.textContent, "lock.errKdfNaN");
     // Both timing values were already written, but the passphrase was not.
-    assert.deepEqual(invoke.commands(), ["set_auto_lock", "set_autosave_delay"]);
+    assert.deepEqual(invoke.commands(), [
+      "set_auto_lock",
+      "set_autosave_delay",
+    ]);
   });
 });
 
@@ -568,6 +610,56 @@ test("saveSettings re-enables the save button after a failure", async () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// Vault-wide actions
+// ---------------------------------------------------------------------------
+//
+// Import, statistics and the folder picker are not settings, so they must not
+// take part in `saveSettings`. They only close the dialog and hand over.
+
+test("openImport closes the dialog before starting the import", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.openImport();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.openImport.args(), [[]]);
+  });
+});
+
+test("openStats closes the dialog before opening the statistics", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.openStats();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.openStats.args(), [[]]);
+  });
+});
+
+test("changeDiaryDir closes the dialog before locking", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.changeDiaryDir();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.changeDiaryDir.args(), [[]]);
+  });
+});
+
+test("the vault-wide actions never write settings", async () => {
+  await withSettings(async ({ settings, invoke }) => {
+    await settings.openImport();
+    await settings.openStats();
+    await settings.changeDiaryDir();
+
+    assert.deepEqual(invoke.commands(), []);
+  });
+});
+
 /** Shared deps for the tests that build a second controller. */
 function settingsDeps(els) {
   return {
@@ -576,5 +668,8 @@ function settingsDeps(els) {
     setStatus: spy(),
     setAutoLockMinutes: spy(),
     setAutosaveDelay: spy(),
+    openImport: spy(),
+    openStats: spy(),
+    changeDiaryDir: spy(),
   };
 }

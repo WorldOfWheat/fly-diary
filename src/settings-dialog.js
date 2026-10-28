@@ -9,6 +9,11 @@
 // when the user typed something — so the dialog is usable for any one of them
 // alone.
 //
+// It also hosts the vault-wide actions that used to be footer buttons: the
+// storage location, import and statistics. Those are not settings, so they do
+// not take part in `saveSettings`; they simply close the dialog and hand over
+// to the controller that owns them.
+//
 // `deps` shape:
 //
 //   els                — the lookup table from `dom.js`
@@ -17,6 +22,9 @@
 //   setStatus          — (text: string, saved?: boolean) => void
 //   setAutoLockMinutes — (minutes: number) => void
 //   setAutosaveDelay   — (ms: number) => void
+//   openImport         — () => void | Promise<void>
+//   openStats          — () => void
+//   changeDiaryDir     — () => void | Promise<void>
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -94,6 +102,18 @@ export function createSettingsDialog(deps) {
     };
   }
 
+  /** Show the folder the diary is stored in. */
+  async function renderDiaryPath() {
+    try {
+      const path = await deps.invoke("diary_path");
+      els.settingsDiaryPath.textContent = path;
+      els.settingsDiaryPath.title = path;
+    } catch (err) {
+      console.error("diary_path failed:", err);
+      els.settingsDiaryPath.textContent = "";
+    }
+  }
+
   /** Open the settings dialog and populate it from the backend. */
   async function openSettings() {
     els.settingsError.textContent = "";
@@ -101,6 +121,10 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+
+    // Not awaited: the path is informational, so the dialog should not wait on
+    // a second round trip before it appears.
+    renderDiaryPath();
 
     try {
       const settings = await deps.invoke("get_settings");
@@ -134,6 +158,18 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+  }
+
+  /**
+   * Close the dialog, then run one of the vault-wide actions.
+   *
+   * Closing first matters: import and statistics are full-screen overlays of
+   * their own, and the folder picker takes over the lock screen. Leaving the
+   * settings dialog open underneath would leave two modals stacked.
+   */
+  function handOver(action) {
+    closeSettings();
+    return action();
   }
 
   /** Measure this machine and fill the advanced inputs with the result. */
@@ -228,9 +264,13 @@ export function createSettingsDialog(deps) {
     renderVaultKdf,
     fillSettingsKdf,
     readSettingsKdf,
+    renderDiaryPath,
     openSettings,
     closeSettings,
     calibrateKdf,
     saveSettings,
+    openImport: () => handOver(deps.openImport),
+    openStats: () => handOver(deps.openStats),
+    changeDiaryDir: () => handOver(deps.changeDiaryDir),
   };
 }

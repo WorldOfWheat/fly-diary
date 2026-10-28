@@ -1473,6 +1473,11 @@ function createControllers() {
     setStatus,
     setAutoLockMinutes,
     setAutosaveDelay,
+    // The vault-wide actions live in the settings dialog now. They are passed
+    // as thunks because `importDialog` and `lockScreen` are built below.
+    openImport: () => importDialog.startImport(),
+    openStats: () => statsDialog.openStats(),
+    changeDiaryDir: () => lockScreen.changeDiaryDir(),
   });
 
   lockScreen = createLockScreen({
@@ -1571,7 +1576,6 @@ function wireEvents() {
     updateKdfEstimate: lockScreen.updateKdfEstimate,
     refreshSetupVaultState: lockScreen.refreshSetupVaultState,
     lockNow: lockScreen.lockNow,
-    changeDiaryDir: lockScreen.changeDiaryDir,
     // Editor
     scheduleSave,
     updateWordCount,
@@ -1599,12 +1603,14 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
+    // The vault-wide actions hosted by the settings dialog.
+    openImportFromSettings: settingsDialog.openImport,
+    openStatsFromSettings: settingsDialog.openStats,
+    changeDiaryDirFromSettings: settingsDialog.changeDiaryDir,
     // Statistics
-    openStats: statsDialog.openStats,
     closeStats: statsDialog.closeStats,
     isStatsOpen: statsDialog.isStatsOpen,
     // Import
-    startImport: importDialog.startImport,
     closeImport: importDialog.closeImport,
     confirmImport: importDialog.confirmImport,
     isImportOpen: importDialog.isImportOpen,

@@ -100,6 +100,9 @@ const zhHant = {
   "sidebar.lockTitle": "鎖定日記 (Ctrl/Cmd+L)",
 
   "settings.title": "設定",
+  "settings.diary": "日記本",
+  "settings.diaryHint": "日記以加密檔案存放在這個資料夾，換資料夾需要先鎖定。",
+  "settings.diaryPathLabel": "儲存位置",
   "settings.autoLock": "閒置自動鎖定",
   "settings.autoLockHint": "閒置超過指定時間後自動鎖定日記，需要重新輸入密碼。",
   "settings.autoLockLabel": "鎖定時間",
@@ -362,6 +365,10 @@ const en = {
   "sidebar.lockTitle": "Lock the diary (Ctrl/Cmd+L)",
 
   "settings.title": "Settings",
+  "settings.diary": "Diary",
+  "settings.diaryHint":
+    "Entries are stored as encrypted files in this folder. Changing it requires locking first.",
+  "settings.diaryPathLabel": "Location",
   "settings.autoLock": "Idle auto-lock",
   "settings.autoLockHint":
     "Lock the diary after a period of inactivity, requiring the passphrase again.",
