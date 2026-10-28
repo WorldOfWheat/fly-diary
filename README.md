@@ -470,6 +470,8 @@ cargo install cargo-llvm-cov --locked
 npm run build
 ```
 
+Linux 只產出 `.deb` 與 `.rpm`，**不產出 AppImage**。AppImage 會把 GTK 一起打包，並在 `AppRun` 裡把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`；該 cache 不含 `im-ibus.so` / `im-fcitx.so`，導致輸入法在 AppImage 內完全無法切換。`.deb` / `.rpm` 直接使用系統的 GTK 與系統的輸入法模組，沒有這個問題。
+
 ## 專案結構
 
 ```
@@ -554,6 +556,7 @@ fly-diary/
 | `upgrade_entries()`                       | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
 | `today()`                                 | 回傳本地時區的今天日期                                                       |
 | `diary_path()`                            | 回傳日記資料夾絕對路徑                                                       |
+| `set_screenshot_protection(protected)`    | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
 
 ## 設計重點
 
@@ -583,11 +586,15 @@ fly-diary/
 - **閒置計時器只有一個**：所有活動事件都只是重設同一個 `setTimeout`，不累積計時器；鎖定與關閉設定頁時一併清除，避免背景殘留。
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
+- **抹除貫穿整條金鑰路徑**：`unlock_vault` / `create_vault` / `rewrap_vault` / `migrate_legacy_vault` 都直接回傳 `Zeroizing<[u8; 32]>`，不再經過裸 `[u8; 32]` 的堆疊副本；`crypto::decrypt` / `decrypt_with_aad` 回傳 `Zeroizing<Vec<u8>>`，所以解出來的明文（包含被包裝的 diary key）在離開作用域時自動歸零。`pack` / `pack_index` 產生的明文緩衝同樣是 `Zeroizing`，`Entry` 實作 `Drop` 抹除 `title` 與 `content`。`run_import` / `upgrade_entries` 從 session 取出的金鑰副本也包在 `Zeroizing` 裡，批次結束即抹除。
+- **關閉 core dump**：`main()` 在 Unix 上把 `RLIMIT_CORE` 設為 0。解鎖期間金鑰在記憶體中，若程式崩潰而寫出 core dump，等於把金鑰明文留在磁碟上；關閉 core dump 是最低成本的一道防線。
 - **密文綁定日期與版本（AAD）**：日記 payload 以 `日期 || 0x00 || 版本` 作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案、或改寫 `<diary version="…">` 想降級成較弱的 AAD 規則，都會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
 - **背景升級不擋 UI**：`upgrade_entries` 是 `async` 命令，實際改寫跑在 `spawn_blocking`，並以 `upgrade-progress` 事件回報 `(done, total)`。`enterApp()` 刻意不 await，所以解鎖後立刻能寫日記，升級在背後慢慢跑完。
-- **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入走「暫存檔 + `rename`」，並在寫入前把新密文解回來比對明文、在 `rename` 前比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
-- **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此寫入後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
+- **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入前會把新密文解回來比對明文、並比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
+- **所有寫入都是原子的**：`fsutil::write_private` 一律「寫同目錄暫存檔 → `sync_all()` → `rename` 覆蓋」。`rename` 在 POSIX 上是原子操作，所以斷電、磁碟滿、行程被 kill 都只會留下「完整的舊檔」或「完整的新檔」，不會出現截斷的檔案。`sync_all()` 不可省：少了它，`rename` 可能先於資料落地，斷電後會得到一個檔名正確但內容為空的檔案。暫存檔名帶有 pid 與遞增序號，因此平行匯入（rayon 池同時寫多篇）不會互撞同一個暫存檔。失敗路徑會清掉暫存檔，不留下垃圾。這對 `vault.xml` 尤其關鍵——它只有幾百 bytes，卻裝著 salt、KDF 參數與包裝後的金鑰，一旦截斷就等於日記永久無法解鎖。
+- **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此 `rename` 之後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
+- **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
 - **存檔不佔主執行緒**：`save_entry` 是 `async` 命令。寫入一篇日記包含讀取舊檔（取回收藏旗標）、加密寫入、解密索引、重新加密寫入索引共四次往返，同步命令會把這些全部壓在主執行緒上，而自動儲存每 800 毫秒就可能觸發一次，使用者打字時就會明顯感到頓挫。
 - **資料安全**：自動儲存 + 切換日期前強制存檔 + 鎖定前強制存檔。
@@ -599,7 +606,9 @@ fly-diary/
 - 格式升級在解鎖後於背景進行，日記量大時會持續數秒到數十秒；期間狀態列會顯示進度，但日記本身已可正常使用。若升級途中關閉程式，下次解鎖會從剩下的舊格式檔案繼續。
 - 自動鎖定只在 App 視窗內計時：若把視窗縮到最小或切到別的程式，仍會照常計時並鎖定（這是刻意的）。
 - KDF 校準的結果取決於當下機器負載，忙碌時可能選到偏保守的參數；重新校準即可。
-- `index.xml` 與日記檔分開寫入，若程式在兩次寫入之間被強制終止，索引可能落後；下次寫入或呼叫 `rebuild_index()` 即可修復。
+- 每個檔案本身是原子寫入，但**跨檔案的交易不是**：`index.xml` 與日記檔分開寫入，若程式在兩次寫入之間被強制終止，索引可能落後（日記本身已完整寫入）；下次寫入或呼叫 `rebuild_index()` 即可修復。`delete_entry` 的「刪檔 + 改索引」同理。
+- 原子寫入的 `rename` 在 Windows 上無法覆蓋既有檔案，因此該平台會先刪除舊檔再改名，中間存在極短的「兩者都不存在」空窗。POSIX 沒有這個問題。要完全消除得改用 `ReplaceFileW`，目前選擇不為此引入 raw FFI。
+- 原子寫入保證的是「檔案內容不會被截斷」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
 - 平行匯入的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。
@@ -608,3 +617,11 @@ fly-diary/
 - 設定檔本身未加密，任何人可讀到日記資料夾位置（但沒有密碼仍無法解密內容）。
 - 檔案權限收緊只在 Unix 生效（`0600` / `0700`）。Windows 上沿用 `%APPDATA%` 既有的 per-user ACL，程式本身不額外設定 ACL；若把日記放在共用磁碟或同步資料夾，請自行確認該處的權限設定。
 - AAD 綁定只保護「搬檔」與「索引／日記互換」這類攻擊。若攻擊者同時能改寫檔名與檔案內容，仍可把某一天的密文連同檔名一起搬走——AAD 綁的是檔案自稱的日期，不是外部可信的時間來源。
+- 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `Zeroizing` 的抹除不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
+- 金鑰仍可能被作業系統換出到 swap 或休眠檔。程式未使用 `mlock` / `madvise(MADV_DONTDUMP)`，若需要更強的保證，請在系統層停用 swap 或啟用加密 swap。
+- 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
+- `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
+- Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
+- 防止截圖只在 Windows 與 macOS 生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
+- 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
+- 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。

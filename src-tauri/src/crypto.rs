@@ -280,12 +280,16 @@ pub fn encrypt_with_aad(
 }
 
 /// Decrypt `ciphertext` with AES-256-GCM, verifying the tag against `aad`.
+///
+/// The plaintext is returned inside a [`Zeroizing`] buffer: it is the diary
+/// text (or the wrapped diary key), so it must not be left behind in freed
+/// heap memory once the caller is done with it.
 pub fn decrypt_with_aad(
     key: &[u8; KEY_LEN],
     aad: &[u8],
     iv: &[u8],
     ciphertext: &[u8],
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     if iv.len() != IV_LEN {
         return Err(format!("Invalid IV length: {}", iv.len()));
     }
@@ -299,6 +303,7 @@ pub fn decrypt_with_aad(
                 aad,
             },
         )
+        .map(Zeroizing::new)
         .map_err(|_| "Decryption failed: wrong passphrase or corrupted entry".to_string())
 }
 
@@ -311,7 +316,13 @@ pub fn encrypt(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<([u8; IV_LEN], V
 }
 
 /// Decrypt `ciphertext` with AES-256-GCM and no associated data.
-pub fn decrypt(key: &[u8; KEY_LEN], iv: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+///
+/// Like [`decrypt_with_aad`], the plaintext is zeroized on drop.
+pub fn decrypt(
+    key: &[u8; KEY_LEN],
+    iv: &[u8],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, String> {
     decrypt_with_aad(key, b"", iv, ciphertext)
 }
 
@@ -367,7 +378,7 @@ mod tests {
         let k = key("correct horse battery staple", &salt("some-salt"));
         let (iv, ct) = encrypt(&k, "今天過得不錯".as_bytes()).unwrap();
         let pt = decrypt(&k, &iv, &ct).unwrap();
-        assert_eq!(String::from_utf8(pt).unwrap(), "今天過得不錯");
+        assert_eq!(String::from_utf8(pt.to_vec()).unwrap(), "今天過得不錯");
     }
 
     #[test]
@@ -552,7 +563,7 @@ mod tests {
         let (iv, ct) = encrypt(&k, b"").unwrap();
         // GCM still emits the 16-byte authentication tag.
         assert_eq!(ct.len(), 16);
-        assert_eq!(decrypt(&k, &iv, &ct).unwrap(), Vec::<u8>::new());
+        assert_eq!(*decrypt(&k, &iv, &ct).unwrap(), Vec::<u8>::new());
     }
 
     #[test]
@@ -560,7 +571,7 @@ mod tests {
         let k = key("pw", &salt("salt"));
         let plaintext: Vec<u8> = (0..100_000u32).map(|i| (i % 251) as u8).collect();
         let (iv, ct) = encrypt(&k, &plaintext).unwrap();
-        assert_eq!(decrypt(&k, &iv, &ct).unwrap(), plaintext);
+        assert_eq!(*decrypt(&k, &iv, &ct).unwrap(), plaintext);
     }
 
     #[test]
@@ -568,7 +579,7 @@ mod tests {
         let k = key("pw", &salt("salt"));
         let plaintext: Vec<u8> = (0..=255u8).collect();
         let (iv, ct) = encrypt(&k, &plaintext).unwrap();
-        assert_eq!(decrypt(&k, &iv, &ct).unwrap(), plaintext);
+        assert_eq!(*decrypt(&k, &iv, &ct).unwrap(), plaintext);
     }
 
     #[test]
@@ -610,7 +621,7 @@ mod tests {
         let k = key("pw", &salt("salt"));
         let (iv, ct) = encrypt_with_aad(&k, b"2026-10-23", b"today I flew").unwrap();
         assert_eq!(
-            decrypt_with_aad(&k, b"2026-10-23", &iv, &ct).unwrap(),
+            decrypt_with_aad(&k, b"2026-10-23", &iv, &ct).unwrap().as_slice(),
             b"today I flew"
         );
     }
@@ -649,7 +660,10 @@ mod tests {
         let k = key("pw", &salt("salt"));
         let (iv, ct) = encrypt(&k, b"secret").unwrap();
 
-        assert_eq!(decrypt_with_aad(&k, b"", &iv, &ct).unwrap(), b"secret");
+        assert_eq!(
+            decrypt_with_aad(&k, b"", &iv, &ct).unwrap().as_slice(),
+            b"secret"
+        );
     }
 
     #[test]

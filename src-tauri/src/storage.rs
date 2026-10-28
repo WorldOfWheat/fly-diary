@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 use serde::Serialize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto;
 use crate::fsutil;
@@ -95,13 +96,24 @@ pub struct EntryMeta {
 }
 
 /// A decrypted diary entry handed to the frontend.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `title` and `content` are the diary plaintext, so they are wiped when the
+/// value is dropped. `Clone` is deliberately *not* derived: every extra copy is
+/// another buffer that has to be tracked down and wiped.
+#[derive(Debug, Serialize)]
 pub struct Entry {
     pub date: String,
     pub title: String,
     pub content: String,
     /// Whether the user marked this entry as a favourite.
     pub favourite: bool,
+}
+
+impl Drop for Entry {
+    fn drop(&mut self) {
+        self.title.zeroize();
+        self.content.zeroize();
+    }
 }
 
 /// Why an entry file could not be read.
@@ -377,7 +389,7 @@ pub fn rewrap_vault(
     old_passphrase: &str,
     new_passphrase: &str,
     new_params: crypto::KdfParams,
-) -> Result<[u8; 32], String> {
+) -> Result<Zeroizing<[u8; 32]>, String> {
     if new_passphrase.is_empty() {
         return Err("Passphrase must not be empty".to_string());
     }
@@ -395,15 +407,13 @@ pub fn rewrap_vault(
     let old_master = crypto::derive_master_key(old_passphrase, &old_salt, vault.params)?;
     let plain = crypto::decrypt(&old_master, &old_iv, &old_ct)
         .map_err(|_| "Incorrect passphrase".to_string())?;
-    let diary_key: [u8; 32] = plain
-        .try_into()
-        .map_err(|_| "Wrapped diary key has the wrong length".to_string())?;
+    let diary_key = unwrap_diary_key(&plain)?;
 
     // Wrap the same diary key under the new master key.
     let new_salt_b64 = crypto::new_salt_b64();
     let new_salt = crypto::b64_decode(&new_salt_b64)?;
     let new_master = crypto::derive_master_key(new_passphrase, &new_salt, new_params)?;
-    let (new_iv, new_ct) = crypto::encrypt(&new_master, &diary_key)?;
+    let (new_iv, new_ct) = crypto::encrypt(&new_master, diary_key.as_ref())?;
 
     let rewritten = Vault {
         kdf: Kdf::Argon2id,
@@ -426,7 +436,7 @@ pub fn create_vault(
     dir: &Path,
     passphrase: &str,
     params: crypto::KdfParams,
-) -> Result<[u8; 32], String> {
+) -> Result<Zeroizing<[u8; 32]>, String> {
     if vault_exists(dir)? {
         return Err("Vault already exists".to_string());
     }
@@ -451,7 +461,7 @@ pub fn create_vault(
     };
     write_vault(dir, &vault)?;
 
-    Ok(*diary_key)
+    Ok(diary_key)
 }
 
 /// Verify `passphrase` and return the unwrapped diary key.
@@ -460,7 +470,7 @@ pub fn create_vault(
 /// the verifier, then a fresh diary key is generated and wrapped with an
 /// Argon2id master key. Because the diary key changes, **every entry must be
 /// re-encrypted** — [`migrate_entries`] does that.
-pub fn unlock_vault(dir: &Path, passphrase: &str) -> Result<[u8; 32], String> {
+pub fn unlock_vault(dir: &Path, passphrase: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let vault = read_vault(dir)?.ok_or_else(|| "No vault found".to_string())?;
     let salt = crypto::b64_decode(&vault.salt_b64)?;
     let iv = crypto::b64_decode(&vault.wrapped_key_iv_b64)?;
@@ -471,16 +481,13 @@ pub fn unlock_vault(dir: &Path, passphrase: &str) -> Result<[u8; 32], String> {
             let master = crypto::derive_master_key(passphrase, &salt, vault.params)?;
             let plain = crypto::decrypt(&master, &iv, &ct)
                 .map_err(|_| "Incorrect passphrase".to_string())?;
-            let key: [u8; 32] = plain
-                .try_into()
-                .map_err(|_| "Wrapped diary key has the wrong length".to_string())?;
-            Ok(key)
+            unwrap_diary_key(&plain)
         }
         Kdf::LegacySha256 => {
             let legacy = crypto::derive_legacy_key(passphrase, &salt);
             let plain = crypto::decrypt(&legacy, &iv, &ct)
                 .map_err(|_| "Incorrect passphrase".to_string())?;
-            if plain != VERIFIER_PLAINTEXT {
+            if plain.as_slice() != VERIFIER_PLAINTEXT {
                 return Err("Incorrect passphrase".to_string());
             }
             migrate_legacy_vault(dir, passphrase, &salt)
@@ -488,11 +495,26 @@ pub fn unlock_vault(dir: &Path, passphrase: &str) -> Result<[u8; 32], String> {
     }
 }
 
+/// Copy a decrypted 32-byte diary key into a self-wiping buffer.
+///
+/// The source `plain` is itself a [`Zeroizing`] buffer, so both the temporary
+/// `Vec` and the returned array are wiped once they go out of scope.
+fn unwrap_diary_key(plain: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
+    let bytes: [u8; 32] = plain
+        .try_into()
+        .map_err(|_| "Wrapped diary key has the wrong length".to_string())?;
+    Ok(Zeroizing::new(bytes))
+}
+
 /// Upgrade a version 1 vault to Argon2id + wrapped diary key.
 ///
 /// Re-encrypts every entry under the new diary key. If any step fails the
 /// vault file is left untouched, so the old passphrase still works.
-fn migrate_legacy_vault(dir: &Path, passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
+fn migrate_legacy_vault(
+    dir: &Path,
+    passphrase: &str,
+    salt: &[u8],
+) -> Result<Zeroizing<[u8; 32]>, String> {
     let legacy_key = crypto::derive_legacy_key(passphrase, salt);
     let params = crypto::KdfParams::default();
     let master = crypto::derive_master_key(passphrase, salt, params)?;
@@ -511,7 +533,7 @@ fn migrate_legacy_vault(dir: &Path, passphrase: &str, salt: &[u8]) -> Result<[u8
     };
     write_vault(dir, &vault)?;
 
-    Ok(*diary_key)
+    Ok(diary_key)
 }
 
 /// Re-encrypt every entry from `old_key` to `new_key`.
@@ -584,10 +606,10 @@ pub struct IndexRecord {
 ///
 /// One record per line, `date \t title \t fav`. Tabs and newlines in titles are
 /// flattened to spaces so the record separator stays unambiguous.
-fn pack_index(entries: &BTreeMap<String, IndexRecord>) -> Vec<u8> {
-    let mut out = Vec::new();
+fn pack_index(entries: &BTreeMap<String, IndexRecord>) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(Vec::new());
     for (date, record) in entries {
-        let title = record.title.replace(['\t', '\r', '\n'], " ");
+        let mut title = record.title.replace(['\t', '\r', '\n'], " ");
         out.extend_from_slice(date.as_bytes());
         out.push(INDEX_FIELD_SEPARATOR);
         out.extend_from_slice(title.as_bytes());
@@ -598,6 +620,7 @@ fn pack_index(entries: &BTreeMap<String, IndexRecord>) -> Vec<u8> {
             FAVOURITE_OFF
         });
         out.push(INDEX_RECORD_SEPARATOR);
+        title.zeroize();
     }
     out
 }
@@ -828,15 +851,17 @@ fn to_meta(dir: &Path, entries: &BTreeMap<String, IndexRecord>) -> Vec<EntryMeta
 /// as a leading `\x01` + `1`/`0` line, which older versions of the app would
 /// read as part of the title — acceptable, because the only way to run an older
 /// build against a newer vault is to downgrade deliberately.
-fn pack(title: &str, content: &str, favourite: bool) -> Vec<u8> {
-    let title = title.replace(['\r', '\n'], " ");
-    let mut plain = Vec::with_capacity(title.len() + content.len() + 4);
+fn pack(title: &str, content: &str, favourite: bool) -> Zeroizing<Vec<u8>> {
+    let mut title = title.replace(['\r', '\n'], " ");
+    let mut plain = Zeroizing::new(Vec::with_capacity(title.len() + content.len() + 4));
     plain.push(FAVOURITE_MARKER);
     plain.push(if favourite { FAVOURITE_ON } else { FAVOURITE_OFF });
     plain.push(FIELD_SEPARATOR);
     plain.extend_from_slice(title.as_bytes());
     plain.push(FIELD_SEPARATOR);
     plain.extend_from_slice(content.as_bytes());
+    // The flattened title is a second copy of user text; wipe it too.
+    title.zeroize();
     plain
 }
 
@@ -897,7 +922,7 @@ fn decrypt_entry_payload(
     encrypted: &EncryptedEntry,
     iv: &[u8],
     ct: &[u8],
-) -> Result<Vec<u8>, String> {
+) -> Result<Zeroizing<Vec<u8>>, String> {
     match encrypted.aad(date) {
         Some(aad) => crypto::decrypt_with_aad(key, &aad, iv, ct),
         None => crypto::decrypt(key, iv, ct),
@@ -1015,7 +1040,8 @@ pub fn set_favourite(
     index.insert(
         date.to_string(),
         IndexRecord {
-            title: entry.title,
+            // `Entry` implements `Drop`, so the title cannot be moved out of it.
+            title: entry.title.clone(),
             favourite,
         },
     );
@@ -1691,7 +1717,7 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Err(e) => return fail(format!("Failed to encrypt entry {date}: {e}")),
     };
     match crypto::decrypt_with_aad(key, &aad, &new_iv, &new_ct) {
-        Ok(check) if check == plain => {}
+        Ok(check) if check.as_slice() == plain.as_slice() => {}
         Ok(_) => return fail(format!("Round-trip check failed for entry {date}")),
         Err(e) => return fail(format!("Round-trip check failed for entry {date}: {e}")),
     }
@@ -1706,32 +1732,22 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Err(e) => return fail(format!("Failed to serialise entry {date}: {e}")),
     };
 
-    // Write beside the original, then rename. `rename` is atomic on POSIX, so a
-    // crash leaves either the old file or the new one — never a truncated one.
-    let tmp_path = path.with_extension("xml.upgrade");
-    if let Err(e) = fsutil::write_private(&tmp_path, document) {
-        let _ = fs::remove_file(&tmp_path);
-        return fail(format!("Failed to write entry {date}: {e}"));
-    }
-
     // The user may have saved this entry while we were encrypting it. Their
-    // content wins: drop our copy and let the next run pick it up.
+    // content wins: drop our copy and let the next run pick it up. The check
+    // has to happen *before* the write, because `write_private` replaces the
+    // file in one atomic step and there is no window left to back out of.
     let after = fs::metadata(&path).and_then(|m| m.modified());
     match after {
         Ok(after) if after == before => {}
-        Ok(_) => {
-            let _ = fs::remove_file(&tmp_path);
-            return UpgradeOutcome::Skipped(date.to_string());
-        }
-        Err(e) => {
-            let _ = fs::remove_file(&tmp_path);
-            return fail(format!("Failed to stat entry {date}: {e}"));
-        }
+        Ok(_) => return UpgradeOutcome::Skipped(date.to_string()),
+        Err(e) => return fail(format!("Failed to stat entry {date}: {e}")),
     }
 
-    if let Err(e) = fs::rename(&tmp_path, &path) {
-        let _ = fs::remove_file(&tmp_path);
-        return fail(format!("Failed to replace entry {date}: {e}"));
+    // `write_private` writes a sibling temporary file, flushes it and renames
+    // it over the original, so a crash leaves either the old file or the new
+    // one — never a truncated one.
+    if let Err(e) = fsutil::write_private(&path, document) {
+        return fail(format!("Failed to write entry {date}: {e}"));
     }
 
     UpgradeOutcome::Upgraded(date.to_string())
@@ -1987,7 +2003,7 @@ mod tests {
         let dir = temp_dir("vault-key-secret");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         let raw = fs::read_to_string(dir.join("vault.xml")).unwrap();
-        let encoded = crypto::b64_encode(&key);
+        let encoded = crypto::b64_encode(key.as_ref());
         assert!(!raw.contains(&encoded), "diary key must be wrapped");
     }
 
@@ -2048,7 +2064,7 @@ mod tests {
 
         // Unlocking migrates the vault and re-encrypts the entry.
         let new_key = unlock_vault(&dir, "old-pass").unwrap();
-        assert_ne!(new_key, *legacy_key);
+        assert_ne!(*new_key, *legacy_key);
 
         let raw_vault = fs::read_to_string(dir.join("vault.xml")).unwrap();
         assert!(raw_vault.contains("version=\"2\""));
@@ -3556,8 +3572,47 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|name| name.contains("upgrade"))
+            .filter(|name| name.contains("upgrade") || name.contains(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn saving_an_entry_leaves_no_temporary_files_behind() {
+        let dir = temp_dir("save-tmp");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t2", "c2").unwrap();
+
+        let leftovers: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|name| name.contains(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn a_failed_vault_write_keeps_the_old_vault_usable() {
+        let dir = temp_dir("vault-atomic");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+
+        // Make the vault path un-replaceable by turning it into a directory
+        // that cannot be renamed over. The old vault must survive untouched.
+        let vault = dir.join("vault.xml");
+        let saved = fs::read(&vault).unwrap();
+        fs::remove_file(&vault).unwrap();
+        fs::create_dir(&vault).unwrap();
+
+        assert!(rewrap_vault(&dir, "pw", "pw2", fast()).is_err());
+
+        // Restore the original file and confirm it still unlocks the diary.
+        fs::remove_dir(&vault).unwrap();
+        fs::write(&vault, &saved).unwrap();
+        let reopened = unlock_vault(&dir, "pw").unwrap();
+        assert_eq!(reopened.as_ref(), key.as_ref());
     }
 }

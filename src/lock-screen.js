@@ -41,6 +41,7 @@
 //   closeSettings      — () => void
 //   renderDateLabel    — () => void
 //   lockAndFlush       — () => Promise<void>
+//   setScreenshotProtection — (protected: boolean) => Promise<void>
 //
 // `enterApp` is *not* implemented here: revealing the app and picking today's
 // entry is the hand-off into the editor, which `main.js` owns. This module only
@@ -267,6 +268,10 @@ export function createLockScreen(deps) {
   async function openWorkspacePicker() {
     els.lockError.textContent = "";
     pickingWorkspace = true;
+    // The picker shows a filesystem path, not diary content, and the user may
+    // want to share their screen while choosing a folder. Relax the capture
+    // protection for the duration of the picker; `enterApp` restores it.
+    await deps.setScreenshotProtection(false);
     renderLockScreen();
     els.diaryDir.focus();
     els.diaryDir.select();
@@ -284,6 +289,7 @@ export function createLockScreen(deps) {
     if (!configured) return;
     els.lockError.textContent = "";
     pickingWorkspace = false;
+    await deps.setScreenshotProtection(true);
     try {
       const settings = await deps.invoke("get_settings");
       els.diaryDir.value = settings.diaryDir ?? "";
