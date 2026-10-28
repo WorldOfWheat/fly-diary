@@ -83,6 +83,40 @@ impl Session {
 
 type SharedSession = Mutex<Session>;
 
+/// Run blocking work off the main thread.
+///
+/// Tauri runs synchronous commands on the main thread, so anything that touches
+/// the filesystem or does real crypto there freezes the webview for its whole
+/// duration. `async fn` alone does not help: a body with no `.await` runs to
+/// completion on the first poll, still occupying a runtime worker. Only
+/// `spawn_blocking` actually moves the work to a thread of its own.
+///
+/// Every command below that does I/O goes through this helper. The closure must
+/// be `Send + 'static`, which is why the session key is copied out before the
+/// call rather than borrowed from the mutex guard.
+async fn blocking<T, F>(what: &'static str, work: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|e| format!("{what} task failed: {e}"))?
+}
+
+/// Copy the diary key out of the session.
+///
+/// The guard is dropped immediately: `MutexGuard` is not `Send`, so it cannot
+/// cross into `spawn_blocking`, and holding it for the duration of a write would
+/// block `lock` and every other command behind it.
+///
+/// The copy is wrapped in `Zeroizing` so it is wiped when the command ends, even
+/// though it outlives the session lock and may be moved into a blocking task.
+fn session_key(session: &tauri::State<'_, SharedSession>) -> Result<Zeroizing<[u8; 32]>, String> {
+    let guard = session.lock().unwrap();
+    Ok(Zeroizing::new(*guard.key()?))
+}
+
 // ---------------------------------------------------------------------------
 // Settings commands
 // ---------------------------------------------------------------------------
@@ -93,32 +127,35 @@ type SharedSession = Mutex<Session>;
 /// mere existence of the file, so a corrupt `settings.xml` is reported as
 /// "not configured" instead of yielding `configured: true` with no path.
 #[tauri::command]
-fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
+async fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
     let config = config_dir(&app)?;
     let default_dir = default_diary_dir(&app)?.to_string_lossy().to_string();
 
-    let settings = settings::read_settings(&config).ok().flatten();
-    let diary_dir = settings
-        .as_ref()
-        .map(|s| s.diary_dir.to_string_lossy().to_string());
-    let auto_lock_minutes = settings
-        .as_ref()
-        .map(|s| s.auto_lock_minutes)
-        .unwrap_or(settings::DEFAULT_AUTO_LOCK_MINUTES);
-    let autosave_delay_ms = settings
-        .as_ref()
-        .map(|s| s.autosave_delay_ms)
-        .unwrap_or(settings::DEFAULT_AUTOSAVE_DELAY_MS);
+    blocking("Get settings", move || {
+        let settings = settings::read_settings(&config).ok().flatten();
+        let diary_dir = settings
+            .as_ref()
+            .map(|s| s.diary_dir.to_string_lossy().to_string());
+        let auto_lock_minutes = settings
+            .as_ref()
+            .map(|s| s.auto_lock_minutes)
+            .unwrap_or(settings::DEFAULT_AUTO_LOCK_MINUTES);
+        let autosave_delay_ms = settings
+            .as_ref()
+            .map(|s| s.autosave_delay_ms)
+            .unwrap_or(settings::DEFAULT_AUTOSAVE_DELAY_MS);
 
-    Ok(SettingsView {
-        configured: diary_dir.is_some(),
-        diary_dir,
-        default_dir,
-        auto_lock_minutes,
-        auto_lock_choices: settings::AUTO_LOCK_CHOICES.to_vec(),
-        autosave_delay_ms,
-        autosave_delay_choices: settings::AUTOSAVE_DELAY_CHOICES.to_vec(),
+        Ok(SettingsView {
+            configured: diary_dir.is_some(),
+            diary_dir,
+            default_dir,
+            auto_lock_minutes,
+            auto_lock_choices: settings::AUTO_LOCK_CHOICES.to_vec(),
+            autosave_delay_ms,
+            autosave_delay_choices: settings::AUTOSAVE_DELAY_CHOICES.to_vec(),
+        })
     })
+    .await
 }
 
 /// Persist a new diary directory into the settings file.
@@ -129,7 +166,7 @@ fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
 /// The auto-lock preference is carried over from the existing settings so
 /// changing the path does not silently reset it.
 #[tauri::command]
-fn set_diary_dir(
+async fn set_diary_dir(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     path: String,
@@ -142,12 +179,15 @@ fn set_diary_dir(
     settings::validate_diary_dir(&dir)?;
 
     let config = config_dir(&app)?;
-    let mut settings = settings::read_settings(&config)
-        .ok()
-        .flatten()
-        .unwrap_or_else(|| settings::Settings::new(dir.clone()));
-    settings.diary_dir = dir;
-    settings::write_settings(&config, &settings)
+    blocking("Set diary dir", move || {
+        let mut settings = settings::read_settings(&config)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| settings::Settings::new(dir.clone()));
+        settings.diary_dir = dir;
+        settings::write_settings(&config, &settings)
+    })
+    .await
 }
 
 /// Persist the auto-lock preference.
@@ -155,14 +195,17 @@ fn set_diary_dir(
 /// Allowed while unlocked: it is a UI preference, not key material.
 /// `minutes == 0` ([`settings::AUTO_LOCK_NEVER`]) disables auto-lock.
 #[tauri::command]
-fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
+async fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
     settings::validate_auto_lock(minutes)?;
 
     let config = config_dir(&app)?;
-    let mut settings = settings::read_settings(&config)?
-        .ok_or_else(|| "Diary is not configured yet".to_string())?;
-    settings.auto_lock_minutes = minutes;
-    settings::write_settings(&config, &settings)
+    blocking("Set auto lock", move || {
+        let mut settings = settings::read_settings(&config)?
+            .ok_or_else(|| "Diary is not configured yet".to_string())?;
+        settings.auto_lock_minutes = minutes;
+        settings::write_settings(&config, &settings)
+    })
+    .await
 }
 
 /// Persist the autosave debounce delay.
@@ -171,14 +214,17 @@ fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
 /// writes, never what is written. The value must be one of
 /// [`settings::AUTOSAVE_DELAY_CHOICES`], so autosave cannot be switched off.
 #[tauri::command]
-fn set_autosave_delay(app: tauri::AppHandle, ms: u32) -> Result<(), String> {
+async fn set_autosave_delay(app: tauri::AppHandle, ms: u32) -> Result<(), String> {
     settings::validate_autosave_delay(ms)?;
 
     let config = config_dir(&app)?;
-    let mut settings = settings::read_settings(&config)?
-        .ok_or_else(|| "Diary is not configured yet".to_string())?;
-    settings.autosave_delay_ms = ms;
-    settings::write_settings(&config, &settings)
+    blocking("Set autosave delay", move || {
+        let mut settings = settings::read_settings(&config)?
+            .ok_or_else(|| "Diary is not configured yet".to_string())?;
+        settings.autosave_delay_ms = ms;
+        settings::write_settings(&config, &settings)
+    })
+    .await
 }
 
 /// Open a native folder picker and return the chosen path.
@@ -292,7 +338,7 @@ fn get_kdf_defaults() -> KdfView {
 /// user is about to pick, so returning users are sent to the unlock flow
 /// rather than hitting "Vault already exists".
 #[tauri::command]
-fn vault_exists(app: tauri::AppHandle, path: Option<String>) -> Result<bool, String> {
+async fn vault_exists(app: tauri::AppHandle, path: Option<String>) -> Result<bool, String> {
     let dir = match path {
         Some(p) => {
             let dir = PathBuf::from(p.trim());
@@ -301,14 +347,14 @@ fn vault_exists(app: tauri::AppHandle, path: Option<String>) -> Result<bool, Str
         }
         None => diary_dir(&app)?,
     };
-    storage::vault_exists(&dir)
+    blocking("Vault exists", move || storage::vault_exists(&dir)).await
 }
 
 /// Create a new vault protected by `passphrase` and unlock it immediately.
 ///
 /// `kdf` is optional so the frontend can omit it and get the defaults.
 #[tauri::command]
-fn create_vault(
+async fn create_vault(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     passphrase: String,
@@ -324,20 +370,29 @@ fn create_vault(
     };
 
     let dir = diary_dir(&app)?;
-    let key = storage::create_vault(&dir, &passphrase, params)?;
+    // Argon2id is deliberately slow (about a second by design), so it must not
+    // run on the main thread. The session is only touched after the work
+    // returns: `tauri::State` cannot be moved into the blocking closure.
+    let key = blocking("Create vault", move || {
+        storage::create_vault(&dir, &passphrase, params)
+    })
+    .await?;
+
+    // `create_vault` already returns a `Zeroizing` key, so it is stored as-is.
     *session.lock().unwrap() = Session { key: Some(key) };
     Ok(())
 }
 
 /// Verify `passphrase` and keep the derived key in memory.
 #[tauri::command]
-fn unlock(
+async fn unlock(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     passphrase: String,
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
-    let key = storage::unlock_vault(&dir, &passphrase)?;
+    let key = blocking("Unlock", move || storage::unlock_vault(&dir, &passphrase)).await?;
+    // `unlock_vault` already returns a `Zeroizing` key, so it is stored as-is.
     *session.lock().unwrap() = Session { key: Some(key) };
     Ok(())
 }
@@ -353,9 +408,12 @@ fn lock(session: tauri::State<'_, SharedSession>) {
 /// Returns `None` when the vault is still in the legacy format, which has no
 /// Argon2id parameters to report.
 #[tauri::command]
-fn get_vault_kdf(app: tauri::AppHandle) -> Result<Option<KdfView>, String> {
+async fn get_vault_kdf(app: tauri::AppHandle) -> Result<Option<KdfView>, String> {
     let dir = diary_dir(&app)?;
-    Ok(storage::vault_kdf_params(&dir)?.map(|p| KdfView::from_params(p, false)))
+    blocking("Get vault kdf", move || {
+        Ok(storage::vault_kdf_params(&dir)?.map(|p| KdfView::from_params(p, false)))
+    })
+    .await
 }
 
 /// Measure this machine and return Argon2id parameters that take about a
@@ -376,7 +434,7 @@ async fn calibrate_kdf() -> Result<KdfView, String> {
 /// the session stays unlocked. `new_passphrase` may be empty to keep the
 /// current passphrase and only change the parameters.
 #[tauri::command]
-fn change_passphrase(
+async fn change_passphrase(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     current_passphrase: String,
@@ -402,10 +460,17 @@ fn change_passphrase(
         new_passphrase
     };
 
-    let key = storage::rewrap_vault(&dir, &current_passphrase, &effective_new, params)?;
+    // Two Argon2id derivations (old and new passphrase) plus a rewrap: the
+    // longest single operation in the app, and the one most likely to be
+    // noticed if it ran on the main thread.
+    let key = blocking("Change passphrase", move || {
+        storage::rewrap_vault(&dir, &current_passphrase, &effective_new, params)
+    })
+    .await?;
 
     // The diary key is unchanged, but refresh the session anyway so the
-    // in-memory copy is the one the vault now wraps.
+    // in-memory copy is the one the vault now wraps. `rewrap_vault` already
+    // returns a `Zeroizing` key, so it is stored as-is and still wiped on drop.
     *session.lock().unwrap() = Session { key: Some(key) };
     Ok(())
 }
@@ -421,22 +486,23 @@ fn is_unlocked(session: tauri::State<'_, SharedSession>) -> bool {
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-fn get_entry(
+async fn get_entry(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     date: String,
 ) -> Result<Option<Entry>, String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::read_entry(&dir, guard.key()?, &date)
+    let key = session_key(&session)?;
+    blocking("Get entry", move || storage::read_entry(&dir, &key, &date)).await
 }
 
 /// Encrypt and write one entry, then update the index.
 ///
-/// `async` on purpose: the body does several blocking file reads and writes plus
-/// three AES-GCM operations, and the editor autosaves on a short debounce. A
-/// synchronous command would run all of that on the main thread and stall the
-/// webview while the user is still typing.
+/// The body does several blocking file reads and writes plus three AES-GCM
+/// operations, and the editor autosaves on a short debounce, so it runs on a
+/// blocking thread rather than the main one. Being `async` alone would not be
+/// enough: without an `.await` the body would still run to completion on the
+/// first poll.
 #[tauri::command]
 async fn save_entry(
     app: tauri::AppHandle,
@@ -446,41 +512,50 @@ async fn save_entry(
     content: String,
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::write_entry(&dir, guard.key()?, &date, &title, &content)
+    let key = session_key(&session)?;
+    blocking("Save entry", move || {
+        storage::write_entry(&dir, &key, &date, &title, &content)
+    })
+    .await
 }
 
 #[tauri::command]
-fn delete_entry(
+async fn delete_entry(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     date: String,
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::delete_entry(&dir, guard.key()?, &date)
+    let key = session_key(&session)?;
+    blocking("Delete entry", move || {
+        storage::delete_entry(&dir, &key, &date)
+    })
+    .await
 }
 
 /// List entries. Titles are encrypted, so the diary must be unlocked.
 #[tauri::command]
-fn list_entries(
+async fn list_entries(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
 ) -> Result<Vec<EntryMeta>, String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::list_entries(&dir, guard.key()?)
+    let key = session_key(&session)?;
+    blocking("List entries", move || storage::list_entries(&dir, &key)).await
 }
 
 /// List only the entries marked as favourites, newest first.
 #[tauri::command]
-fn list_favourites(
+async fn list_favourites(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
 ) -> Result<Vec<EntryMeta>, String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::list_favourites(&dir, guard.key()?)
+    let key = session_key(&session)?;
+    blocking("List favourites", move || {
+        storage::list_favourites(&dir, &key)
+    })
+    .await
 }
 
 /// Mark or unmark an entry as a favourite. Returns the stored flag.
@@ -488,29 +563,35 @@ fn list_favourites(
 /// The flag is part of the encrypted payload, so this rewrites the entry file;
 /// the frontend calls it only when the user toggles the bookmark.
 #[tauri::command]
-fn set_favourite(
+async fn set_favourite(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     date: String,
     favourite: bool,
 ) -> Result<bool, String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::set_favourite(&dir, guard.key()?, &date, favourite)
+    let key = session_key(&session)?;
+    blocking("Set favourite", move || {
+        storage::set_favourite(&dir, &key, &date, favourite)
+    })
+    .await
 }
 
 /// Discard `index.xml` and rebuild it by scanning every entry file.
 ///
 /// The index is normally maintained automatically; this is an escape hatch for
 /// a corrupted index or for files copied into the folder behind the app's back.
+///
+/// This is the slow path — one read and one decryption per entry — so it is the
+/// command that most needs to stay off the main thread.
 #[tauri::command]
-fn rebuild_index(
+async fn rebuild_index(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
 ) -> Result<Vec<EntryMeta>, String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::rebuild_index(&dir, guard.key()?)
+    let key = session_key(&session)?;
+    blocking("Rebuild index", move || storage::rebuild_index(&dir, &key)).await
 }
 
 /// List entry files that exist on disk but cannot be decrypted.
@@ -518,14 +599,20 @@ fn rebuild_index(
 /// These never appear in [`list_entries`]: a broken file has no readable title,
 /// and mixing it into the normal list would make every consumer filter it out
 /// again. The sidebar shows them in their own view instead.
+///
+/// Unlike the index-backed listings this always scans the whole folder, so it
+/// costs one read and one decryption attempt per entry on every call.
 #[tauri::command]
-fn list_broken_entries(
+async fn list_broken_entries(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
 ) -> Result<Vec<BrokenEntry>, String> {
     let dir = diary_dir(&app)?;
-    let guard = session.lock().unwrap();
-    storage::list_broken_entries(&dir, guard.key()?)
+    let key = session_key(&session)?;
+    blocking("List broken entries", move || {
+        storage::list_broken_entries(&dir, &key)
+    })
+    .await
 }
 
 /// Copy a broken entry file to a location the user picks.
@@ -560,8 +647,15 @@ async fn export_broken_entry(
         return Ok(None);
     };
     let dest = PathBuf::from(dest.to_string());
-    storage::export_broken_entry(&dir, &date, &dest)?;
-    Ok(Some(dest.to_string_lossy().into_owned()))
+    // The dialog itself already ran off the main thread (the `recv` above
+    // blocks a worker), but the copy that follows is still a file operation on
+    // a potentially large file, so it gets its own blocking hop.
+    blocking("Export broken entry", move || {
+        storage::export_broken_entry(&dir, &date, &dest)?;
+        Ok(dest.to_string_lossy().into_owned())
+    })
+    .await
+    .map(Some)
 }
 
 // ---------------------------------------------------------------------------
@@ -594,7 +688,7 @@ async fn pick_import_dir(app: tauri::AppHandle) -> Result<Option<String>, String
 ///
 /// The frontend shows the result so the user can confirm before importing.
 #[tauri::command]
-fn scan_import(
+async fn scan_import(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     import_dir: String,
@@ -605,11 +699,16 @@ fn scan_import(
         return Err("匯入路徑不是資料夾".to_string());
     }
 
-    let guard = session.lock().unwrap();
-    let key = guard.key()?;
-    let existing = storage::known_dates(&dir, key)?;
+    let key = session_key(&session)?;
 
-    storage::scan_import(&src, &existing)
+    // `scan_import` fans out over the rayon pool, but the caller still has to
+    // wait for it. Running that wait on a blocking thread keeps the main thread
+    // free while a few thousand files are read and decoded.
+    blocking("Scan import", move || {
+        let existing = storage::known_dates(&dir, &key)?;
+        storage::scan_import(&src, &existing)
+    })
+    .await
 }
 
 /// Import the confirmed dates from `import_dir` into the diary.
@@ -636,12 +735,7 @@ async fn run_import(
     }
 
     // Copy the key out so the session lock is not held across the whole import.
-    // The copy is wrapped in `Zeroizing` so it is wiped when the batch ends,
-    // even though it outlives the session lock.
-    let key = {
-        let guard = session.lock().unwrap();
-        Zeroizing::new(*guard.key()?)
-    };
+    let key = session_key(&session)?;
 
     let emitter = app.clone();
 
@@ -685,10 +779,7 @@ async fn upgrade_entries(
     // Copy the key out so the session lock is not held for the whole run. The
     // copy stays valid even if the diary is locked mid-upgrade; the run simply
     // finishes on its own copy, which is wiped when the closure returns.
-    let key = {
-        let guard = session.lock().unwrap();
-        Zeroizing::new(*guard.key()?)
-    };
+    let key = session_key(&session)?;
 
     let emitter = app.clone();
 
@@ -733,10 +824,14 @@ fn set_screenshot_protection(
 
 /// Absolute path of the diary directory, shown in the UI for transparency.
 #[tauri::command]
-fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
+async fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
     let dir = diary_dir(&app)?;
-    storage::ensure_dir(&dir)?;
-    Ok(dir.to_string_lossy().to_string())
+    // `ensure_dir` creates the folder on first run, which is a filesystem call.
+    blocking("Diary path", move || {
+        storage::ensure_dir(&dir)?;
+        Ok(dir.to_string_lossy().to_string())
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -930,7 +1025,6 @@ mod tests {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Build the application menu.
 ///
 /// Tauri installs a default menu on Linux and macOS, and its `Edit` submenu
@@ -957,6 +1051,7 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
     MenuBuilder::new(app).item(&edit).build()
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
