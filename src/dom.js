@@ -106,6 +106,7 @@ export const els = {
   settingsSave: $("settings-save"),
   settingsError: $("settings-error"),
   autoLockSelect: $("auto-lock-select"),
+  autosaveDelaySelect: $("autosave-delay-select"),
   vaultKdf: $("vault-kdf"),
   settingsCurrentPass: $("settings-current-pass"),
   settingsNewPass: $("settings-new-pass"),

@@ -59,6 +59,10 @@ struct SettingsView {
     auto_lock_minutes: u32,
     /// The auto-lock values the UI may offer.
     auto_lock_choices: Vec<u32>,
+    /// Milliseconds of inactivity before the editor autosaves.
+    autosave_delay_ms: u32,
+    /// The autosave delays the UI may offer.
+    autosave_delay_choices: Vec<u32>,
 }
 
 /// In-memory session state: the derived AES key while the vault is unlocked.
@@ -101,6 +105,10 @@ fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
         .as_ref()
         .map(|s| s.auto_lock_minutes)
         .unwrap_or(settings::DEFAULT_AUTO_LOCK_MINUTES);
+    let autosave_delay_ms = settings
+        .as_ref()
+        .map(|s| s.autosave_delay_ms)
+        .unwrap_or(settings::DEFAULT_AUTOSAVE_DELAY_MS);
 
     Ok(SettingsView {
         configured: diary_dir.is_some(),
@@ -108,6 +116,8 @@ fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
         default_dir,
         auto_lock_minutes,
         auto_lock_choices: settings::AUTO_LOCK_CHOICES.to_vec(),
+        autosave_delay_ms,
+        autosave_delay_choices: settings::AUTOSAVE_DELAY_CHOICES.to_vec(),
     })
 }
 
@@ -152,6 +162,22 @@ fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
     let mut settings = settings::read_settings(&config)?
         .ok_or_else(|| "Diary is not configured yet".to_string())?;
     settings.auto_lock_minutes = minutes;
+    settings::write_settings(&config, &settings)
+}
+
+/// Persist the autosave debounce delay.
+///
+/// Allowed while unlocked, like auto-lock: it only changes how often the editor
+/// writes, never what is written. The value must be one of
+/// [`settings::AUTOSAVE_DELAY_CHOICES`], so autosave cannot be switched off.
+#[tauri::command]
+fn set_autosave_delay(app: tauri::AppHandle, ms: u32) -> Result<(), String> {
+    settings::validate_autosave_delay(ms)?;
+
+    let config = config_dir(&app)?;
+    let mut settings = settings::read_settings(&config)?
+        .ok_or_else(|| "Diary is not configured yet".to_string())?;
+    settings.autosave_delay_ms = ms;
     settings::write_settings(&config, &settings)
 }
 
@@ -940,6 +966,7 @@ pub fn run() {
             get_settings,
             set_diary_dir,
             set_auto_lock,
+            set_autosave_delay,
             pick_diary_dir,
             get_kdf_defaults,
             vault_exists,

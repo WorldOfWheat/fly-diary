@@ -395,6 +395,18 @@
                     </label>
                 </section>
 
+                <!-- Autosave -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="settings.autosave">自動儲存</h3>
+                    <p class="settings-hint" data-i18n="settings.autosaveHint">
+                        停止輸入後多久寫入磁碟。時間越短越不容易遺失內容，但每次寫入都會重新加密整個檔案。
+                    </p>
+                    <label class="settings-row" for="autosave-delay-select">
+                        <span class="settings-label" data-i18n="settings.autosaveLabel">延遲時間</span>
+                        <select id="autosave-delay-select" class="settings-select"></select>
+                    </label>
+                </section>
+
                 <!-- Passphrase / KDF -->
                 <section class="settings-section">
                     <h3 class="settings-heading" data-i18n="settings.security">密碼與金鑰派生</h3>

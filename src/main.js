@@ -87,7 +87,14 @@ let favouriteBusy = false;
 /** Guard so programmatic input updates don't trigger autosave. */
 let suppressInput = false;
 
-const AUTOSAVE_DELAY = 800;
+/**
+ * Milliseconds of inactivity before an autosave.
+ *
+ * Seeded with the backend default and replaced by the value from the settings
+ * file during `init()`, so the very first keystroke already uses the user's
+ * choice. `setAutosaveDelay` is the only writer.
+ */
+let autosaveDelay = 800;
 
 // ---------------------------------------------------------------------------
 // DOM references
@@ -1187,7 +1194,20 @@ function scheduleSave() {
   saveTimer = setTimeout(async () => {
     saveTimer = null;
     await saveNow();
-  }, AUTOSAVE_DELAY);
+  }, autosaveDelay);
+}
+
+/**
+ * Apply a new autosave delay.
+ *
+ * A timer that is already pending keeps its old deadline: re-arming it here
+ * would push the write further away every time the user opens the settings
+ * dialog, which is the opposite of what a shorter delay is for.
+ */
+function setAutosaveDelay(ms) {
+  const value = Number(ms);
+  if (!Number.isFinite(value) || value <= 0) return;
+  autosaveDelay = value;
 }
 
 async function deleteCurrent() {
@@ -1452,6 +1472,7 @@ function createControllers() {
     t,
     setStatus,
     setAutoLockMinutes,
+    setAutosaveDelay,
   });
 
   lockScreen = createLockScreen({
@@ -1459,6 +1480,7 @@ function createControllers() {
     invoke,
     t,
     setAutoLockMinutes,
+    setAutosaveDelay,
     enterApp,
     resetAutoLockTimer,
     stopAutoLockTimer,

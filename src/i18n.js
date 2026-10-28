@@ -105,6 +105,11 @@ const zhHant = {
   "settings.autoLockLabel": "鎖定時間",
   "settings.autoLockNever": "永不",
   "settings.autoLockMinutes": "{n} 分鐘",
+  "settings.autosave": "自動儲存",
+  "settings.autosaveHint":
+    "停止輸入後多久寫入磁碟。時間越短越不容易遺失內容，但每次寫入都會重新加密整個檔案。",
+  "settings.autosaveLabel": "延遲時間",
+  "settings.autosaveMs": "{n} 毫秒",
   "settings.security": "密碼與金鑰派生",
   "settings.securityHint":
     "變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。",
@@ -363,6 +368,11 @@ const en = {
   "settings.autoLockLabel": "Lock after",
   "settings.autoLockNever": "Never",
   "settings.autoLockMinutes": "{n} minutes",
+  "settings.autosave": "Autosave",
+  "settings.autosaveHint":
+    "How long to wait after the last keystroke before writing to disk. Shorter is safer, but every write re-encrypts the whole file.",
+  "settings.autosaveLabel": "Delay",
+  "settings.autosaveMs": "{n} ms",
   "settings.security": "Passphrase and key derivation",
   "settings.securityHint":
     "Changing the passphrase only re-wraps the diary key; entries are not re-encrypted, so it is fast.",

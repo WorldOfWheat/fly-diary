@@ -2,11 +2,12 @@
 // Settings dialog
 // ---------------------------------------------------------------------------
 //
-// The dialog does two independent jobs: it changes the idle auto-lock duration,
-// and it changes the passphrase (optionally with new Argon2id parameters). The
-// two are deliberately decoupled — the auto-lock value is always written, the
-// passphrase only when the user typed something — so the dialog is usable for
-// either purpose alone.
+// The dialog does three independent jobs: it changes the idle auto-lock
+// duration, it changes the autosave debounce delay, and it changes the
+// passphrase (optionally with new Argon2id parameters). They are deliberately
+// decoupled — the two timing values are always written, the passphrase only
+// when the user typed something — so the dialog is usable for any one of them
+// alone.
 //
 // `deps` shape:
 //
@@ -15,9 +16,13 @@
 //   t                  — (key: string, params?: object) => string
 //   setStatus          — (text: string, saved?: boolean) => void
 //   setAutoLockMinutes — (minutes: number) => void
+//   setAutosaveDelay   — (ms: number) => void
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
+
+/** Fallback autosave delays, mirroring `settings::AUTOSAVE_DELAY_CHOICES`. */
+const DEFAULT_AUTOSAVE_DELAY_CHOICES = [200, 400, 800, 1500, 3000];
 
 /**
  * Create the settings dialog controller.
@@ -44,6 +49,18 @@ export function createSettingsDialog(deps) {
           : deps.t("settings.autoLockMinutes", { n: minutes });
       if (minutes === current) option.selected = true;
       els.autoLockSelect.append(option);
+    }
+  }
+
+  /** Fill the autosave dropdown from the choices the backend allows. */
+  function renderAutosaveChoices(choices, current) {
+    els.autosaveDelaySelect.replaceChildren();
+    for (const ms of choices) {
+      const option = document.createElement("option");
+      option.value = String(ms);
+      option.textContent = deps.t("settings.autosaveMs", { n: ms });
+      if (ms === current) option.selected = true;
+      els.autosaveDelaySelect.append(option);
     }
   }
 
@@ -90,6 +107,10 @@ export function createSettingsDialog(deps) {
       renderAutoLockChoices(
         settings.autoLockChoices ?? DEFAULT_AUTO_LOCK_CHOICES,
         settings.autoLockMinutes ?? 0
+      );
+      renderAutosaveChoices(
+        settings.autosaveDelayChoices ?? DEFAULT_AUTOSAVE_DELAY_CHOICES,
+        settings.autosaveDelayMs ?? DEFAULT_AUTOSAVE_DELAY_CHOICES[2]
       );
       const params = await deps.invoke("get_vault_kdf");
       renderVaultKdf(params);
@@ -165,6 +186,10 @@ export function createSettingsDialog(deps) {
       await deps.invoke("set_auto_lock", { minutes });
       deps.setAutoLockMinutes(minutes);
 
+      const delayMs = Number(els.autosaveDelaySelect.value);
+      await deps.invoke("set_autosave_delay", { ms: delayMs });
+      deps.setAutosaveDelay(delayMs);
+
       if (wantsPassChange) {
         const kdf = readSettingsKdf();
         if (
@@ -199,6 +224,7 @@ export function createSettingsDialog(deps) {
   return {
     isSettingsOpen,
     renderAutoLockChoices,
+    renderAutosaveChoices,
     renderVaultKdf,
     fillSettingsKdf,
     readSettingsKdf,
