@@ -126,7 +126,7 @@ const zhHant = {
   "settings.calibrate": "自動量測（約 1 秒）",
   "settings.calibrating": "量測中…",
   "settings.calibrated":
-    "已套用：{memory} MiB / {iterations} 次 / 平行度 {parallelism}",
+    "已填入：{memory} MiB / {iterations} 次 / 平行度 {parallelism}（請按「儲存」套用）",
   "settings.vaultKdf":
     "目前參數：{memory} MiB / {iterations} 次 / 平行度 {parallelism}",
   "settings.vaultKdfLegacy": "目前使用舊版金鑰派生，解鎖一次即可升級。",
@@ -393,7 +393,7 @@ const en = {
   "settings.calibrate": "Measure automatically (~1s)",
   "settings.calibrating": "Measuring…",
   "settings.calibrated":
-    "Applied: {memory} MiB / {iterations} passes / parallelism {parallelism}",
+    "Filled in: {memory} MiB / {iterations} passes / parallelism {parallelism} (press Save to apply)",
   "settings.vaultKdf":
     "Current: {memory} MiB / {iterations} passes / parallelism {parallelism}",
   "settings.vaultKdfLegacy":
