@@ -116,15 +116,15 @@ test("openSettings loads the choices, the vault KDF and shows the dialog", async
     assert.equal(document.activeElement, els.settingsCurrentPass);
     assert.deepEqual(
       els.autoLockSelect.children.map((option) => option.value),
-      ["0", "5", "15"]
+      ["0", "5", "15"],
     );
     assert.deepEqual(
       els.autosaveDelaySelect.children.map((option) => option.value),
-      ["200", "800", "3000"]
+      ["200", "800", "3000"],
     );
     assert.equal(
       els.vaultKdf.textContent,
-      "settings.vaultKdf(memory=64,iterations=3,parallelism=4)"
+      "settings.vaultKdf(memory=64,iterations=3,parallelism=4)",
     );
   });
 });
@@ -137,7 +137,7 @@ test("openSettings shows the diary folder", async () => {
 
     assert.equal(
       els.settingsDiaryPath.textContent,
-      "/home/user/Documents/diary"
+      "/home/user/Documents/diary",
     );
     assert.equal(els.settingsDiaryPath.title, "/home/user/Documents/diary");
   });
@@ -156,7 +156,7 @@ test("renderDiaryPath clears the path when the backend fails", async () => {
           throw "no vault";
         },
       },
-    }
+    },
   );
 });
 
@@ -177,16 +177,16 @@ test("openSettings falls back to the default autosave delays", async () => {
 
       assert.deepEqual(
         els.autosaveDelaySelect.children.map((option) => option.value),
-        ["200", "400", "800", "1500", "3000"]
+        ["200", "400", "800", "1500", "3000"],
       );
       // The default delay is the one the fallback list marks as current.
       const selected = els.autosaveDelaySelect.children.filter(
-        (o) => o.selected
+        (o) => o.selected,
       );
       assert.equal(selected.length, 1);
       assert.equal(selected[0].value, "800");
     },
-    { invokeTable: { get_settings: { autoLockMinutes: 0 } } }
+    { invokeTable: { get_settings: { autoLockMinutes: 0 } } },
   );
 });
 
@@ -225,10 +225,10 @@ test("openSettings falls back to the default choices when none are reported", as
 
       assert.deepEqual(
         els.autoLockSelect.children.map((option) => option.value),
-        ["0", "1", "5", "10", "15", "30", "60"]
+        ["0", "1", "5", "10", "15", "30", "60"],
       );
     },
-    { invokeTable: { get_settings: { autoLockMinutes: 0 } } }
+    { invokeTable: { get_settings: { autoLockMinutes: 0 } } },
   );
 });
 
@@ -240,7 +240,7 @@ test("openSettings reports a load failure but still opens", async () => {
       assert.equal(els.settingsOverlay.hidden, false);
       assert.equal(
         els.settingsError.textContent,
-        "settings.errSave(message=boom)"
+        "settings.errSave(message=boom)",
       );
     },
     {
@@ -249,7 +249,7 @@ test("openSettings reports a load failure but still opens", async () => {
           throw "boom";
         },
       },
-    }
+    },
   );
 });
 
@@ -281,11 +281,11 @@ test("renderAutoLockChoices labels zero as Never", () => {
 
     assert.equal(
       els.autoLockSelect.children[0].textContent,
-      "settings.autoLockNever"
+      "settings.autoLockNever",
     );
     assert.equal(
       els.autoLockSelect.children[1].textContent,
-      "settings.autoLockMinutes(n=5)"
+      "settings.autoLockMinutes(n=5)",
     );
   });
 });
@@ -305,11 +305,11 @@ test("renderAutosaveChoices labels each option in milliseconds", () => {
 
     assert.equal(
       els.autosaveDelaySelect.children[0].textContent,
-      "settings.autosaveMs(n=200)"
+      "settings.autosaveMs(n=200)",
     );
     assert.equal(
       els.autosaveDelaySelect.children[1].textContent,
-      "settings.autosaveMs(n=800)"
+      "settings.autosaveMs(n=800)",
     );
     assert.equal(els.autosaveDelaySelect.children[0].selected, true);
     assert.equal(els.autosaveDelaySelect.children[1].selected, false);
@@ -338,7 +338,7 @@ test("renderVaultKdf converts KiB to MiB", () => {
     });
     assert.equal(
       els.vaultKdf.textContent,
-      "settings.vaultKdf(memory=256,iterations=2,parallelism=1)"
+      "settings.vaultKdf(memory=256,iterations=2,parallelism=1)",
     );
   });
 });
@@ -395,7 +395,7 @@ test("calibrateKdf fills the inputs and reports the result", async () => {
     assert.equal(els.settingsKdfParallelism.value, 2);
     assert.equal(
       els.settingsCalibrateNote.textContent,
-      "settings.calibrated(memory=128,iterations=4,parallelism=2)"
+      "settings.calibrated(memory=128,iterations=4,parallelism=2)",
     );
     assert.equal(els.settingsCalibrate.disabled, false);
   });
@@ -426,7 +426,7 @@ test("calibrateKdf reports a failure and re-enables the button", async () => {
 
       assert.equal(
         els.settingsError.textContent,
-        "settings.errCalibrate(message=nope)"
+        "settings.errCalibrate(message=nope)",
       );
       assert.equal(els.settingsCalibrateNote.textContent, "");
       assert.equal(els.settingsCalibrate.disabled, false);
@@ -437,7 +437,7 @@ test("calibrateKdf reports a failure and re-enables the button", async () => {
           throw "nope";
         },
       },
-    }
+    },
   );
 });
 
@@ -543,8 +543,62 @@ test("saveSettings changes the passphrase with the advanced KDF", async () => {
     // The dialog now shows the parameters it just sent.
     assert.equal(
       els.vaultKdf.textContent,
-      "settings.vaultKdf(memory=64,iterations=3,parallelism=4)"
+      "settings.vaultKdf(memory=64,iterations=3,parallelism=4)",
     );
+  });
+});
+
+test("saveSettings applies a parameter-only change with the current passphrase", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    // Populate the dialog so the inputs hold the vault's current parameters.
+    await settings.openSettings();
+
+    // Only the memory cost is edited; the passphrase fields stay empty.
+    els.settingsKdfMemory.value = "128";
+    els.settingsCurrentPass.value = "old";
+
+    await settings.saveSettings();
+
+    assert.deepEqual(invoke.argsOf("change_passphrase"), {
+      currentPassphrase: "old",
+      // Empty new passphrase = keep the current one, only re-wrap.
+      newPassphrase: "",
+      kdf: { memoryKib: 131072, iterations: 3, parallelism: 4 },
+    });
+    assert.equal(els.settingsOverlay.hidden, true);
+  });
+});
+
+test("saveSettings requires the current passphrase for a parameter-only change", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    await settings.openSettings();
+
+    els.settingsKdfIterations.value = "5";
+
+    await settings.saveSettings();
+
+    assert.equal(els.settingsError.textContent, "settings.errCurrentRequired");
+    // Nothing was written: the timing values are not saved either, because the
+    // dialog bails out before touching the backend.
+    const writes = invoke
+      .commands()
+      .filter(
+        (c) =>
+          c !== "diary_path" && c !== "get_settings" && c !== "get_vault_kdf",
+      );
+    assert.deepEqual(writes, []);
+  });
+});
+
+test("saveSettings skips the vault when the KDF inputs are unchanged", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    await settings.openSettings();
+
+    // Same values as the vault reports, no passphrase typed.
+    await settings.saveSettings();
+
+    assert.equal(invoke.commands().includes("change_passphrase"), false);
+    assert.equal(els.settingsOverlay.hidden, true);
   });
 });
 
@@ -580,7 +634,7 @@ test("saveSettings reports a backend failure and keeps the dialog open", async (
       assert.equal(els.settingsOverlay.hidden, false);
       assert.equal(
         els.settingsError.textContent,
-        "settings.errSave(message=disk full)"
+        "settings.errSave(message=disk full)",
       );
       assert.equal(els.settingsSave.disabled, false);
     },
@@ -590,7 +644,7 @@ test("saveSettings reports a backend failure and keeps the dialog open", async (
           throw "disk full";
         },
       },
-    }
+    },
   );
 });
 
@@ -606,7 +660,7 @@ test("saveSettings re-enables the save button after a failure", async () => {
           throw "nope";
         },
       },
-    }
+    },
   );
 });
 

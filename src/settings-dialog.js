@@ -40,6 +40,14 @@ const DEFAULT_AUTOSAVE_DELAY_CHOICES = [200, 400, 800, 1500, 3000];
 export function createSettingsDialog(deps) {
   const { els } = deps;
 
+  /**
+   * The Argon2id parameters currently recorded in the vault, as last read from
+   * the backend. Used to tell whether the advanced inputs were actually edited,
+   * so a parameter-only change is not silently dropped just because the
+   * passphrase fields are empty.
+   */
+  let vaultKdf = null;
+
   /** Whether the settings dialog is open. */
   function isSettingsOpen() {
     return !els.settingsOverlay.hidden;
@@ -74,6 +82,9 @@ export function createSettingsDialog(deps) {
 
   /** Show the Argon2id parameters currently recorded in the vault. */
   function renderVaultKdf(params) {
+    // Remember what the vault holds so `saveSettings` can detect edits.
+    vaultKdf = params ?? null;
+
     if (!params) {
       els.vaultKdf.textContent = deps.t("settings.vaultKdfLegacy");
       return;
@@ -100,6 +111,32 @@ export function createSettingsDialog(deps) {
       iterations: Number(els.settingsKdfIterations.value),
       parallelism: Number(els.settingsKdfParallelism.value),
     };
+  }
+
+  /**
+   * Whether the advanced inputs differ from the parameters in the vault.
+   *
+   * Returns `false` when there is nothing to compare against: either the vault
+   * is legacy (`vaultKdf === null`) or the fields are blank/non-numeric because
+   * the dialog was never populated. In both cases the inputs carry no intent,
+   * so a timing-only save must not be turned into a passphrase prompt. When a
+   * passphrase change *is* requested, `saveSettings` still rejects NaN values
+   * before invoking the backend.
+   */
+  function kdfChanged(kdf) {
+    if (!vaultKdf) return false;
+    if (
+      !Number.isFinite(kdf.memoryKib) ||
+      !Number.isFinite(kdf.iterations) ||
+      !Number.isFinite(kdf.parallelism)
+    ) {
+      return false;
+    }
+    return (
+      kdf.memoryKib !== vaultKdf.memoryKib ||
+      kdf.iterations !== vaultKdf.iterations ||
+      kdf.parallelism !== vaultKdf.parallelism
+    );
   }
 
   /** Show the folder the diary is stored in. */
@@ -205,7 +242,16 @@ export function createSettingsDialog(deps) {
     const confirm = els.settingsNewPassConfirm.value;
     const wantsPassChange = current !== "" || next !== "" || confirm !== "";
 
-    if (wantsPassChange) {
+    // Editing the Argon2id parameters is a vault change of its own: it re-wraps
+    // the diary key, so it needs the current passphrase just like a passphrase
+    // change does. Detecting it separately is what makes a parameter-only edit
+    // work — previously it was skipped whenever the passphrase fields were
+    // empty, so the new values were never sent to the backend.
+    const kdf = readSettingsKdf();
+    const wantsKdfChange = kdfChanged(kdf);
+    const wantsVaultChange = wantsPassChange || wantsKdfChange;
+
+    if (wantsVaultChange) {
       if (!current) {
         els.settingsError.textContent = deps.t("settings.errCurrentRequired");
         return;
@@ -226,8 +272,7 @@ export function createSettingsDialog(deps) {
       await deps.invoke("set_autosave_delay", { ms: delayMs });
       deps.setAutosaveDelay(delayMs);
 
-      if (wantsPassChange) {
-        const kdf = readSettingsKdf();
+      if (wantsVaultChange) {
         if (
           !Number.isFinite(kdf.memoryKib) ||
           !Number.isFinite(kdf.iterations) ||
@@ -236,6 +281,8 @@ export function createSettingsDialog(deps) {
           els.settingsError.textContent = deps.t("lock.errKdfNaN");
           return;
         }
+        // An empty `newPassphrase` tells the backend to keep the current
+        // passphrase and only re-wrap with the new parameters.
         await deps.invoke("change_passphrase", {
           currentPassphrase: current,
           newPassphrase: next,
