@@ -126,6 +126,10 @@ export function initEventWiring(deps) {
   // fires `change` from user interaction. The calendar below is the real UI.
   on(els.dateLabel, "click", deps.toggleCalendar);
 
+  // Phone layout only: the back button returns from the editor layer to the
+  // list layer. Optional so an older DOM still wires up.
+  if (els.backToList) on(els.backToList, "click", deps.showListLayer);
+
   on(els.prevDay, "click", () =>
     deps.selectDate(deps.shiftDate(deps.getCurrentDate(), -1))
   );

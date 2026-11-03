@@ -230,23 +230,37 @@ async fn set_autosave_delay(app: tauri::AppHandle, ms: u32) -> Result<(), String
 /// Open a native folder picker and return the chosen path.
 ///
 /// Returns `None` when the user cancels.
+///
+/// Mobile has no folder picker: Android and iOS use scoped storage, and
+/// `tauri-plugin-dialog` only exposes `pick_file` there. The app still needs a
+/// directory to start, so on mobile this returns the app's private data
+/// directory instead of asking the user.
 #[tauri::command]
 async fn pick_diary_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    #[cfg(mobile)]
+    {
+        let dir = default_diary_dir(&app)?;
+        Ok(Some(dir.to_string_lossy().to_string()))
+    }
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title("選擇日記儲存資料夾")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
 
-    let picked = rx
-        .recv()
-        .map_err(|e| format!("Folder picker failed: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.dialog()
+            .file()
+            .set_title("選擇日記儲存資料夾")
+            .pick_folder(move |folder| {
+                let _ = tx.send(folder);
+            });
 
-    Ok(picked.map(|p| p.to_string()))
+        let picked = rx
+            .recv()
+            .map_err(|e| format!("Folder picker failed: {e}"))?;
+
+        Ok(picked.map(|p| p.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -665,23 +679,35 @@ async fn export_broken_entry(
 /// Open a native folder picker for the import source and return its path.
 ///
 /// Returns `None` when the user cancels.
+///
+/// Importing from a folder is a desktop-only feature: mobile has no folder
+/// picker, so the command reports that instead of silently returning `None`.
 #[tauri::command]
 async fn pick_import_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Importing from a folder is not supported on mobile".to_string())
+    }
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title("選擇要匯入的資料夾")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
 
-    let picked = rx
-        .recv()
-        .map_err(|e| format!("Folder picker failed: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.dialog()
+            .file()
+            .set_title("選擇要匯入的資料夾")
+            .pick_folder(move |folder| {
+                let _ = tx.send(folder);
+            });
 
-    Ok(picked.map(|p| p.to_string()))
+        let picked = rx
+            .recv()
+            .map_err(|e| format!("Folder picker failed: {e}"))?;
+
+        Ok(picked.map(|p| p.to_string()))
+    }
 }
 
 /// Inspect a folder of `YYYY-MM-DD.txt` files without writing anything.
@@ -844,6 +870,10 @@ async fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
 /// Rebuilding the submenu with [`PredefinedMenuItem`] gives each item a real
 /// action — the predefined variants forward to the focused webview's own editing
 /// commands, so undo/redo/cut/copy/paste behave exactly as they do in a browser.
+///
+/// Desktop only: `tauri::menu` is gated behind `#[cfg(desktop)]`, and mobile has
+/// no menu bar to attach this to.
+#[cfg(desktop)]
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
 
@@ -862,10 +892,16 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(SharedSession::default())
-        .menu(build_menu)
+        .manage(SharedSession::default());
+
+    // The menu is desktop-only: `tauri::menu` does not exist on mobile, and
+    // there is no menu bar to attach it to.
+    #[cfg(desktop)]
+    let builder = builder.menu(build_menu);
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_settings,
             set_diary_dir,

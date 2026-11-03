@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` lets the app paint under the notch / gesture bar;
+         the safe-area insets are then re-applied as padding in styles.css. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Fly Diary</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
@@ -137,6 +139,16 @@
 
         <main class="editor">
             <header class="editor-header">
+                <!-- Phone-only: returns from the editor layer to the list layer.
+                     Hidden on wider viewports, where both panes are visible at
+                     once and there is nothing to go back to. -->
+                <button id="back-to-list" class="btn-back" type="button" data-i18n="editor.backToList"
+                    data-i18n-title="editor.backToListTitle" title="回到日記列表" hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 5l-7 7 7 7" />
+                    </svg>
+                    <span data-i18n="editor.backToList">列表</span>
+                </button>
                 <div class="date-nav">
                     <button id="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
                         data-i18n-aria-label="editor.prevDay" title="前一天 (Alt+←)" aria-label="前一天">
@@ -166,7 +178,10 @@
                     </button>
                 </div>
                 <div class="status">
-                    <span id="status" class="status-text"></span>
+                    <!-- `aria-live` so the save / load messages are still
+                         announced when the text is visually hidden on a narrow
+                         window (see the max-width: 400px block in styles.css). -->
+                    <span id="status" class="status-text" role="status" aria-live="polite"></span>
                     <!-- An entry that already has content opens read-only, so a
                          stray keystroke cannot rewrite a finished page. Clicking
                          this swaps the editor into its writable state; the button

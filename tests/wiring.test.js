@@ -82,6 +82,7 @@ const ELEMENT_IDS = [
   "title",
   "content",
   "dateLabel",
+  "backToList",
   "prevDay",
   "nextDay",
   "newToday",
@@ -173,6 +174,7 @@ function harness(overrides = {}) {
     isCalendarOpen: () => false,
     closeCalendar: spy("closeCalendar"),
     selectDate: spy("selectDate"),
+    showListLayer: spy("showListLayer"),
     deleteCurrent: spy("deleteCurrent"),
     toggleFavourite: spy("toggleFavourite"),
     unlockEntryForEditing: spy("unlockEntryForEditing"),
@@ -923,6 +925,33 @@ test("the cancel-workspace button closes the picker", () => {
     h.els.cancelWorkspace.dispatch("click");
     assert.deepEqual(h.names(), ["cancelWorkspacePicker"]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Phone layers
+// ---------------------------------------------------------------------------
+//
+// On a phone the app is split into a list layer and an editor layer. The back
+// button is the only way out of the editor, so it must reach `showListLayer`
+// and nothing else.
+
+test("the back button returns to the list layer", () => {
+  withHarness((h) => {
+    h.els.backToList.dispatch("click");
+    assert.deepEqual(h.names(), ["showListLayer"]);
+  });
+});
+
+test("the back button is optional so an older DOM still wires up", () => {
+  // `initEventWiring` reads `els.backToList` behind a guard, so a DOM that
+  // predates the phone layout must still wire up without throwing.
+  const h = harness();
+  try {
+    delete h.els.backToList;
+    assert.doesNotThrow(() => initEventWiring(h.deps));
+  } finally {
+    h.restore();
+  }
 });
 
 // ---------------------------------------------------------------------------

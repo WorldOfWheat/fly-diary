@@ -1057,6 +1057,25 @@ function brokenEntryFor(date) {
 }
 
 /** Load the entry for `date` into the editor. */
+// ---------------------------------------------------------------------------
+// Phone layers
+// ---------------------------------------------------------------------------
+//
+// On a phone-sized viewport the app is split into two layers: the list (date
+// picker, search, entry list) and the editor. Only one is on screen at a time.
+// The CSS keys off `data-layer` on `.app`; these helpers are the only writers.
+// On wider viewports the attribute is ignored, so both panes stay visible.
+
+/** Show the list layer. The editor is hidden until a date is picked. */
+function showListLayer() {
+  if (els.app) els.app.dataset.layer = "list";
+}
+
+/** Show the editor layer, filling the window on a phone. */
+function showEditorLayer() {
+  if (els.app) els.app.dataset.layer = "editor";
+}
+
 async function selectDate(date) {
   // Flush any pending save for the previous date before switching.
   if (saveTimer) {
@@ -1064,6 +1083,10 @@ async function selectDate(date) {
     saveTimer = null;
     await saveNow();
   }
+
+  // Picking a date is the phone's "open this entry" gesture, so it moves to the
+  // editor layer. On a wide viewport the attribute has no effect.
+  showEditorLayer();
 
   currentDate = date;
   els.datePicker.value = date;
@@ -1513,6 +1536,11 @@ async function enterApp() {
   els.lockScreen.hidden = true;
   els.app.hidden = false;
 
+  // On a phone the first screen is the list: the user picks a date or searches,
+  // and only then does the editor take over. On a wide viewport this attribute
+  // is ignored and both panes are visible.
+  showListLayer();
+
   // The window is created with `contentProtected: true`, so the lock screen is
   // covered too. Re-assert it here in case the workspace picker turned it off.
   setScreenshotProtection(true);
@@ -1580,6 +1608,7 @@ function wireEvents() {
     scheduleSave,
     updateWordCount,
     selectDate,
+    showListLayer,
     deleteCurrent,
     toggleFavourite,
     unlockEntryForEditing,
