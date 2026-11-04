@@ -81,6 +81,15 @@ function blobToBase64(blob) {
   });
 }
 
+function base64ToBytes(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 /** Best-effort MIME for files from Linux drag/drop, where `type` is often empty. */
 export function imageTypeForFile(file) {
   if (file?.type?.startsWith("image/")) return file.type;
@@ -573,6 +582,49 @@ export function createAttachmentGallery(deps) {
     setLocalStatus("");
   }
 
+  /**
+   * Add images the OS dropped as filesystem paths.
+   *
+   * Native drag-drop hands the webview paths, not `File` objects (and on Linux
+   * `dataTransfer.files` is often empty). The backend reads the bytes; wrapping
+   * them in `File` objects here means the drop goes through exactly the same
+   * resize/EXIF-stripping/encrypt path as the file picker.
+   */
+  async function addPaths(paths) {
+    if (!editable()) return;
+    const list = Array.from(paths || []);
+    if (list.length === 0) return;
+
+    let dropped;
+    try {
+      dropped = await deps.invoke("read_dropped_images", { paths: list });
+    } catch (err) {
+      console.error("read_dropped_images failed:", err);
+      deps.setStatus?.(deps.t("attachments.failed", { n: list.length }));
+      return;
+    }
+
+    const files = [];
+    for (const item of dropped || []) {
+      try {
+        const name = item.name || "image";
+        files.push(
+          new File([base64ToBytes(item.data)], name, {
+            type: imageTypeForFile({ name }),
+          })
+        );
+      } catch (err) {
+        console.error("Could not read a dropped image:", err);
+      }
+    }
+
+    if (files.length === 0) {
+      deps.setStatus?.(deps.t("attachments.failed", { n: list.length }));
+      return;
+    }
+    await addFiles(files);
+  }
+
   async function persistOrder(previous) {
     try {
       await deps.invoke("reorder_attachments", {
@@ -720,6 +772,7 @@ export function createAttachmentGallery(deps) {
     pickFile,
     canEdit: () => editable(),
     addFiles,
+    addPaths,
     remove,
     move,
     moveTo,

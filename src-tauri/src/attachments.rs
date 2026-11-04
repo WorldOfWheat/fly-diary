@@ -36,6 +36,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::UNIX_EPOCH;
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 use rand::RngCore;
@@ -66,6 +68,13 @@ const ATTACHMENT_AAD_LABEL: &[u8] = b"fly-diary/attachment";
 /// upload, so this is a defence against a buggy or malicious client, not the
 /// normal file-size limit.
 pub const MAX_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
+
+/// Largest original file accepted from a native drag-drop path. Mirrors the
+/// frontend's `MAX_INPUT_BYTES`; the image is resized before it is stored.
+pub const MAX_DROPPED_FILE_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Maximum number of files accepted in a single native drop.
+pub const MAX_DROPPED_FILES: usize = 20;
 
 /// Maximum number of images per day.
 pub const MAX_ATTACHMENTS_PER_DAY: usize = 200;
@@ -108,6 +117,59 @@ pub struct AttachmentData {
     pub id: String,
     pub mime: String,
     pub data: String,
+}
+
+/// A file read from a path reported by the OS drag-drop handler.
+///
+/// The frontend needs the original bytes (not a path) so the dropped image goes
+/// through the same canvas resize/EXIF-stripping pipeline as one chosen with
+/// the file picker. Base64 keeps the IPC boundary uniform with the other image
+/// commands.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DroppedImage {
+    pub name: String,
+    pub data: String,
+}
+
+/// Read files the OS handed us as paths.
+///
+/// Native drag-drop reports filesystem paths instead of `File` objects. The
+/// webview cannot read those paths itself, so the backend reads them here and
+/// returns base64. Only regular files within the same size limit as the file
+/// picker are accepted; the frontend still validates the image format.
+pub fn read_dropped_images(paths: &[String]) -> Result<Vec<DroppedImage>, String> {
+    if paths.len() > MAX_DROPPED_FILES {
+        return Err(format!(
+            "Too many files dropped (at most {MAX_DROPPED_FILES})"
+        ));
+    }
+
+    let mut images = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path = Path::new(path);
+        let metadata = fs::metadata(path)
+            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(format!("{} is not a file", path.display()));
+        }
+        if metadata.len() > MAX_DROPPED_FILE_BYTES {
+            return Err(format!("{} is larger than 20 MB", path.display()));
+        }
+
+        let bytes = fs::read(path)
+            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("image")
+            .to_string();
+        images.push(DroppedImage {
+            name,
+            data: B64.encode(bytes),
+        });
+    }
+    Ok(images)
 }
 
 /// An attachment directory with no matching diary entry.
@@ -893,6 +955,39 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    #[test]
+    fn dropped_files_are_read_as_base64() {
+        let dir = temp_dir("dropped-file");
+        let path = dir.join("photo.png");
+        fs::write(&path, PNG).unwrap();
+
+        let images = read_dropped_images(&[path.to_string_lossy().to_string()]).unwrap();
+
+        assert_eq!(images.len(), 1);
+        assert_eq!(images[0].name, "photo.png");
+        assert_eq!(B64.decode(&images[0].data).unwrap(), PNG);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropped_directories_are_rejected() {
+        let dir = temp_dir("dropped-dir");
+
+        let error = read_dropped_images(&[dir.to_string_lossy().to_string()]).unwrap_err();
+
+        assert!(error.contains("is not a file"), "{error}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropping_too_many_files_is_rejected_before_reading_them() {
+        let paths = vec!["/nonexistent".to_string(); MAX_DROPPED_FILES + 1];
+
+        let error = read_dropped_images(&paths).unwrap_err();
+
+        assert!(error.contains("Too many files"), "{error}");
     }
 
     #[test]

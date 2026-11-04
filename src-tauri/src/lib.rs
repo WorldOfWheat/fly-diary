@@ -10,7 +10,7 @@ mod xml;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use attachments::{AttachmentData, AttachmentMeta, OrphanAttachment};
+use attachments::{AttachmentData, AttachmentMeta, DroppedImage, OrphanAttachment};
 use serde::{Deserialize, Serialize};
 use storage::{BrokenEntry, Entry, EntryMeta};
 use tauri::Manager;
@@ -605,6 +605,20 @@ async fn get_attachment(
     .await
 }
 
+/// Read files the OS dropped onto the window.
+///
+/// Tauri's native drag-drop handler reports paths, not `File` objects. The
+/// webview cannot open arbitrary filesystem paths, so the backend reads them
+/// and returns base64 that the gallery feeds through its normal resize and
+/// encryption pipeline.
+#[tauri::command]
+async fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, String> {
+    blocking("Read dropped images", move || {
+        attachments::read_dropped_images(&paths)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn delete_attachment(
     app: tauri::AppHandle,
@@ -1040,6 +1054,7 @@ pub fn run() {
             save_attachment,
             list_attachments,
             get_attachment,
+            read_dropped_images,
             delete_attachment,
             reorder_attachments,
             list_orphan_attachments,

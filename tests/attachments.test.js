@@ -250,6 +250,81 @@ test("adding files flushes text, uploads, and refreshes the sidebar", async () =
   }
 });
 
+test("addPaths reads native drop paths before running the normal upload pipeline", async () => {
+  const saved = {
+    id: "d".repeat(32),
+    mime: "image/png",
+    width: 10,
+    height: 10,
+    size: 9,
+    missing: false,
+  };
+  const ctx = setup({
+    invokeTable: {
+      read_dropped_images: [
+        { name: "drop.png", data: Buffer.from("png-bytes").toString("base64") },
+      ],
+      list_attachments: [],
+      save_attachment: saved,
+    },
+  });
+  const prepareFile = spy(async () => ({
+    mime: "image/png",
+    data: "eA==",
+    width: 10,
+    height: 10,
+  }));
+  ctx.gallery = createAttachmentGallery({
+    els: ctx.els,
+    invoke: ctx.invoke,
+    t: ctx.t,
+    setStatus: ctx.setStatus,
+    confirm: () => true,
+    canEdit: () => true,
+    isLocked: () => false,
+    flushText: ctx.flushText,
+    refreshList: ctx.refreshList,
+    prepareFile,
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    await ctx.gallery.addPaths(["/tmp/drop.png"]);
+
+    assert.deepEqual(ctx.invoke.argsOf("read_dropped_images"), {
+      paths: ["/tmp/drop.png"],
+    });
+    assert.equal(ctx.invoke.argsOf("save_attachment").mime, "image/png");
+    assert.equal(prepareFile.args()[0][0].name, "drop.png");
+    assert.equal(prepareFile.args()[0][0].type, "image/png");
+    assert.deepEqual(ctx.gallery.ids(), [saved.id]);
+  } finally {
+    ctx.restore();
+  }
+});
+
+test("addPaths reports a failure when the dropped paths cannot be read", async () => {
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      read_dropped_images: () => {
+        throw new Error("missing file");
+      },
+    },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    await ctx.gallery.addPaths(["/tmp/gone.png"]);
+
+    assert.equal(ctx.invoke.commands().includes("save_attachment"), false);
+    assert.equal(ctx.setStatus.count(), 1);
+    assert.match(ctx.setStatus.args()[0][0], /attachments\.failed/);
+  } finally {
+    ctx.restore();
+  }
+});
+
 test("read-only entries hide all editing controls", async () => {
   const ctx = setup({
     canEdit: false,

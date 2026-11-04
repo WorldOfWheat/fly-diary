@@ -27,6 +27,7 @@ import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
 import { createAttachmentGallery } from "./attachments.js";
+import { createNativeFileDrop } from "./native-drop.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -166,6 +167,8 @@ let settingsDialog;
 let lockScreen;
 /** @type {ReturnType<typeof createAttachmentGallery>} */
 let attachmentGallery;
+/** @type {ReturnType<typeof createNativeFileDrop>} */
+let nativeFileDrop;
 
 // ---------------------------------------------------------------------------
 // Status / word count
@@ -1482,6 +1485,23 @@ function initAutoLock() {
 // defined. The order matters only in that `lockScreen` is built last: it is the
 // one that closes over the other controllers.
 
+/**
+ * Attach images the OS dropped as filesystem paths.
+ *
+ * Native drag-drop reports paths instead of `File` objects. A normal read-only
+ * entry unlocks on an explicit drop, matching paste and the HTML5 drop path; a
+ * broken entry stays locked because its contents are unknown.
+ */
+function dropAttachmentPaths(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  if (!currentDate || lockedDate) {
+    setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
+    return;
+  }
+  if (readOnlyEntry) unlockEntryForEditing();
+  attachmentGallery.addPaths(paths);
+}
+
 function createControllers() {
   calendar = createCalendar({
     els,
@@ -1535,6 +1555,13 @@ function createControllers() {
     flushText: saveNow,
     refreshList,
     onEntryChanged: syncHeaderActions,
+  });
+
+  nativeFileDrop = createNativeFileDrop({
+    getCurrentWebview: () => window.__TAURI__?.webview?.getCurrentWebview?.(),
+    editor: els.editor,
+    canDrop: () => attachmentGallery.canEdit(),
+    onDrop: dropAttachmentPaths,
   });
 
   lockScreen = createLockScreen({
@@ -1729,6 +1756,12 @@ async function init() {
   // the wiring only reads state lazily through the callbacks, so it is safe to
   // attach before the settings have loaded.
   wireEvents();
+
+  // Native drag-drop is the reliable source of dropped file paths. The HTML5
+  // handlers remain as a fallback for webviews that still populate File objects.
+  nativeFileDrop.start().catch((err) => {
+    console.error("native drag-drop failed:", err);
+  });
 
   // Pick the language first: every other render below reads translated
   // strings, so the dictionaries have to be active before anything is drawn.

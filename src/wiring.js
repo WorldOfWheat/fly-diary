@@ -136,11 +136,12 @@ export function initEventWiring(deps) {
   // Stop the webview from navigating to dropped files
   // -------------------------------------------------------------------------
   //
-  // With Tauri's native drag-drop handler disabled, a file dropped on the page
-  // is handled by the webview itself. Unless both `dragover` and `drop` call
-  // `preventDefault`, WebKitGTK opens the image (file:// navigation) instead of
-  // letting the editor receive it. Guard at document level so dropping outside
-  // the editor cannot navigate away either.
+  // Desktop builds handle OS file drops through Tauri's native events (see
+  // native-drop.js), because WebKitGTK often leaves `dataTransfer.files` empty.
+  // These HTML5 handlers remain for webviews that still deliver them; unless
+  // both `dragover` and `drop` call `preventDefault`, WebKitGTK opens the image
+  // (file:// navigation) instead of letting the editor receive it. Guard at
+  // document level so dropping outside the editor cannot navigate away either.
   const guardFileNavigation = (event) => {
     if (!isFileDrag(event.dataTransfer)) return;
     event.preventDefault();

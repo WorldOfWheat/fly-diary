@@ -428,8 +428,11 @@ diary/
   WebP / JPEG / PNG，拒絕 SVG。`mime` 與 magic bytes 必須一致。
 - **加入方式**：除了「加入圖片」按鈕，也可以直接把圖片檔拖進編輯區，或把剪貼簿裡的圖片
   （例如截圖）貼上。只有真正的圖片檔會被攔截，文字貼上與相簿內部的排序拖曳不受影響。
-  Tauri 視窗設定 `dragDropEnabled: false`，否則原生拖放會攔下檔案，webview 收不到 HTML5
-  `drop` 事件。
+  桌面版的檔案拖放走 Tauri 原生事件（`onDragDropEvent`）：它提供的是**檔案路徑**，由
+  `read_dropped_images` 讀成 base64 後，再交給與檔案選擇器相同的壓縮與加密流程。
+  這是刻意的：Linux／WebKitGTK 的 HTML5 `drop` 常常只給 `text/uri-list`、`dataTransfer.files`
+  是空的，只靠前端會出現「有拖放提示、放開卻沒有加入」的情況。HTML5 handler 仍保留作為
+  其他 webview 的備援。
 - **讀取**：`list_attachments` 只解密 manifest；`get_attachment` 才逐張解密，前端延遲載入。
   剛上傳的圖片直接沿用前端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
 - **唯讀與壞檔**：唯讀模式只能看圖；按鈕新增、刪除、排序都要先「解鎖編輯」。貼上或拖放圖片
@@ -619,6 +622,7 @@ fly-diary/
 │   ├── settings-dialog.js  # 設定對話框：日記本、自動鎖定、KDF、改密碼（createSettingsDialog）
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準（createLockScreen）
 │   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
+│   ├── native-drop.js      # Tauri 原生拖放：路徑事件與編輯區 hover 判定
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
@@ -636,6 +640,7 @@ fly-diary/
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
 │   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
+│   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
 ├── src-tauri/              # Rust 後端
@@ -687,6 +692,7 @@ fly-diary/
 | `save_attachment(date, mime, data, width, height)` | 加密並儲存一張圖片（base64），附加在相簿最後                     |
 | `list_attachments(date)`                  | 依 manifest 順序列出圖片 metadata                                           |
 | `get_attachment(date, id)`                | 解密單張圖片並回傳 base64 與 MIME                                           |
+| `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                 |
 | `delete_attachment(date, id)`             | 刪除一張圖片並更新 manifest                                                 |
 | `reorder_attachments(date, ids)`          | 以新的 id 順序重寫 manifest                                                 |
 | `list_orphan_attachments()`               | 列出沒有對應日記的附件資料夾                                                |
