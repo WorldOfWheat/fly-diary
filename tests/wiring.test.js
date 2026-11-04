@@ -192,6 +192,7 @@ function harness(overrides = {}) {
     canAttachImages: () => true,
     onAttachmentBlocked: spy("onAttachmentBlocked"),
     addAttachmentFiles: spy("addAttachmentFiles"),
+    pasteImageFromClipboard: spy("pasteImageFromClipboard"),
     handleAttachmentClick: spy("handleAttachmentClick"),
     attachmentDragStart: spy("attachmentDragStart"),
     attachmentDragOver: spy("attachmentDragOver"),
@@ -462,8 +463,10 @@ test("the attachment add button and file input reach the gallery", () => {
 test("pasting an image into the editor attaches it", () => {
   withHarness((h) => {
     const file = { type: "image/png", name: "paste.png" };
-    const event = h.els.editor.dispatch("paste", {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
       clipboardData: {
+        types: ["Files"],
         items: [
           { kind: "file", type: "image/png", getAsFile: () => file },
           { kind: "string", type: "text/plain" },
@@ -476,16 +479,45 @@ test("pasting an image into the editor attaches it", () => {
   });
 });
 
-test("pasting text is left to the editor", () => {
+test("pasting text is left to the editor and never reads the native clipboard", () => {
   withHarness((h) => {
-    const event = h.els.editor.dispatch("paste", {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
       clipboardData: {
+        types: ["text/plain"],
         items: [{ kind: "string", type: "text/plain" }],
       },
     });
 
     assert.equal(event.defaultPrevented, false);
     assert.deepEqual(h.names(), []);
+    assert.equal(h.argsOf("pasteImageFromClipboard"), undefined);
+  });
+});
+
+test("a paste outside the editor is ignored even when it holds an image", () => {
+  withHarness((h) => {
+    const file = { type: "image/png", name: "paste.png" };
+    const search = h.els.search;
+    const event = h.document.dispatch("paste", {
+      target: search,
+      clipboardData: { types: ["Files"], files: [file] },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("a paste event without file objects falls back to the native clipboard", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
+      clipboardData: { types: [] },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), ["pasteImageFromClipboard"]);
   });
 });
 
@@ -561,8 +593,12 @@ test("image paste and drop are ignored while the entry is read-only", () => {
   withHarness(
     (h) => {
       const file = { type: "image/png" };
-      const paste = h.els.editor.dispatch("paste", {
-        clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
+      const paste = h.document.dispatch("paste", {
+        target: h.els.editor,
+        clipboardData: {
+          types: ["Files"],
+          items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
+        },
       });
       const drop = h.els.editor.dispatch("drop", {
         dataTransfer: { types: ["Files"], files: [file] },

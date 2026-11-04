@@ -433,6 +433,9 @@ diary/
   這是刻意的：Linux／WebKitGTK 的 HTML5 `drop` 常常只給 `text/uri-list`、`dataTransfer.files`
   是空的，只靠前端會出現「有拖放提示、放開卻沒有加入」的情況。HTML5 handler 仍保留作為
   其他 webview 的備援。
+- **貼上圖片**：貼上事件沒有帶 `File` 時，會改用 `read_clipboard_image` 從系統剪貼簿讀取圖片
+  （arboard），再走同一套壓縮流程。這補上 WebKitGTK 不把剪貼簿圖片放進 `clipboardData`
+  的情況；純文字貼上仍完全交給瀏覽器，不會被攔截。只有剪貼簿真的含圖片時才會自動解鎖唯讀日記。
 - **讀取**：`list_attachments` 只解密 manifest；`get_attachment` 才逐張解密，前端延遲載入。
   剛上傳的圖片直接沿用前端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
 - **唯讀與壞檔**：唯讀模式只能看圖；按鈕新增、刪除、排序都要先「解鎖編輯」。貼上或拖放圖片
@@ -662,6 +665,7 @@ fly-diary/
 │       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── xml.rs          # XML 序列化 / 解析
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
+│       ├── clipboard.rs    # 從系統剪貼簿讀取圖片（WebKitGTK paste 備援）
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
 ├── test.sh                 # 一次跑完兩邊測試與 coverage
 ├── package.json
@@ -693,6 +697,7 @@ fly-diary/
 | `list_attachments(date)`                  | 依 manifest 順序列出圖片 metadata                                           |
 | `get_attachment(date, id)`                | 解密單張圖片並回傳 base64 與 MIME                                           |
 | `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                 |
+| `read_clipboard_image()`                  | 從系統剪貼簿讀取圖片並轉成 PNG base64；沒有圖片回 `null`                     |
 | `delete_attachment(date, id)`             | 刪除一張圖片並更新 manifest                                                 |
 | `reorder_attachments(date, ids)`          | 以新的 id 順序重寫 manifest                                                 |
 | `list_orphan_attachments()`               | 列出沒有對應日記的附件資料夾                                                |
@@ -784,6 +789,7 @@ fly-diary/
 - 孤兒附件（整個日期資料夾沒有 XML）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免同步延遲時誤刪。舊版 App 不認識附件，用舊版刪除日記時也會留下孤兒。
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
 - 行動版沒有資料夾選擇器，也沒有資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。想在手機上使用外部資料夾或匯入 `.txt`，目前只能走桌面版。
+- Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。
 - 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
 - 平行匯入的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。

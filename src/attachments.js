@@ -90,6 +90,14 @@ function base64ToBytes(base64) {
   return bytes;
 }
 
+/** Wrap base64 image bytes in a `File` so the normal upload path can read them. */
+function imageFileFromBase64(item) {
+  const name = item?.name || "image";
+  return new File([base64ToBytes(item.data)], name, {
+    type: imageTypeForFile({ name }),
+  });
+}
+
 /** Best-effort MIME for files from Linux drag/drop, where `type` is often empty. */
 export function imageTypeForFile(file) {
   if (file?.type?.startsWith("image/")) return file.type;
@@ -607,12 +615,7 @@ export function createAttachmentGallery(deps) {
     const files = [];
     for (const item of dropped || []) {
       try {
-        const name = item.name || "image";
-        files.push(
-          new File([base64ToBytes(item.data)], name, {
-            type: imageTypeForFile({ name }),
-          })
-        );
+        files.push(imageFileFromBase64(item));
       } catch (err) {
         console.error("Could not read a dropped image:", err);
       }
@@ -623,6 +626,31 @@ export function createAttachmentGallery(deps) {
       return;
     }
     await addFiles(files);
+  }
+
+  /**
+   * Read an image from the OS clipboard and wrap it as a `File`.
+   *
+   * Returns `null` when the clipboard has no image, which is the normal case
+   * for text paste. The caller decides whether a read-only entry should be
+   * unlocked, so no upload happens here.
+   */
+  async function clipboardImage() {
+    if (!currentDate) return null;
+    let image;
+    try {
+      image = await deps.invoke("read_clipboard_image");
+    } catch (err) {
+      console.error("read_clipboard_image failed:", err);
+      return null;
+    }
+    if (!image) return null;
+    try {
+      return imageFileFromBase64(image);
+    } catch (err) {
+      console.error("Could not read the clipboard image:", err);
+      return null;
+    }
   }
 
   async function persistOrder(previous) {
@@ -773,6 +801,7 @@ export function createAttachmentGallery(deps) {
     canEdit: () => editable(),
     addFiles,
     addPaths,
+    clipboardImage,
     remove,
     move,
     moveTo,

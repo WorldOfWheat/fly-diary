@@ -325,6 +325,42 @@ test("addPaths reports a failure when the dropped paths cannot be read", async (
   }
 });
 
+test("clipboardImage asks the backend and wraps the bytes in a File", async () => {
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      read_clipboard_image: {
+        name: "clipboard.png",
+        data: Buffer.from("png-bytes").toString("base64"),
+      },
+    },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    const file = await ctx.gallery.clipboardImage();
+
+    assert.equal(file.name, "clipboard.png");
+    assert.equal(file.type, "image/png");
+    assert.equal(Buffer.from(await file.arrayBuffer()).toString(), "png-bytes");
+  } finally {
+    ctx.restore();
+  }
+});
+
+test("clipboardImage returns null when the clipboard holds no image", async () => {
+  const ctx = setup({
+    invokeTable: { list_attachments: [], read_clipboard_image: null },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    assert.equal(await ctx.gallery.clipboardImage(), null);
+  } finally {
+    ctx.restore();
+  }
+});
+
 test("read-only entries hide all editing controls", async () => {
   const ctx = setup({
     canEdit: false,

@@ -33,6 +33,11 @@ quick-xml = "0.36"
 # --- Parallel import ---
 rayon = "1"
 
+# --- Reading images from the OS clipboard (desktop only) ---
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+arboard = "3.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 # --- Disabling core dumps (Unix only) ---
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

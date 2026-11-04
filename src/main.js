@@ -1502,6 +1502,20 @@ function dropAttachmentPaths(paths) {
   attachmentGallery.addPaths(paths);
 }
 
+/**
+ * Fallback for WebKitGTK, which may omit clipboard images from `paste`.
+ *
+ * Reads the clipboard natively and only unlocks a read-only entry after an
+ * image is actually found, so normal text paste never changes the edit state.
+ */
+async function pasteImageFromClipboard() {
+  if (!currentDate || lockedDate) return;
+  const file = await attachmentGallery.clipboardImage();
+  if (!file) return;
+  if (readOnlyEntry) unlockEntryForEditing();
+  await attachmentGallery.addFiles([file]);
+}
+
 function createControllers() {
   calendar = createCalendar({
     els,
@@ -1685,6 +1699,7 @@ function wireEvents() {
       setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
     },
     addAttachmentFiles: attachmentGallery.addFiles,
+    pasteImageFromClipboard,
     handleAttachmentClick: attachmentGallery.handleClick,
     attachmentDragStart: attachmentGallery.handleDragStart,
     attachmentDragOver: attachmentGallery.handleDragOver,

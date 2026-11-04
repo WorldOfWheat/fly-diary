@@ -1,6 +1,7 @@
 // `crypto`, `storage` and `attachments` are public so the integration tests in
 // `tests/` can drive the vault lifecycle through the same API the commands use.
 pub mod attachments;
+mod clipboard;
 pub mod crypto;
 mod fsutil;
 mod settings;
@@ -11,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use attachments::{AttachmentData, AttachmentMeta, DroppedImage, OrphanAttachment};
+use clipboard::ClipboardImage;
 use serde::{Deserialize, Serialize};
 use storage::{BrokenEntry, Entry, EntryMeta};
 use tauri::Manager;
@@ -619,6 +621,16 @@ async fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, St
     .await
 }
 
+/// Read an image from the OS clipboard.
+///
+/// WebKitGTK often omits clipboard images from the HTML5 paste event. This
+/// command is only a fallback: `None` means "no image", so normal text paste is
+/// never intercepted.
+#[tauri::command]
+async fn read_clipboard_image() -> Result<Option<ClipboardImage>, String> {
+    blocking("Read clipboard image", clipboard::read_image).await
+}
+
 #[tauri::command]
 async fn delete_attachment(
     app: tauri::AppHandle,
@@ -1055,6 +1067,7 @@ pub fn run() {
             list_attachments,
             get_attachment,
             read_dropped_images,
+            read_clipboard_image,
             delete_attachment,
             reorder_attachments,
             list_orphan_attachments,

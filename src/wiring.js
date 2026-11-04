@@ -14,6 +14,7 @@
 //
 //   els                 — the lookup table from `dom.js`
 //   canAttachImages     — () => boolean
+//   pasteImageFromClipboard — () => void (native clipboard fallback)
 //   handleUnlockSubmit  — (event) => void
 //   browseForDir        — () => void
 //   openWorkspacePicker — () => void
@@ -91,6 +92,31 @@ function clipboardImages(clipboardData) {
     }
   }
   return files;
+}
+
+/**
+ * Whether the clipboard could contain an image when the paste event offered no
+ * `File`s. WebKitGTK can omit image data from the event entirely, but a normal
+ * text paste still advertises `text/plain`; that case must stay with the editor.
+ */
+function clipboardMayHoldImage(clipboardData) {
+  const types = Array.from(clipboardData?.types ?? []);
+  if (types.length === 0) return true;
+  if (types.includes("text/plain")) return false;
+  return types.some(
+    (type) =>
+      type.startsWith("image/") ||
+      type === "Files" ||
+      type === "text/uri-list"
+  );
+}
+
+/** Paste only belongs to the diary when it lands in the editor or the page. */
+function isEditorPasteTarget(els, target) {
+  if (!target) return true;
+  if (target === document.body || target === document.documentElement) return true;
+  if (target === els.editor) return true;
+  return Boolean(els.editor?.contains?.(target));
 }
 
 function droppedFiles(dataTransfer) {
@@ -221,23 +247,34 @@ export function initEventWiring(deps) {
     on(els.attachmentViewerBackdrop, "click", deps.closeAttachmentViewer);
   }
 
-  // Pasting or dropping an image anywhere in the editor attaches it to the
-  // current day. Text paste and the gallery's internal reorder drag are left
-  // alone: only real image files are intercepted.
-  if (els.editor) {
-    on(els.editor, "paste", (event) => {
-      const files = clipboardImages(event.clipboardData);
-      if (files.length === 0) return;
-      // Only an image paste belongs to this feature. Text paste must keep
-      // working normally, including in a read-only entry.
+  // Pasting an image anywhere in the editor attaches it to the current day.
+  // Listen on the document because a paste event targets whichever element has
+  // focus (the textarea, a header button, or <body>), not necessarily the
+  // editor container. Text paste and the gallery's internal reorder drag are
+  // left alone: only real image files are intercepted.
+  on(document, "paste", (event) => {
+    if (!isEditorPasteTarget(els, event.target)) return;
+
+    const files = clipboardImages(event.clipboardData);
+    if (files.length > 0) {
       event.preventDefault();
       if (!deps.canAttachImages?.()) {
         deps.onAttachmentBlocked?.(files);
         return;
       }
       deps.addAttachmentFiles(files);
-    });
+      return;
+    }
 
+    // WebKitGTK can omit clipboard images from the event entirely. Ask the
+    // backend only when the clipboard looks like it might hold an image, so a
+    // normal text paste is never delayed or intercepted.
+    if (clipboardMayHoldImage(event.clipboardData)) {
+      deps.pasteImageFromClipboard?.();
+    }
+  });
+
+  if (els.editor) {
     on(els.editor, "dragover", (event) => {
       if (!isFileDrag(event.dataTransfer)) return;
       event.preventDefault();
