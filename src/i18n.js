@@ -240,7 +240,9 @@ const zhHant = {
   "attachments.reordered": "已更新圖片順序",
   "attachments.reorderFailed": "圖片順序更新失敗",
   "attachments.loadFailed": "圖片載入失敗",
+  "attachments.blocked": "請先解鎖編輯才能加入圖片",
   "attachments.viewerTitle": "檢視圖片",
+  "attachments.viewerLabel": "檢視第 {n} 張圖片",
   "attachments.viewerAlt": "日記圖片",
   "attachments.close": "關閉",
 
@@ -537,7 +539,9 @@ const en = {
   "attachments.reordered": "Image order updated",
   "attachments.reorderFailed": "Could not update the image order",
   "attachments.loadFailed": "Could not load images",
+  "attachments.blocked": "Unlock editing before adding images",
   "attachments.viewerTitle": "View image",
+  "attachments.viewerLabel": "View image {n}",
   "attachments.viewerAlt": "Diary image",
   "attachments.close": "Close",
 

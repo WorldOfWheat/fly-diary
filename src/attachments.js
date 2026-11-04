@@ -28,6 +28,11 @@ export const WEBP_QUALITY = 0.8;
 /** Largest input file accepted before decoding. */
 export const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 
+// Keeps an unloaded thumbnail visually empty instead of making the browser
+// render the `alt` text as an "IMAGE" placeholder.
+const TRANSPARENT_PIXEL =
+  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+
 /** Scale `width`/`height` so the longest edge is at most `maxEdge`. */
 export function targetDimensions(width, height, maxEdge = MAX_LONG_EDGE) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
@@ -76,6 +81,16 @@ function blobToBase64(blob) {
   });
 }
 
+/** Best-effort MIME for files from Linux drag/drop, where `type` is often empty. */
+export function imageTypeForFile(file) {
+  if (file?.type?.startsWith("image/")) return file.type;
+  const name = String(file?.name || "").toLowerCase();
+  if (name.endsWith(".png")) return "image/png";
+  if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+  if (name.endsWith(".webp")) return "image/webp";
+  return file?.type || "";
+}
+
 /** Decode a file into something drawable, honouring EXIF orientation. */
 async function decodeImage(file) {
   if (typeof createImageBitmap === "function") {
@@ -109,7 +124,7 @@ async function decodeImage(file) {
 
 /** Decode, resize to `MAX_LONG_EDGE`, and encode as WebP (or a fallback). */
 export async function prepareImageFile(file) {
-  const type = file?.type || "";
+  const type = imageTypeForFile(file);
   if (!type.startsWith("image/") || type === "image/svg+xml") {
     throw new Error("Only raster images are supported");
   }
@@ -217,7 +232,11 @@ export function createAttachmentGallery(deps) {
 
   function markBroken(frame, node, broken) {
     frame?.classList.add("is-broken");
-    if (node) node.alt = deps.t("attachments.broken");
+    frame?.setAttribute?.("aria-label", deps.t("attachments.broken"));
+    if (node) {
+      node.alt = "";
+      node.src = TRANSPARENT_PIXEL;
+    }
     if (broken) broken.hidden = false;
   }
 
@@ -318,13 +337,22 @@ export function createAttachmentGallery(deps) {
       const frame = document.createElement("button");
       frame.type = "button";
       frame.className = "attachment-frame";
-      frame.setAttribute("aria-label", deps.t("attachments.viewerTitle"));
+      frame.setAttribute(
+        "aria-label",
+        item.missing
+          ? deps.t("attachments.broken")
+          : deps.t("attachments.viewerLabel", { n: index + 1 })
+      );
       if (item.missing) frame.classList.add("is-broken");
 
       const image = document.createElement("img");
       image.className = "attachment-thumb";
-      image.alt = deps.t("attachments.imageAlt", { n: index + 1 });
+      // The frame button carries the accessible label, so the thumbnail is
+      // decorative. An empty alt also avoids the "IMAGE" text browsers show
+      // before a src is available.
+      image.alt = "";
       image.draggable = false;
+      image.src = TRANSPARENT_PIXEL;
       const cached = imageCache.get(item.id);
       if (cached) image.src = cached;
 
@@ -381,13 +409,20 @@ export function createAttachmentGallery(deps) {
     }
     if (has("attachmentInput")) els.attachmentInput.disabled = !editable();
 
-    // Decrypt lazily as the strip scrolls. WebViews without
-    // IntersectionObserver fall back to loading the (usually small) list.
+    // Decrypt lazily as the strip scrolls, but eager-load the first screenful
+    // so a normal day's gallery never shows blank frames while waiting for the
+    // observer. WebViews without IntersectionObserver load everything.
+    const eagerLimit = 12;
+    let eager = 0;
     for (const item of items) {
       if (item.missing || imageCache.has(item.id)) continue;
       const node = imageNodes.get(item.id);
-      if (lazyObserver && node) lazyObserver.observe(node);
-      else loadImage(item);
+      if (lazyObserver && node && eager >= eagerLimit) {
+        lazyObserver.observe(node);
+      } else {
+        eager += 1;
+        loadImage(item);
+      }
     }
   }
 
@@ -471,13 +506,19 @@ export function createAttachmentGallery(deps) {
     if (!prepared || !prepared.data || !prepared.mime) {
       throw new Error("Image preparation failed");
     }
-    return deps.invoke("save_attachment", {
+    const meta = await deps.invoke("save_attachment", {
       date,
       mime: prepared.mime,
       data: prepared.data,
       width: prepared.width || 0,
       height: prepared.height || 0,
     });
+    return {
+      meta,
+      // The compressed bytes are already in memory. Reuse them for the
+      // thumbnail instead of asking the backend to decrypt what we just wrote.
+      previewUrl: attachmentDataUrl(prepared.mime, prepared.data),
+    };
   }
 
   /** Add every selected file, reporting per-file failures. */
@@ -499,8 +540,9 @@ export function createAttachmentGallery(deps) {
       for (const file of files) {
         if (currentDate !== date) break;
         try {
-          const meta = await uploadOne(file, date);
+          const { meta, previewUrl } = await uploadOne(file, date);
           if (currentDate === date) {
+            imageCache.set(meta.id, previewUrl);
             items.push(meta);
             render();
           }
@@ -676,6 +718,7 @@ export function createAttachmentGallery(deps) {
     setReadOnly,
     refreshForLocale,
     pickFile,
+    canEdit: () => editable(),
     addFiles,
     remove,
     move,

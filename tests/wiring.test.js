@@ -79,6 +79,7 @@ const ELEMENT_IDS = [
   "kdfIterations",
   "kdfParallelism",
   "diaryDir",
+  "editor",
   "title",
   "content",
   "attachmentAdd",
@@ -146,6 +147,13 @@ function harness(overrides = {}) {
   els.listScroll.scrollTop = 0;
   els.calendar.contains = () => false;
   els.dateLabel.contains = () => false;
+  const editorClasses = new Set();
+  els.editor.classList = {
+    add: (name) => editorClasses.add(name),
+    remove: (name) => editorClasses.delete(name),
+    contains: (name) => editorClasses.has(name),
+  };
+  els.editor.contains = () => false;
 
   // Ctrl+T forwards to a real click, so the button needs a `click()` method
   // that dispatches through the same listener table.
@@ -181,6 +189,8 @@ function harness(overrides = {}) {
     selectDate: spy("selectDate"),
     showListLayer: spy("showListLayer"),
     pickAttachment: spy("pickAttachment"),
+    canAttachImages: () => true,
+    onAttachmentBlocked: spy("onAttachmentBlocked"),
     addAttachmentFiles: spy("addAttachmentFiles"),
     handleAttachmentClick: spy("handleAttachmentClick"),
     attachmentDragStart: spy("attachmentDragStart"),
@@ -447,6 +457,125 @@ test("the attachment add button and file input reach the gallery", () => {
     h.els.attachmentInput.dispatch("change", { target: h.els.attachmentInput });
     assert.deepEqual(h.argsOf("addAttachmentFiles"), [files]);
   });
+});
+
+test("pasting an image into the editor attaches it", () => {
+  withHarness((h) => {
+    const file = { type: "image/png", name: "paste.png" };
+    const event = h.els.editor.dispatch("paste", {
+      clipboardData: {
+        items: [
+          { kind: "file", type: "image/png", getAsFile: () => file },
+          { kind: "string", type: "text/plain" },
+        ],
+      },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [[file]]);
+  });
+});
+
+test("pasting text is left to the editor", () => {
+  withHarness((h) => {
+    const event = h.els.editor.dispatch("paste", {
+      clipboardData: {
+        items: [{ kind: "string", type: "text/plain" }],
+      },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("dropping image files on the editor attaches them and shows a drop state", () => {
+  withHarness((h) => {
+    const file = { type: "image/webp", name: "drop.webp" };
+    const over = h.els.editor.dispatch("dragover", {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+    assert.equal(over.defaultPrevented, true);
+    assert.equal(h.els.editor.classList.contains("is-dragover"), true);
+
+    const drop = h.els.editor.dispatch("drop", {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+    assert.equal(drop.defaultPrevented, true);
+    assert.equal(h.els.editor.classList.contains("is-dragover"), false);
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [[file]]);
+  });
+});
+
+test("a uri-list file drag is prevented at the document level", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("dragover", {
+      dataTransfer: { types: ["text/uri-list"], files: [] },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("dropping a file outside the editor is prevented, not opened", () => {
+  withHarness((h) => {
+    const file = { type: "", name: "outside.png" };
+    const event = h.document.dispatch("drop", {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("a dropped file with an empty MIME type still reaches the gallery", () => {
+  withHarness((h) => {
+    const file = { type: "", name: "linux-drop.png" };
+    const event = h.els.editor.dispatch("drop", {
+      dataTransfer: { types: ["text/uri-list"], files: [file] },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [[file]]);
+  });
+});
+
+test("a text drag is not treated as a file drop", () => {
+  withHarness((h) => {
+    const over = h.els.editor.dispatch("dragover", {
+      dataTransfer: { types: ["text/plain"], files: [] },
+    });
+    const drop = h.els.editor.dispatch("drop", {
+      dataTransfer: { types: ["text/plain"], files: [] },
+    });
+
+    assert.equal(over.defaultPrevented, false);
+    assert.equal(drop.defaultPrevented, false);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("image paste and drop are ignored while the entry is read-only", () => {
+  withHarness(
+    (h) => {
+      const file = { type: "image/png" };
+      const paste = h.els.editor.dispatch("paste", {
+        clipboardData: { items: [{ kind: "file", type: "image/png", getAsFile: () => file }] },
+      });
+      const drop = h.els.editor.dispatch("drop", {
+        dataTransfer: { types: ["Files"], files: [file] },
+      });
+
+      assert.equal(paste.defaultPrevented, true);
+      assert.equal(drop.defaultPrevented, true);
+      assert.deepEqual(h.names(), ["onAttachmentBlocked", "onAttachmentBlocked"]);
+      assert.deepEqual(h.argsOf("onAttachmentBlocked"), [[file]]);
+      assert.equal(h.argsOf("addAttachmentFiles"), undefined);
+    },
+    { canAttachImages: () => false }
+  );
 });
 
 test("Escape closes the statistics dialog before anything else", () => {

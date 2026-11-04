@@ -849,6 +849,17 @@ summary:focus-visible {
   background: var(--panel);
 }
 
+/* Shown while a file is dragged anywhere over the editor. The class is only
+   added for real file drags, not for the gallery's internal reorder drag. */
+.editor.is-dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.editor.is-dragover #content {
+  background: var(--accent-wash);
+}
+
 /* The header holds the date navigator and the status cluster. Both are
    intrinsically wide (a nowrap date pill plus four buttons), and neither can
    shrink without losing content, so the row is allowed to wrap instead of

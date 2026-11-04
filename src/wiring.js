@@ -13,6 +13,7 @@
 // `deps` shape (all functions unless noted):
 //
 //   els                 — the lookup table from `dom.js`
+//   canAttachImages     — () => boolean
 //   handleUnlockSubmit  — (event) => void
 //   browseForDir        — () => void
 //   openWorkspacePicker — () => void
@@ -69,6 +70,58 @@
  * function that removes the listeners again; the app never uses it, but tests
  * do, and it makes the module honest about what it owns.
  */
+function clipboardImages(clipboardData) {
+  const files = [];
+  const items = clipboardData?.items;
+  if (items) {
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile?.();
+      const type = item.type || file?.type || "";
+      if (!type.startsWith("image/")) continue;
+      if (file) files.push(file);
+    }
+  }
+  const fallback = clipboardData?.files;
+  if (files.length === 0 && fallback) {
+    for (let i = 0; i < fallback.length; i += 1) {
+      const file = fallback[i];
+      if (file.type?.startsWith("image/")) files.push(file);
+    }
+  }
+  return files;
+}
+
+function droppedFiles(dataTransfer) {
+  const files = [];
+  const list = dataTransfer?.files;
+  if (!list) return files;
+  for (let i = 0; i < list.length; i += 1) files.push(list[i]);
+  return files;
+}
+
+/**
+ * True for anything that looks like an operating-system file drag.
+ *
+ * Linux/WebKitGTK often advertises `text/uri-list` instead of `Files`, and may
+ * only populate `dataTransfer.files` on the drop event. If we do not prevent
+ * the default on `dragover`/`drop`, the webview navigates to the dropped file
+ * and shows the image instead of letting the app handle it.
+ */
+function isFileDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  if ((dataTransfer.files?.length ?? 0) > 0) return true;
+  const items = dataTransfer.items;
+  if (items) {
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i]?.kind === "file") return true;
+    }
+  }
+  const types = Array.from(dataTransfer.types ?? []);
+  return types.includes("Files") || types.includes("text/uri-list");
+}
+
 export function initEventWiring(deps) {
   const { els } = deps;
   const cleanups = [];
@@ -78,6 +131,27 @@ export function initEventWiring(deps) {
     target.addEventListener(type, handler, options);
     cleanups.push(() => target.removeEventListener(type, handler, options));
   };
+
+  // -------------------------------------------------------------------------
+  // Stop the webview from navigating to dropped files
+  // -------------------------------------------------------------------------
+  //
+  // With Tauri's native drag-drop handler disabled, a file dropped on the page
+  // is handled by the webview itself. Unless both `dragover` and `drop` call
+  // `preventDefault`, WebKitGTK opens the image (file:// navigation) instead of
+  // letting the editor receive it. Guard at document level so dropping outside
+  // the editor cannot navigate away either.
+  const guardFileNavigation = (event) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (event.type === "drop") {
+      els.editor?.classList?.remove("is-dragover");
+    }
+  };
+  on(document, "dragenter", guardFileNavigation, true);
+  on(document, "dragover", guardFileNavigation, true);
+  on(document, "drop", guardFileNavigation, true);
 
   // -------------------------------------------------------------------------
   // Lock screen
@@ -144,6 +218,57 @@ export function initEventWiring(deps) {
   }
   if (els.attachmentViewerBackdrop) {
     on(els.attachmentViewerBackdrop, "click", deps.closeAttachmentViewer);
+  }
+
+  // Pasting or dropping an image anywhere in the editor attaches it to the
+  // current day. Text paste and the gallery's internal reorder drag are left
+  // alone: only real image files are intercepted.
+  if (els.editor) {
+    on(els.editor, "paste", (event) => {
+      const files = clipboardImages(event.clipboardData);
+      if (files.length === 0) return;
+      // Only an image paste belongs to this feature. Text paste must keep
+      // working normally, including in a read-only entry.
+      event.preventDefault();
+      if (!deps.canAttachImages?.()) {
+        deps.onAttachmentBlocked?.(files);
+        return;
+      }
+      deps.addAttachmentFiles(files);
+    });
+
+    on(els.editor, "dragover", (event) => {
+      if (!isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      if (!deps.canAttachImages?.()) {
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      els.editor.classList?.add("is-dragover");
+    });
+
+    on(els.editor, "dragleave", (event) => {
+      if (els.editor.contains?.(event.relatedTarget)) return;
+      els.editor.classList?.remove("is-dragover");
+    });
+
+    on(els.editor, "drop", (event) => {
+      // Prevent the default first. If this is a `text/uri-list` drag without
+      // File objects, there is nothing to attach yet, but the webview must not
+      // navigate to the dropped file.
+      if (!isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      els.editor.classList?.remove("is-dragover");
+
+      const files = droppedFiles(event.dataTransfer);
+      if (files.length === 0) return;
+      if (!deps.canAttachImages?.()) {
+        deps.onAttachmentBlocked?.(files);
+        return;
+      }
+      deps.addAttachmentFiles(files);
+    });
   }
 
   // The native input is hidden and only mirrors the selected date, so it never

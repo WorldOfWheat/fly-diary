@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import {
   attachmentDataUrl,
   createAttachmentGallery,
+  imageTypeForFile,
   MAX_INPUT_BYTES,
   prepareImageFile,
   targetDimensions,
@@ -83,6 +84,14 @@ test("targetDimensions keeps the aspect ratio and never upscales", () => {
   assert.deepEqual(targetDimensions(1000, 2000), { width: 500, height: 1000 });
   assert.deepEqual(targetDimensions(800, 600), { width: 800, height: 600 });
   assert.deepEqual(targetDimensions(0, 600), { width: 0, height: 0 });
+});
+
+test("imageTypeForFile infers MIME from the name when the OS omits it", () => {
+  assert.equal(imageTypeForFile({ type: "", name: "photo.PNG" }), "image/png");
+  assert.equal(imageTypeForFile({ type: "", name: "photo.jpeg" }), "image/jpeg");
+  assert.equal(imageTypeForFile({ type: "", name: "photo.webp" }), "image/webp");
+  assert.equal(imageTypeForFile({ type: "text/plain", name: "notes.txt" }), "text/plain");
+  assert.equal(imageTypeForFile({ type: "image/gif", name: "x.bin" }), "image/gif");
 });
 
 test("attachmentDataUrl produces a usable data URL", () => {
@@ -229,6 +238,13 @@ test("adding files flushes text, uploads, and refreshes the sidebar", async () =
     assert.equal(ctx.invoke.calls.filter((c) => c.command === "save_attachment").length, 1);
     assert.equal(ctx.refreshList.count(), 1);
     assert.deepEqual(ctx.gallery.ids(), [saved.id]);
+    // The thumbnail uses the bytes we just compressed, not a second decrypt.
+    const image = ctx.els.attachmentList.children[0].children[0].children[0];
+    assert.equal(image.src, "data:image/webp;base64,eA==");
+    assert.equal(
+      ctx.invoke.calls.filter((c) => c.command === "get_attachment").length,
+      0
+    );
   } finally {
     ctx.restore();
   }

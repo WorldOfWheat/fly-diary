@@ -1645,6 +1645,18 @@ function wireEvents() {
     showListLayer,
     // Attachments
     pickAttachment: attachmentGallery.pickFile,
+    canAttachImages: attachmentGallery.canEdit,
+    onAttachmentBlocked: (files) => {
+      // Pasting or dropping an image is an explicit edit gesture. If the entry
+      // is merely read-only, unlock it and continue; a broken entry stays
+      // locked, and there is no date to attach to on the lock screen.
+      if (readOnlyEntry && !lockedDate) {
+        unlockEntryForEditing();
+        attachmentGallery.addFiles(files);
+        return;
+      }
+      setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
+    },
     addAttachmentFiles: attachmentGallery.addFiles,
     handleAttachmentClick: attachmentGallery.handleClick,
     attachmentDragStart: attachmentGallery.handleDragStart,
