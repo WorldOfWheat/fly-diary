@@ -1,5 +1,6 @@
-// `crypto` and `storage` are public so the integration tests in `tests/` can
-// drive the vault lifecycle through the same API the commands use.
+// `crypto`, `storage` and `attachments` are public so the integration tests in
+// `tests/` can drive the vault lifecycle through the same API the commands use.
+pub mod attachments;
 pub mod crypto;
 mod fsutil;
 mod settings;
@@ -9,6 +10,7 @@ mod xml;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use attachments::{AttachmentData, AttachmentMeta, OrphanAttachment};
 use serde::{Deserialize, Serialize};
 use storage::{BrokenEntry, Entry, EntryMeta};
 use tauri::Manager;
@@ -547,6 +549,121 @@ async fn delete_entry(
     .await
 }
 
+// ---------------------------------------------------------------------------
+// Image attachments
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn save_attachment(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    mime: String,
+    data: String,
+    width: u32,
+    height: u32,
+) -> Result<AttachmentMeta, String> {
+    // Reject an oversized base64 string before allocating the decoded buffer.
+    if data.len() > attachments::MAX_ATTACHMENT_BYTES.saturating_mul(2) {
+        return Err("Attachment is too large".to_string());
+    }
+    let bytes = crypto::b64_decode(&data)?;
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Save attachment", move || {
+        attachments::save_attachment(&dir, &key, &date, &mime, &bytes, width, height)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+) -> Result<Vec<AttachmentMeta>, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("List attachments", move || {
+        attachments::list_attachments(&dir, &key, &date)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_attachment(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    id: String,
+) -> Result<AttachmentData, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Get attachment", move || {
+        attachments::read_attachment(&dir, &key, &date, &id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn delete_attachment(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    id: String,
+) -> Result<(), String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Delete attachment", move || {
+        attachments::delete_attachment(&dir, &key, &date, &id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reorder_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Reorder attachments", move || {
+        attachments::reorder_attachments(&dir, &key, &date, &ids)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_orphan_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<OrphanAttachment>, String> {
+    // Metadata-only, but still require an unlocked session: the directory name
+    // is the date of a diary entry.
+    let _ = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    blocking("List orphan attachments", move || {
+        attachments::list_orphan_attachments(&dir)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn delete_orphan_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+) -> Result<(), String> {
+    let _ = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    blocking("Delete orphan attachments", move || {
+        attachments::delete_orphan_attachments(&dir, &date)
+    })
+    .await
+}
+
 /// List entries. Titles are encrypted, so the diary must be unlocked.
 #[tauri::command]
 async fn list_entries(
@@ -920,6 +1037,13 @@ pub fn run() {
             get_entry,
             save_entry,
             delete_entry,
+            save_attachment,
+            list_attachments,
+            get_attachment,
+            delete_attachment,
+            reorder_attachments,
+            list_orphan_attachments,
+            delete_orphan_attachments,
             list_entries,
             list_favourites,
             set_favourite,

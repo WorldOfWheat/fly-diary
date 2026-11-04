@@ -122,6 +122,30 @@ export function initEventWiring(deps) {
     deps.scheduleSave();
   });
 
+  // -------------------------------------------------------------------------
+  // Image attachments
+  // -------------------------------------------------------------------------
+
+  if (els.attachmentAdd) on(els.attachmentAdd, "click", deps.pickAttachment);
+  if (els.attachmentInput) {
+    on(els.attachmentInput, "change", (event) =>
+      deps.addAttachmentFiles(event.target.files)
+    );
+  }
+  if (els.attachmentList) {
+    on(els.attachmentList, "click", deps.handleAttachmentClick);
+    on(els.attachmentList, "dragstart", deps.attachmentDragStart);
+    on(els.attachmentList, "dragover", deps.attachmentDragOver);
+    on(els.attachmentList, "drop", deps.attachmentDrop);
+    on(els.attachmentList, "dragend", deps.attachmentDragEnd);
+  }
+  if (els.attachmentViewerClose) {
+    on(els.attachmentViewerClose, "click", deps.closeAttachmentViewer);
+  }
+  if (els.attachmentViewerBackdrop) {
+    on(els.attachmentViewerBackdrop, "click", deps.closeAttachmentViewer);
+  }
+
   // The native input is hidden and only mirrors the selected date, so it never
   // fires `change` from user interaction. The calendar below is the real UI.
   on(els.dateLabel, "click", deps.toggleCalendar);
@@ -316,6 +340,14 @@ export function initEventWiring(deps) {
         // handled by the webview itself on Windows.
         document.execCommand(e.shiftKey ? "redo" : "undo");
       }
+      return;
+    }
+
+    // The lightbox is the topmost surface, so Escape closes it before any
+    // dialog or the calendar.
+    if (e.key === "Escape" && deps.isAttachmentViewerOpen?.()) {
+      e.preventDefault();
+      deps.closeAttachmentViewer();
       return;
     }
 

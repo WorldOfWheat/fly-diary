@@ -229,6 +229,23 @@
                     spellcheck="false"></textarea>
             </div>
 
+            <!-- Images are an optional strip below the text. The textarea stays
+                 a plain textarea; the gallery is its own module and stores its
+                 files next to the entry, not inside the XML payload. -->
+            <section id="attachments" class="attachments" aria-labelledby="attachments-title" hidden>
+                <div class="attachments-head">
+                    <h2 id="attachments-title" class="attachments-title" data-i18n="attachments.title">圖片</h2>
+                    <button id="attachment-add" class="btn-attachment" type="button" data-i18n="attachments.add"
+                        data-i18n-title="attachments.addTitle" title="加入圖片">加入圖片</button>
+                    <input id="attachment-input" class="attachment-input" type="file"
+                        accept="image/webp,image/jpeg,image/png,image/*" multiple hidden />
+                </div>
+                <div id="attachment-list" class="attachment-list" role="list" data-i18n-aria-label="attachments.title"
+                    aria-label="圖片"></div>
+                <p id="attachment-empty" class="attachment-empty" data-i18n="attachments.empty">還沒有圖片</p>
+                <p id="attachment-status" class="attachment-status" role="status" aria-live="polite"></p>
+            </section>
+
             <!-- One footer for the whole app: the live word count, the storage
                  path and the font control. Import, statistics and the folder
                  picker live in the settings dialog instead, so the footer only
@@ -256,6 +273,19 @@
                 </div>
             </footer>
         </main>
+    </div>
+
+    <!-- Attachment lightbox. Same hidden-attribute pattern as the calendars and
+         dialogs: the base rule must not set `display`, or it would outrank the
+         browser's `[hidden] { display: none }` rule. -->
+    <div id="attachment-viewer" class="attachment-viewer" role="dialog" aria-modal="true"
+        data-i18n-aria-label="attachments.viewerTitle" aria-label="檢視圖片" hidden>
+        <div id="attachment-viewer-backdrop" class="attachment-viewer-backdrop"></div>
+        <figure class="attachment-viewer-panel">
+            <img id="attachment-viewer-image" class="attachment-viewer-image" alt="" />
+            <button id="attachment-viewer-close" class="attachment-viewer-close" type="button"
+                data-i18n="attachments.close" data-i18n-aria-label="attachments.close" title="關閉">關閉</button>
+        </figure>
     </div>
 
     <!-- Full-screen date selector. It covers the whole window so the month grid

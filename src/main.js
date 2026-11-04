@@ -26,6 +26,7 @@ import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
+import { createAttachmentGallery } from "./attachments.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -163,6 +164,8 @@ let statsDialog;
 let settingsDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
+/** @type {ReturnType<typeof createAttachmentGallery>} */
+let attachmentGallery;
 
 // ---------------------------------------------------------------------------
 // Status / word count
@@ -386,6 +389,7 @@ function refreshForLocale() {
   applyTheme();
   updateWordCount();
   if (calendar.isCalendarOpen()) calendar.renderCalendar();
+  attachmentGallery?.refreshForLocale();
   if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
 
   // The statistics dialog builds its labels in JS, so it has to be redrawn
@@ -1007,6 +1011,7 @@ function lockEditor(date, reason) {
   currentFavourite = false;
   renderFavouriteButton();
   updateWordCount();
+  attachmentGallery?.setLocked(true);
   setStatus(t("broken.lockedStatus"));
 }
 
@@ -1036,6 +1041,7 @@ function lockEntryForReading() {
   els.content.readOnly = true;
   if (els.editor) els.editor.classList.add("is-readonly");
   if (els.editBtn) els.editBtn.hidden = false;
+  attachmentGallery?.setReadOnly();
   setStatus(t("status.readOnly"));
 }
 
@@ -1047,6 +1053,7 @@ function unlockEntryForEditing() {
   els.content.readOnly = false;
   if (els.editor) els.editor.classList.remove("is-readonly");
   if (els.editBtn) els.editBtn.hidden = true;
+  attachmentGallery?.setReadOnly();
   setStatus(t("status.editing"));
   els.content.focus();
 }
@@ -1088,6 +1095,11 @@ async function selectDate(date) {
   // editor layer. On a wide viewport the attribute has no effect.
   showEditorLayer();
 
+  // Drop the previous day's gallery immediately; the new list arrives after the
+  // entry decrypts. Keeping the old images visible under the new date would be
+  // worse than a brief empty strip.
+  attachmentGallery?.clear();
+
   currentDate = date;
   els.datePicker.value = date;
   renderDateLabel();
@@ -1099,6 +1111,7 @@ async function selectDate(date) {
   const broken = brokenEntryFor(date);
   if (broken) {
     lockEditor(date, broken.reason);
+    attachmentGallery?.setLocked(true);
     scrollDateIntoView(date);
     highlightActive();
     return;
@@ -1126,6 +1139,7 @@ async function selectDate(date) {
     savedContent = content;
     currentFavourite = entry ? Boolean(entry.favourite) : false;
     renderFavouriteButton();
+    await attachmentGallery?.load(date);
     // An entry that already has something in it opens read-only: the user asked
     // to read it, not to change it. A blank date stays editable so a new entry
     // can be typed straight away.
@@ -1143,11 +1157,13 @@ async function selectDate(date) {
     const nowBroken = brokenEntryFor(date);
     if (nowBroken) {
       lockEditor(date, nowBroken.reason);
+      attachmentGallery?.setLocked(true);
       renderList();
       scrollDateIntoView(date);
       highlightActive();
       return;
     }
+    attachmentGallery?.clear();
     setStatus(t("status.loadFailed"));
   }
 
@@ -1254,6 +1270,10 @@ async function deleteCurrent() {
     await invoke("delete_entry", { date: currentDate });
     clearEditorFields();
     updateWordCount();
+    // The entry is gone, but the date is still selected. Reloading shows an
+    // empty gallery (and lets the user add images to a fresh entry) instead of
+    // leaving a cleared, hidden section behind.
+    await attachmentGallery?.load(currentDate);
     setStatus(t("status.deleted"));
     els.deleteBtn.disabled = true;
     els.favouriteBtn.disabled = true;
@@ -1299,6 +1319,7 @@ async function deleteBrokenFile(date) {
       unlockEditor();
       clearEditorFields();
       updateWordCount();
+      await attachmentGallery?.load(date);
     }
     setStatus(t("broken.deleted"));
     await refreshList();
@@ -1343,6 +1364,7 @@ function resetEditorState() {
   els.content.value = "";
   if (els.brokenCount) els.brokenCount.textContent = "";
   if (els.viewBroken) els.viewBroken.hidden = true;
+  attachmentGallery?.clear();
   if (currentView === "broken") {
     currentView = "all";
     syncViewTabs("all");
@@ -1503,6 +1525,18 @@ function createControllers() {
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
   });
 
+  attachmentGallery = createAttachmentGallery({
+    els,
+    invoke,
+    t,
+    setStatus,
+    canEdit: () => Boolean(currentDate) && !readOnlyEntry && !lockedDate,
+    isLocked: () => Boolean(lockedDate),
+    flushText: saveNow,
+    refreshList,
+    onEntryChanged: syncHeaderActions,
+  });
+
   lockScreen = createLockScreen({
     els,
     invoke,
@@ -1609,6 +1643,16 @@ function wireEvents() {
     updateWordCount,
     selectDate,
     showListLayer,
+    // Attachments
+    pickAttachment: attachmentGallery.pickFile,
+    addAttachmentFiles: attachmentGallery.addFiles,
+    handleAttachmentClick: attachmentGallery.handleClick,
+    attachmentDragStart: attachmentGallery.handleDragStart,
+    attachmentDragOver: attachmentGallery.handleDragOver,
+    attachmentDrop: attachmentGallery.handleDrop,
+    attachmentDragEnd: attachmentGallery.handleDragEnd,
+    isAttachmentViewerOpen: attachmentGallery.isViewerOpen,
+    closeAttachmentViewer: attachmentGallery.closeViewer,
     deleteCurrent,
     toggleFavourite,
     unlockEntryForEditing,

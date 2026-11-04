@@ -81,6 +81,11 @@ const ELEMENT_IDS = [
   "diaryDir",
   "title",
   "content",
+  "attachmentAdd",
+  "attachmentInput",
+  "attachmentList",
+  "attachmentViewerClose",
+  "attachmentViewerBackdrop",
   "dateLabel",
   "backToList",
   "prevDay",
@@ -175,6 +180,15 @@ function harness(overrides = {}) {
     closeCalendar: spy("closeCalendar"),
     selectDate: spy("selectDate"),
     showListLayer: spy("showListLayer"),
+    pickAttachment: spy("pickAttachment"),
+    addAttachmentFiles: spy("addAttachmentFiles"),
+    handleAttachmentClick: spy("handleAttachmentClick"),
+    attachmentDragStart: spy("attachmentDragStart"),
+    attachmentDragOver: spy("attachmentDragOver"),
+    attachmentDrop: spy("attachmentDrop"),
+    attachmentDragEnd: spy("attachmentDragEnd"),
+    isAttachmentViewerOpen: () => false,
+    closeAttachmentViewer: spy("closeAttachmentViewer"),
     deleteCurrent: spy("deleteCurrent"),
     toggleFavourite: spy("toggleFavourite"),
     unlockEntryForEditing: spy("unlockEntryForEditing"),
@@ -406,6 +420,34 @@ test("an unbound key does nothing", () => {
 // ---------------------------------------------------------------------------
 // Escape closes the topmost layer
 // ---------------------------------------------------------------------------
+
+test("Escape closes the attachment viewer before other overlays", () => {
+  withHarness(
+    (h) => {
+      const event = h.document.dispatch("keydown", { key: "Escape" });
+      assert.equal(event.defaultPrevented, true);
+      assert.deepEqual(h.names(), ["closeAttachmentViewer"]);
+    },
+    {
+      isAttachmentViewerOpen: () => true,
+      isStatsOpen: () => true,
+      isImportOpen: () => true,
+      isCalendarOpen: () => true,
+    }
+  );
+});
+
+test("the attachment add button and file input reach the gallery", () => {
+  withHarness((h) => {
+    h.els.attachmentAdd.dispatch("click");
+    assert.deepEqual(h.names(), ["pickAttachment"]);
+
+    const files = [{ name: "a.png" }];
+    h.els.attachmentInput.files = files;
+    h.els.attachmentInput.dispatch("change", { target: h.els.attachmentInput });
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [files]);
+  });
+});
 
 test("Escape closes the statistics dialog before anything else", () => {
   withHarness(

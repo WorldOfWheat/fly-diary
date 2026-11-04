@@ -121,7 +121,12 @@ function rulesFor(selector, source = rules) {
 // Every element that is toggled with the `hidden` attribute *and* is laid out
 // as a fixed, full-window layer. These are the ones where a stray `display`
 // would be catastrophic rather than merely cosmetic.
-const HIDDEN_OVERLAYS = [".calendar-overlay", ".lock-screen", ".modal-overlay"];
+const HIDDEN_OVERLAYS = [
+  ".calendar-overlay",
+  ".lock-screen",
+  ".modal-overlay",
+  ".attachment-viewer",
+];
 
 for (const selector of HIDDEN_OVERLAYS) {
   test(`${selector} does not set display on its base rule`, () => {
@@ -169,15 +174,23 @@ for (const selector of HIDDEN_OVERLAYS) {
 // The overlay must not be clickable while hidden
 // ---------------------------------------------------------------------------
 
-test("the calendar overlay is the only fixed layer above the editor", () => {
+test("the calendar overlay sits above the dialogs", () => {
   // A regression guard for the stacking order: the calendar must sit above the
   // dialogs (30) and the lock screen (10), or a dialog could be opened behind
-  // it. It must also stay below nothing else, since it is the topmost layer.
+  // it.
   const calendar = rulesFor(".calendar-overlay");
   const zIndexes = calendar.flatMap((rule) =>
     declarations(rule.body, "z-index")
   );
   assert.deepEqual(zIndexes, ["40"]);
+});
+
+test("the attachment viewer sits above the calendar", () => {
+  // The lightbox is the topmost layer; otherwise Escape/click handling and the
+  // visual stack disagree.
+  const viewer = rulesFor(".attachment-viewer");
+  const zIndexes = viewer.flatMap((rule) => declarations(rule.body, "z-index"));
+  assert.deepEqual(zIndexes, ["50"]);
 });
 
 // ---------------------------------------------------------------------------

@@ -1202,7 +1202,14 @@ pub fn delete_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<(), String
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("Failed to delete entry {date}: {e}")),
     }
-    fsutil::sync_dir(dir).map_err(|e| format!("Failed to flush diary directory: {e}"))
+    fsutil::sync_dir(dir).map_err(|e| format!("Failed to flush diary directory: {e}"))?;
+
+    // Images are auxiliary data. Delete them only after the entry itself is
+    // gone, so a crash at any point leaves an orphaned directory (invisible,
+    // cleanable) rather than a readable entry whose photos vanished. Failure
+    // here must not turn a successful entry deletion into an error.
+    let _ = crate::attachments::delete_all_for_date(dir, date);
+    Ok(())
 }
 
 /// List all entries, newest first.
