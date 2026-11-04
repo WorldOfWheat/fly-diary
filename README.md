@@ -1,12 +1,14 @@
 # Fly Diary
 
 一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **AES-256-GCM 加密的 XML** 檔案儲存。
+目前版本 `0.1.4`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
+把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
 
 ## 功能
 
 - 一天一篇：檔名即日期（`YYYY-MM-DD.xml`），同一天再存只會覆寫，不會產生重複
 - **AES-256-GCM 加密**：日記內容以 RustCrypto 的 `aes-gcm` 加密，每次寫入使用新的隨機 IV
-- **首次啟動設定儲存路徑**：可自訂日記資料夾（含原生資料夾選擇器），路徑寫入設定檔
+- **首次啟動設定儲存路徑**：可自訂日記資料夾（桌面版含原生資料夾選擇器；行動版直接使用 App 私有資料夾），路徑寫入設定檔
 - **解鎖畫面可切換工作區**：不必先解鎖就能改用另一個日記資料夾；若該資料夾已有 vault，直接切換成輸入密碼
 - **密碼保護**：首次啟動設定密碼，之後每次開啟需解鎖；金鑰只存在記憶體，鎖定即清除
 - 每篇日記有 **標題（title）** 與內容，標題以明文儲存以便側邊欄顯示
@@ -24,6 +26,8 @@
 - **Argon2id 自動校準**：實測本機速度，自動挑出約 1 秒可解鎖的參數
 - **繁體中文／英文介面**：右上角一鍵切換，日期格式也跟著語言改變
 - **淺色／深色主題**：解鎖畫面右上角的主題鈕三態循環（跟隨系統 → 淺色 → 深色），選擇存在 `localStorage`
+- **手機版兩層式排版**：`640px` 以下把「列表」與「編輯器」拆成兩層，點日期進入編輯器、按左上角「列表」返回；桌面寬度仍維持兩欄並存
+- **觸控與安全區**：觸控目標加大、停用雙擊縮放延遲，並以 `env(safe-area-inset-*)` 避開瀏海與手勢列
 - 刪除單日記（有確認提示）
 - 使用**本地時區**判定「今天」，不會因 UTC 造成跨日錯亂
 
@@ -85,7 +89,20 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 因為所有尺寸（內距、圖示、日曆、對話框）都是 `rem`，調整根字級會一次縮放整個介面，而不是只有文字變大。虛擬滾動的列高以 `--row-h` 宣告並由 JS 用 `getComputedStyle` 讀回，所以列高會跟著字級變動，捲動位置不會錯位。
 
-視窗變窄時另有兩個斷點：`900px` 以下縮小側邊欄、隱藏日期的星期副標；`640px` 以下改為上下堆疊（側邊欄在上、編輯區在下）。
+視窗變窄時有幾個斷點：`900px` 以下縮小側邊欄、隱藏日期的星期副標；`720px` 以下收起字級數值，只留 `A−` / `A+`；`640px` 以下切換成手機版的兩層式排版（見下節）；`400px` 以下再收緊間距，並把使用者倍率上限壓到 `1.2`，避免 320px 視窗被撐破。視窗高度不足時（`560px` / `520px`）另會壓縮卡片與月曆的垂直間距。
+
+## 手機版排版
+
+`640px` 以下（一路支援到 `tauri.conf.json` 設定的最小 `320×480`）不再維持「側邊欄 + 編輯區」兩欄，而是切成兩層，同一時間只顯示一層：
+
+- **單一 grid 格子**：`.app` 在窄視窗只留一個 `minmax(0, 1fr)` 格子，由 `.app[data-layer="list|editor"]` 決定顯示列表或編輯器。`main.js` 的 `showListLayer()` / `showEditorLayer()` 是唯二寫入這個屬性的地方。
+- **列表優先**：`enterApp()` 進入 App 時先顯示列表；點任一天（`selectDate()`，包含搜尋結果與損壞檔）才切到編輯器，編輯器佔滿整個視窗。
+- **返回鈕**：編輯區左上角的「列表」按鈕（`#back-to-list`）只在窄視窗出現，按一下呼叫 `showListLayer()`。桌面寬度下兩欄並存，按鈕以 `display: none` 隱藏；`wiring.js` 對它做存在性檢查，舊 DOM 沒有這個按鈕也能正常初始化。
+- **標頭壓縮**：窄視窗的狀態列允許換行，狀態文字可縮短並以省略號截斷，避免解鎖／收藏／刪除按鈕被推出畫面。
+- **320px 極窄寬度**：日期導覽縮小、設定列與匯入列改單欄、統計卡片最小寬度降到 `4.5rem`；狀態文字改為視覺隱藏（`clip-path`）而不是 `display: none`，因為它同時是 `role="status"` / `aria-live` 區域，要保留給螢幕閱讀器。
+- **解鎖畫面**：窄視窗時標題與主題／語言開關改成單欄置中；工作區列只留「切換工作區」按鈕，路徑文字在窄視窗隱藏，把寬度讓給按鈕。
+- **觸控裝置**（`pointer: coarse`）：圖示按鈕至少 `2.75rem`、清單列高提高到 `--row-h: 3.75rem`（虛擬滾動會用 `getComputedStyle` 重新量測）。`hover: none` 會關掉觸控後殘留的 hover 樣式，改用 `:active` 回饋。
+- **安全區與捲動**：`height: 100dvh`、`viewport-fit=cover` 與 `env(safe-area-inset-*)` 讓內容避開瀏海、手勢列與行動瀏覽器網址列；`touch-action: manipulation` 去掉雙擊縮放延遲，`overscroll-behavior: contain` 阻止內層捲動連鎖到頁面。
 
 ## 多語系
 
@@ -432,14 +449,16 @@ sudo apt install -y \
 
 ### 2. 安裝前端依賴
 
+專案使用 **pnpm**（版本由 `package.json` 的 `packageManager` 欄位鎖定為 `9.15.4`）：
+
 ```bash
-npm install
+pnpm install
 ```
 
 ### 3. 啟動開發模式
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 ### 4. 執行測試
@@ -452,12 +471,12 @@ npm run dev
 也可以分開執行：
 
 ```bash
-npm test               # 前端（node --test）
-npm run test:rust      # Rust（cargo test）
-npm run coverage       # 前端 + Rust coverage
+pnpm test                # 前端（node --test）
+pnpm run test:rust       # Rust（cargo test）
+pnpm run coverage        # 前端 + Rust coverage
 ```
 
-前端測試放在 `tests/`，用 Node 內建的 test runner，不需要額外安裝套件；受測的純函式在
+前端測試放在 `tests/`，用 Node 內建的 test runner（Node 20 以上；CI 用 Node 24），不需要額外安裝套件；受測的純函式在
 `src/lib/dates.js` 與 `src/lib/stats.js`，`src/i18n.js` 另有字典完整性檢查（兩份字典的
 key 必須一致、`index.html` 與 `main.js` 用到的 key 必須存在）。
 
@@ -466,6 +485,11 @@ key 必須一致、`index.html` 與 `main.js` 用到的 key 必須存在）。
 Node 裡直接測試。`tests/helpers/dom.js` 提供一個約 300 行的極簡 DOM stub（`fakeElement`、
 `installDom`、`fakeEls`、`fakeT`、`spy`、`fakeInvoke`），不需要 jsdom 之類的額外套件；
 遇到 stub 不支援的 selector 會直接丟錯，避免測試默默通過。
+
+`tests/styles.test.js` 補上 DOM stub 看不到的一層：它直接讀 `styles.css` 的文字，驗證
+`[hidden]` 疊層不會被 `display` 蓋掉、月曆的 `z-index` 順序，以及手機版的
+`.app[data-layer]` 顯隱規則與返回鈕的顯示條件。這類規則若寫錯，其他測試不會失敗，但使用者會看到
+一個透明卻吃掉所有點擊的浮層（或永遠離不開編輯器）。
 
 Rust 測試分兩層：`src-tauri/src/*.rs` 內的單元測試，以及 `src-tauri/tests/vault_lifecycle.rs`
 的整合測試（建立 vault → 寫入 → 上鎖 → 解鎖 → 讀回 → 改密碼）。涵蓋加解密 roundtrip、
@@ -481,10 +505,24 @@ cargo install cargo-llvm-cov --locked
 ### 5. 打包
 
 ```bash
-npm run build
+pnpm build
 ```
 
 Linux 只產出 `.deb` 與 `.rpm`，**不產出 AppImage**。AppImage 會把 GTK 一起打包，並在 `AppRun` 裡把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`；該 cache 不含 `im-ibus.so` / `im-fcitx.so`，導致輸入法在 AppImage 內完全無法切換。`.deb` / `.rpm` 直接使用系統的 GTK 與系統的輸入法模組，沒有這個問題。
+
+### 6. 行動版（Android）
+
+手機版沿用同一份前端，靠 `640px` 斷點切換成兩層式排版。Tauri 產生的 Android 專案位於
+`src-tauri/gen/android`，已列在 `.gitignore`，不隨 repo 提交；需要 Android SDK／NDK 與對應的
+Rust target，之後可用 `pnpm tauri android dev` / `pnpm tauri android build` 建置。
+
+行動版有三個刻意不同的行為：
+
+- **沒有資料夾選擇器**：`pick_diary_dir` 在 `#[cfg(mobile)]` 下直接回傳 App 私有資料夾，不開原生對話框；日記因此固定放在 App 的資料目錄。
+- **不支援資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
+- 選單列只在桌面建置（`build_menu` 包在 `#[cfg(desktop)]`），行動版沒有 `Edit` 選單可掛。
+
+其餘加密、儲存、索引與背景升級流程在桌面與行動版完全相同。
 
 ## 專案結構
 
@@ -511,11 +549,12 @@ fly-diary/
 │   ├── dates.test.js
 │   ├── stats.test.js
 │   ├── i18n.test.js
-│   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce
+│   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕
 │   ├── calendar.test.js    # 月曆格線、焦點移動、月份切換、月份摘要、捲動鎖定
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
+│   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆 z-index、手機兩層排版
 │   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
@@ -523,14 +562,16 @@ fly-diary/
 │   ├── tauri.conf.json
 │   ├── capabilities/
 │   │   └── default.json
+│   ├── gen/                # Tauri 產生的行動版專案（gitignored）
 │   ├── icons/
 │   ├── tests/
 │   │   └── vault_lifecycle.rs  # 整合測試：建立→寫入→上鎖→解鎖→讀回
 │   └── src/
 │       ├── main.rs         # 進入點
-│       ├── lib.rs          # Tauri commands + 解鎖 session 狀態
-│       ├── settings.rs     # 設定檔（日記路徑、自動鎖定）讀寫
+│       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
+│       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM 加解密
+│       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── xml.rs          # XML 序列化 / 解析
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
 ├── test.sh                 # 一次跑完兩邊測試與 coverage
@@ -546,7 +587,7 @@ fly-diary/
 | `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（保留既有的自動鎖定與自動儲存設定）                     |
 | `set_auto_lock(minutes)`                  | 寫入閒置自動鎖定分鐘數（`0` 表示永不）                                       |
 | `set_autosave_delay(ms)`                  | 寫入自動儲存延遲毫秒數（只接受 `200/400/800/1500/3000`）                     |
-| `pick_diary_dir()`                        | 開啟原生資料夾選擇器，回傳選擇的路徑                                         |
+| `pick_diary_dir()`                        | 桌面版開啟原生資料夾選擇器；行動版直接回傳 App 私有資料夾                     |
 | `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）                                             |
 | `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍                                             |
 | `get_vault_kdf()`                         | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`）                           |
@@ -565,13 +606,16 @@ fly-diary/
 | `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引                                  |
 | `list_broken_entries()`                   | 列出無法解密的日記檔（日期、大小、失敗原因）                                 |
 | `export_broken_entry(date)`               | 開啟存檔對話框，把原始 `.xml` 位元組複製到指定位置                           |
-| `pick_import_dir()`                       | 開啟原生資料夾選擇器，回傳匯入來源路徑                                       |
+| `pick_import_dir()`                       | 桌面版開啟原生資料夾選擇器；行動版回報不支援資料夾匯入                       |
 | `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入                               |
 | `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告                                   |
 | `upgrade_entries()`                       | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
 | `today()`                                 | 回傳本地時區的今天日期                                                       |
 | `diary_path()`                            | 回傳日記資料夾絕對路徑                                                       |
 | `set_screenshot_protection(protected)`    | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
+
+> 行動版（`#[cfg(mobile)]`）的差異只有三處：`pick_diary_dir` 直接回傳 App 私有資料夾、
+> `pick_import_dir` 回報不支援資料夾匯入、選單列不建置。其餘命令桌面與行動版共用同一份實作。
 
 ## 設計重點
 
@@ -587,6 +631,7 @@ fly-diary/
 - **匯出不重新序列化**：`export_broken_entry` 用 `fsutil::copy_private` 逐位元組複製原始檔案，不經過 XML 解析再輸出。壞檔的價值就在於它「壞掉的部分」，重新序列化會丟掉未知元素與屬性，反而讓人工搶救更困難。複製同樣走「暫存檔 → `sync_all()` → `rename`」，所以匯出中途失敗只會留下原本的目標檔，不會產生一份看起來成功、其實被截斷的搶救檔。
 - **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan），捲動時以 `index * 列高` 絕對定位。列高由 CSS 的 `--row-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高會跟著變，不會出現捲動錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
+- **手機版只換版面、不改資料流**：`data-layer` 只決定哪一層可見；選日期、存檔、鎖定、壞檔處理都走與桌面版相同的函式。返回鈕只是 `showListLayer()`，不會卸載編輯器，也不會丟棄尚未儲存的內容。
 - **翻譯與程式分離**：靜態文字用 `data-i18n` 屬性標在 HTML 上，動態文字走 `t()`，字典集中在 `i18n.js`。`main.js` 裡不再有硬編碼的中文字串，新增語言不必碰 UI 邏輯。
 - **日期不靠字串拼接**：`formatDate` / `formatMonth` / `formatWeekday` 各自負責一種格式，中文用「年月日」、英文用 `MM/DD/YYYY`，避免把 `年`、`月` 寫死在程式裡。
 - **匯入分兩階段**：`scan_import` 只讀不寫，把每個檔案分類成「可匯入／已存在／失敗」並附上原因；使用者確認後才由 `run_import` 寫入。檔名是日期與標題的唯一來源，不是合法 `YYYY-MM-DD` 就判為失敗，不做猜測。
@@ -630,6 +675,8 @@ fly-diary/
 - 上述順序保證的是「不會產生無法自癒的狀態」，不是「兩個檔案永遠一致」。若同步軟體在兩次寫入之間把資料夾同步出去，另一台裝置可能短暫看到索引少一天；下次在任一裝置寫入或呼叫 `rebuild_index()` 就會補回。
 - 原子寫入保證的是「檔案內容不會被截斷、且改名本身已 flush」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入；`fsync` 目錄同理，只把 flush 要求送到裝置。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
+- 行動版沒有資料夾選擇器，也沒有資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。想在手機上使用外部資料夾或匯入 `.txt`，目前只能走桌面版。
+- 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
 - 平行匯入的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。
 - 目前只有繁體中文與英文兩種語言；後端回傳的錯誤訊息（例如 Rust 端的 `Failed to write entry ...`）仍是英文，尚未翻譯。
@@ -642,6 +689,7 @@ fly-diary/
 - 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
+- Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；換一台機器建置時需要重新產生，並自備 Android SDK／NDK 與 Rust target。目前 repo 只包含手機版程式碼與 Android 產生器的輸出，沒有 iOS 專案。
 - 防止截圖只在 Windows 與 macOS 生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
 - 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。
