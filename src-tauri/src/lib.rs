@@ -1,5 +1,7 @@
-// `crypto` and `storage` are public so the integration tests in `tests/` can
-// drive the vault lifecycle through the same API the commands use.
+// `crypto`, `storage` and `attachments` are public so the integration tests in
+// `tests/` can drive the vault lifecycle through the same API the commands use.
+pub mod attachments;
+mod clipboard;
 pub mod crypto;
 mod fsutil;
 mod settings;
@@ -9,6 +11,8 @@ mod xml;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use attachments::{AttachmentData, AttachmentMeta, DroppedImage, OrphanAttachment};
+use clipboard::ClipboardImage;
 use serde::{Deserialize, Serialize};
 use storage::{BrokenEntry, Entry, EntryMeta};
 use tauri::Manager;
@@ -230,23 +234,37 @@ async fn set_autosave_delay(app: tauri::AppHandle, ms: u32) -> Result<(), String
 /// Open a native folder picker and return the chosen path.
 ///
 /// Returns `None` when the user cancels.
+///
+/// Mobile has no folder picker: Android and iOS use scoped storage, and
+/// `tauri-plugin-dialog` only exposes `pick_file` there. The app still needs a
+/// directory to start, so on mobile this returns the app's private data
+/// directory instead of asking the user.
 #[tauri::command]
 async fn pick_diary_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    #[cfg(mobile)]
+    {
+        let dir = default_diary_dir(&app)?;
+        Ok(Some(dir.to_string_lossy().to_string()))
+    }
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title("選擇日記儲存資料夾")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
 
-    let picked = rx
-        .recv()
-        .map_err(|e| format!("Folder picker failed: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.dialog()
+            .file()
+            .set_title("選擇日記儲存資料夾")
+            .pick_folder(move |folder| {
+                let _ = tx.send(folder);
+            });
 
-    Ok(picked.map(|p| p.to_string()))
+        let picked = rx
+            .recv()
+            .map_err(|e| format!("Folder picker failed: {e}"))?;
+
+        Ok(picked.map(|p| p.to_string()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +551,145 @@ async fn delete_entry(
     .await
 }
 
+// ---------------------------------------------------------------------------
+// Image attachments
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn save_attachment(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    mime: String,
+    data: String,
+    width: u32,
+    height: u32,
+) -> Result<AttachmentMeta, String> {
+    // Reject an oversized base64 string before allocating the decoded buffer.
+    if data.len() > attachments::MAX_ATTACHMENT_BYTES.saturating_mul(2) {
+        return Err("Attachment is too large".to_string());
+    }
+    let bytes = crypto::b64_decode(&data)?;
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Save attachment", move || {
+        attachments::save_attachment(&dir, &key, &date, &mime, &bytes, width, height)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+) -> Result<Vec<AttachmentMeta>, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("List attachments", move || {
+        attachments::list_attachments(&dir, &key, &date)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn get_attachment(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    id: String,
+) -> Result<AttachmentData, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Get attachment", move || {
+        attachments::read_attachment(&dir, &key, &date, &id)
+    })
+    .await
+}
+
+/// Read files the OS dropped onto the window.
+///
+/// Tauri's native drag-drop handler reports paths, not `File` objects. The
+/// webview cannot open arbitrary filesystem paths, so the backend reads them
+/// and returns base64 that the gallery feeds through its normal resize and
+/// encryption pipeline.
+#[tauri::command]
+async fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, String> {
+    blocking("Read dropped images", move || {
+        attachments::read_dropped_images(&paths)
+    })
+    .await
+}
+
+/// Read an image from the OS clipboard.
+///
+/// WebKitGTK often omits clipboard images from the HTML5 paste event. This
+/// command is only a fallback: `None` means "no image", so normal text paste is
+/// never intercepted.
+#[tauri::command]
+async fn read_clipboard_image() -> Result<Option<ClipboardImage>, String> {
+    blocking("Read clipboard image", clipboard::read_image).await
+}
+
+#[tauri::command]
+async fn delete_attachment(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    id: String,
+) -> Result<(), String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Delete attachment", move || {
+        attachments::delete_attachment(&dir, &key, &date, &id)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn reorder_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+    ids: Vec<String>,
+) -> Result<(), String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Reorder attachments", move || {
+        attachments::reorder_attachments(&dir, &key, &date, &ids)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn list_orphan_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<OrphanAttachment>, String> {
+    // Metadata-only, but still require an unlocked session: the directory name
+    // is the date of a diary entry.
+    let _ = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    blocking("List orphan attachments", move || {
+        attachments::list_orphan_attachments(&dir)
+    })
+    .await
+}
+
+#[tauri::command]
+async fn delete_orphan_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    date: String,
+) -> Result<(), String> {
+    let _ = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    blocking("Delete orphan attachments", move || {
+        attachments::delete_orphan_attachments(&dir, &date)
+    })
+    .await
+}
+
 /// List entries. Titles are encrypted, so the diary must be unlocked.
 #[tauri::command]
 async fn list_entries(
@@ -665,23 +822,35 @@ async fn export_broken_entry(
 /// Open a native folder picker for the import source and return its path.
 ///
 /// Returns `None` when the user cancels.
+///
+/// Importing from a folder is a desktop-only feature: mobile has no folder
+/// picker, so the command reports that instead of silently returning `None`.
 #[tauri::command]
 async fn pick_import_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Importing from a folder is not supported on mobile".to_string())
+    }
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title("選擇要匯入的資料夾")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_dialog::DialogExt;
 
-    let picked = rx
-        .recv()
-        .map_err(|e| format!("Folder picker failed: {e}"))?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.dialog()
+            .file()
+            .set_title("選擇要匯入的資料夾")
+            .pick_folder(move |folder| {
+                let _ = tx.send(folder);
+            });
 
-    Ok(picked.map(|p| p.to_string()))
+        let picked = rx
+            .recv()
+            .map_err(|e| format!("Folder picker failed: {e}"))?;
+
+        Ok(picked.map(|p| p.to_string()))
+    }
 }
 
 /// Inspect a folder of `YYYY-MM-DD.txt` files without writing anything.
@@ -844,6 +1013,10 @@ async fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
 /// Rebuilding the submenu with [`PredefinedMenuItem`] gives each item a real
 /// action — the predefined variants forward to the focused webview's own editing
 /// commands, so undo/redo/cut/copy/paste behave exactly as they do in a browser.
+///
+/// Desktop only: `tauri::menu` is gated behind `#[cfg(desktop)]`, and mobile has
+/// no menu bar to attach this to.
+#[cfg(desktop)]
 fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
 
@@ -862,10 +1035,16 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(SharedSession::default())
-        .menu(build_menu)
+        .manage(SharedSession::default());
+
+    // The menu is desktop-only: `tauri::menu` does not exist on mobile, and
+    // there is no menu bar to attach it to.
+    #[cfg(desktop)]
+    let builder = builder.menu(build_menu);
+
+    builder
         .invoke_handler(tauri::generate_handler![
             get_settings,
             set_diary_dir,
@@ -884,6 +1063,15 @@ pub fn run() {
             get_entry,
             save_entry,
             delete_entry,
+            save_attachment,
+            list_attachments,
+            get_attachment,
+            read_dropped_images,
+            read_clipboard_image,
+            delete_attachment,
+            reorder_attachments,
+            list_orphan_attachments,
+            delete_orphan_attachments,
             list_entries,
             list_favourites,
             set_favourite,

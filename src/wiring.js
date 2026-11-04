@@ -13,6 +13,8 @@
 // `deps` shape (all functions unless noted):
 //
 //   els                 — the lookup table from `dom.js`
+//   canAttachImages     — () => boolean
+//   pasteImageFromClipboard — () => void (native clipboard fallback)
 //   handleUnlockSubmit  — (event) => void
 //   browseForDir        — () => void
 //   openWorkspacePicker — () => void
@@ -69,6 +71,83 @@
  * function that removes the listeners again; the app never uses it, but tests
  * do, and it makes the module honest about what it owns.
  */
+function clipboardImages(clipboardData) {
+  const files = [];
+  const items = clipboardData?.items;
+  if (items) {
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      if (item.kind !== "file") continue;
+      const file = item.getAsFile?.();
+      const type = item.type || file?.type || "";
+      if (!type.startsWith("image/")) continue;
+      if (file) files.push(file);
+    }
+  }
+  const fallback = clipboardData?.files;
+  if (files.length === 0 && fallback) {
+    for (let i = 0; i < fallback.length; i += 1) {
+      const file = fallback[i];
+      if (file.type?.startsWith("image/")) files.push(file);
+    }
+  }
+  return files;
+}
+
+/**
+ * Whether the clipboard could contain an image when the paste event offered no
+ * `File`s. WebKitGTK can omit image data from the event entirely, but a normal
+ * text paste still advertises `text/plain`; that case must stay with the editor.
+ */
+function clipboardMayHoldImage(clipboardData) {
+  const types = Array.from(clipboardData?.types ?? []);
+  if (types.length === 0) return true;
+  if (types.includes("text/plain")) return false;
+  return types.some(
+    (type) =>
+      type.startsWith("image/") ||
+      type === "Files" ||
+      type === "text/uri-list"
+  );
+}
+
+/** Paste only belongs to the diary when it lands in the editor or the page. */
+function isEditorPasteTarget(els, target) {
+  if (!target) return true;
+  if (target === document.body || target === document.documentElement) return true;
+  if (target === els.editor) return true;
+  return Boolean(els.editor?.contains?.(target));
+}
+
+function droppedFiles(dataTransfer) {
+  const files = [];
+  const list = dataTransfer?.files;
+  if (!list) return files;
+  for (let i = 0; i < list.length; i += 1) files.push(list[i]);
+  return files;
+}
+
+/**
+ * True for anything that looks like an operating-system file drag.
+ *
+ * Linux/WebKitGTK often advertises `text/uri-list` instead of `Files`, and may
+ * only populate `dataTransfer.files` on the drop event. If we do not prevent
+ * the default on `dragover`/`drop`, the webview navigates to the dropped file
+ * and shows the image instead of letting the app handle it.
+ */
+function isFileDrag(dataTransfer) {
+  if (!dataTransfer) return false;
+  if ((dataTransfer.files?.length ?? 0) > 0) return true;
+  const items = dataTransfer.items;
+  if (items) {
+    for (let i = 0; i < items.length; i += 1) {
+      if (items[i]?.kind === "file") return true;
+    }
+  }
+  const types = Array.from(dataTransfer.types ?? []);
+  return types.includes("Files") || types.includes("text/uri-list");
+}
+
 export function initEventWiring(deps) {
   const { els } = deps;
   const cleanups = [];
@@ -78,6 +157,28 @@ export function initEventWiring(deps) {
     target.addEventListener(type, handler, options);
     cleanups.push(() => target.removeEventListener(type, handler, options));
   };
+
+  // -------------------------------------------------------------------------
+  // Stop the webview from navigating to dropped files
+  // -------------------------------------------------------------------------
+  //
+  // Desktop builds handle OS file drops through Tauri's native events (see
+  // native-drop.js), because WebKitGTK often leaves `dataTransfer.files` empty.
+  // These HTML5 handlers remain for webviews that still deliver them; unless
+  // both `dragover` and `drop` call `preventDefault`, WebKitGTK opens the image
+  // (file:// navigation) instead of letting the editor receive it. Guard at
+  // document level so dropping outside the editor cannot navigate away either.
+  const guardFileNavigation = (event) => {
+    if (!isFileDrag(event.dataTransfer)) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    if (event.type === "drop") {
+      els.editor?.classList?.remove("is-dragover");
+    }
+  };
+  on(document, "dragenter", guardFileNavigation, true);
+  on(document, "dragover", guardFileNavigation, true);
+  on(document, "drop", guardFileNavigation, true);
 
   // -------------------------------------------------------------------------
   // Lock screen
@@ -122,9 +223,99 @@ export function initEventWiring(deps) {
     deps.scheduleSave();
   });
 
+  // -------------------------------------------------------------------------
+  // Image attachments
+  // -------------------------------------------------------------------------
+
+  if (els.attachmentAdd) on(els.attachmentAdd, "click", deps.pickAttachment);
+  if (els.attachmentInput) {
+    on(els.attachmentInput, "change", (event) =>
+      deps.addAttachmentFiles(event.target.files)
+    );
+  }
+  if (els.attachmentList) {
+    on(els.attachmentList, "click", deps.handleAttachmentClick);
+    on(els.attachmentList, "dragstart", deps.attachmentDragStart);
+    on(els.attachmentList, "dragover", deps.attachmentDragOver);
+    on(els.attachmentList, "drop", deps.attachmentDrop);
+    on(els.attachmentList, "dragend", deps.attachmentDragEnd);
+  }
+  if (els.attachmentViewerClose) {
+    on(els.attachmentViewerClose, "click", deps.closeAttachmentViewer);
+  }
+  if (els.attachmentViewerBackdrop) {
+    on(els.attachmentViewerBackdrop, "click", deps.closeAttachmentViewer);
+  }
+
+  // Pasting an image anywhere in the editor attaches it to the current day.
+  // Listen on the document because a paste event targets whichever element has
+  // focus (the textarea, a header button, or <body>), not necessarily the
+  // editor container. Text paste and the gallery's internal reorder drag are
+  // left alone: only real image files are intercepted.
+  on(document, "paste", (event) => {
+    if (!isEditorPasteTarget(els, event.target)) return;
+
+    const files = clipboardImages(event.clipboardData);
+    if (files.length > 0) {
+      event.preventDefault();
+      if (!deps.canAttachImages?.()) {
+        deps.onAttachmentBlocked?.(files);
+        return;
+      }
+      deps.addAttachmentFiles(files);
+      return;
+    }
+
+    // WebKitGTK can omit clipboard images from the event entirely. Ask the
+    // backend only when the clipboard looks like it might hold an image, so a
+    // normal text paste is never delayed or intercepted.
+    if (clipboardMayHoldImage(event.clipboardData)) {
+      deps.pasteImageFromClipboard?.();
+    }
+  });
+
+  if (els.editor) {
+    on(els.editor, "dragover", (event) => {
+      if (!isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      if (!deps.canAttachImages?.()) {
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      els.editor.classList?.add("is-dragover");
+    });
+
+    on(els.editor, "dragleave", (event) => {
+      if (els.editor.contains?.(event.relatedTarget)) return;
+      els.editor.classList?.remove("is-dragover");
+    });
+
+    on(els.editor, "drop", (event) => {
+      // Prevent the default first. If this is a `text/uri-list` drag without
+      // File objects, there is nothing to attach yet, but the webview must not
+      // navigate to the dropped file.
+      if (!isFileDrag(event.dataTransfer)) return;
+      event.preventDefault();
+      els.editor.classList?.remove("is-dragover");
+
+      const files = droppedFiles(event.dataTransfer);
+      if (files.length === 0) return;
+      if (!deps.canAttachImages?.()) {
+        deps.onAttachmentBlocked?.(files);
+        return;
+      }
+      deps.addAttachmentFiles(files);
+    });
+  }
+
   // The native input is hidden and only mirrors the selected date, so it never
   // fires `change` from user interaction. The calendar below is the real UI.
   on(els.dateLabel, "click", deps.toggleCalendar);
+
+  // Phone layout only: the back button returns from the editor layer to the
+  // list layer. Optional so an older DOM still wires up.
+  if (els.backToList) on(els.backToList, "click", deps.showListLayer);
 
   on(els.prevDay, "click", () =>
     deps.selectDate(deps.shiftDate(deps.getCurrentDate(), -1))
@@ -312,6 +503,14 @@ export function initEventWiring(deps) {
         // handled by the webview itself on Windows.
         document.execCommand(e.shiftKey ? "redo" : "undo");
       }
+      return;
+    }
+
+    // The lightbox is the topmost surface, so Escape closes it before any
+    // dialog or the calendar.
+    if (e.key === "Escape" && deps.isAttachmentViewerOpen?.()) {
+      e.preventDefault();
+      deps.closeAttachmentViewer();
       return;
     }
 

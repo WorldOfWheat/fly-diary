@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` lets the app paint under the notch / gesture bar;
+         the safe-area insets are then re-applied as padding in styles.css. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Fly Diary</title>
     <link rel="stylesheet" href="styles.css" />
 </head>
@@ -137,6 +139,16 @@
 
         <main class="editor">
             <header class="editor-header">
+                <!-- Phone-only: returns from the editor layer to the list layer.
+                     Hidden on wider viewports, where both panes are visible at
+                     once and there is nothing to go back to. -->
+                <button id="back-to-list" class="btn-back" type="button" data-i18n="editor.backToList"
+                    data-i18n-title="editor.backToListTitle" title="回到日記列表" hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M15 5l-7 7 7 7" />
+                    </svg>
+                    <span data-i18n="editor.backToList">列表</span>
+                </button>
                 <div class="date-nav">
                     <button id="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
                         data-i18n-aria-label="editor.prevDay" title="前一天 (Alt+←)" aria-label="前一天">
@@ -166,7 +178,10 @@
                     </button>
                 </div>
                 <div class="status">
-                    <span id="status" class="status-text"></span>
+                    <!-- `aria-live` so the save / load messages are still
+                         announced when the text is visually hidden on a narrow
+                         window (see the max-width: 400px block in styles.css). -->
+                    <span id="status" class="status-text" role="status" aria-live="polite"></span>
                     <!-- An entry that already has content opens read-only, so a
                          stray keystroke cannot rewrite a finished page. Clicking
                          this swaps the editor into its writable state; the button
@@ -214,6 +229,23 @@
                     spellcheck="false"></textarea>
             </div>
 
+            <!-- Images are an optional strip below the text. The textarea stays
+                 a plain textarea; the gallery is its own module and stores its
+                 files next to the entry, not inside the XML payload. -->
+            <section id="attachments" class="attachments" aria-labelledby="attachments-title" hidden>
+                <div class="attachments-head">
+                    <h2 id="attachments-title" class="attachments-title" data-i18n="attachments.title">圖片</h2>
+                    <button id="attachment-add" class="btn-attachment" type="button" data-i18n="attachments.add"
+                        data-i18n-title="attachments.addTitle" title="加入圖片">加入圖片</button>
+                    <input id="attachment-input" class="attachment-input" type="file"
+                        accept="image/webp,image/jpeg,image/png,image/*" multiple hidden />
+                </div>
+                <div id="attachment-list" class="attachment-list" role="list" data-i18n-aria-label="attachments.title"
+                    aria-label="圖片"></div>
+                <p id="attachment-empty" class="attachment-empty" data-i18n="attachments.empty">還沒有圖片</p>
+                <p id="attachment-status" class="attachment-status" role="status" aria-live="polite"></p>
+            </section>
+
             <!-- One footer for the whole app: the live word count, the storage
                  path and the font control. Import, statistics and the folder
                  picker live in the settings dialog instead, so the footer only
@@ -241,6 +273,19 @@
                 </div>
             </footer>
         </main>
+    </div>
+
+    <!-- Attachment lightbox. Same hidden-attribute pattern as the calendars and
+         dialogs: the base rule must not set `display`, or it would outrank the
+         browser's `[hidden] { display: none }` rule. -->
+    <div id="attachment-viewer" class="attachment-viewer" role="dialog" aria-modal="true"
+        data-i18n-aria-label="attachments.viewerTitle" aria-label="檢視圖片" hidden>
+        <div id="attachment-viewer-backdrop" class="attachment-viewer-backdrop"></div>
+        <figure class="attachment-viewer-panel">
+            <img id="attachment-viewer-image" class="attachment-viewer-image" alt="" />
+            <button id="attachment-viewer-close" class="attachment-viewer-close" type="button"
+                data-i18n="attachments.close" data-i18n-aria-label="attachments.close" title="關閉">關閉</button>
+        </figure>
     </div>
 
     <!-- Full-screen date selector. It covers the whole window so the month grid

@@ -79,9 +79,16 @@ const ELEMENT_IDS = [
   "kdfIterations",
   "kdfParallelism",
   "diaryDir",
+  "editor",
   "title",
   "content",
+  "attachmentAdd",
+  "attachmentInput",
+  "attachmentList",
+  "attachmentViewerClose",
+  "attachmentViewerBackdrop",
   "dateLabel",
+  "backToList",
   "prevDay",
   "nextDay",
   "newToday",
@@ -140,6 +147,13 @@ function harness(overrides = {}) {
   els.listScroll.scrollTop = 0;
   els.calendar.contains = () => false;
   els.dateLabel.contains = () => false;
+  const editorClasses = new Set();
+  els.editor.classList = {
+    add: (name) => editorClasses.add(name),
+    remove: (name) => editorClasses.delete(name),
+    contains: (name) => editorClasses.has(name),
+  };
+  els.editor.contains = () => false;
 
   // Ctrl+T forwards to a real click, so the button needs a `click()` method
   // that dispatches through the same listener table.
@@ -173,6 +187,19 @@ function harness(overrides = {}) {
     isCalendarOpen: () => false,
     closeCalendar: spy("closeCalendar"),
     selectDate: spy("selectDate"),
+    showListLayer: spy("showListLayer"),
+    pickAttachment: spy("pickAttachment"),
+    canAttachImages: () => true,
+    onAttachmentBlocked: spy("onAttachmentBlocked"),
+    addAttachmentFiles: spy("addAttachmentFiles"),
+    pasteImageFromClipboard: spy("pasteImageFromClipboard"),
+    handleAttachmentClick: spy("handleAttachmentClick"),
+    attachmentDragStart: spy("attachmentDragStart"),
+    attachmentDragOver: spy("attachmentDragOver"),
+    attachmentDrop: spy("attachmentDrop"),
+    attachmentDragEnd: spy("attachmentDragEnd"),
+    isAttachmentViewerOpen: () => false,
+    closeAttachmentViewer: spy("closeAttachmentViewer"),
     deleteCurrent: spy("deleteCurrent"),
     toggleFavourite: spy("toggleFavourite"),
     unlockEntryForEditing: spy("unlockEntryForEditing"),
@@ -404,6 +431,188 @@ test("an unbound key does nothing", () => {
 // ---------------------------------------------------------------------------
 // Escape closes the topmost layer
 // ---------------------------------------------------------------------------
+
+test("Escape closes the attachment viewer before other overlays", () => {
+  withHarness(
+    (h) => {
+      const event = h.document.dispatch("keydown", { key: "Escape" });
+      assert.equal(event.defaultPrevented, true);
+      assert.deepEqual(h.names(), ["closeAttachmentViewer"]);
+    },
+    {
+      isAttachmentViewerOpen: () => true,
+      isStatsOpen: () => true,
+      isImportOpen: () => true,
+      isCalendarOpen: () => true,
+    }
+  );
+});
+
+test("the attachment add button and file input reach the gallery", () => {
+  withHarness((h) => {
+    h.els.attachmentAdd.dispatch("click");
+    assert.deepEqual(h.names(), ["pickAttachment"]);
+
+    const files = [{ name: "a.png" }];
+    h.els.attachmentInput.files = files;
+    h.els.attachmentInput.dispatch("change", { target: h.els.attachmentInput });
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [files]);
+  });
+});
+
+test("pasting an image into the editor attaches it", () => {
+  withHarness((h) => {
+    const file = { type: "image/png", name: "paste.png" };
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
+      clipboardData: {
+        types: ["Files"],
+        items: [
+          { kind: "file", type: "image/png", getAsFile: () => file },
+          { kind: "string", type: "text/plain" },
+        ],
+      },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [[file]]);
+  });
+});
+
+test("pasting text is left to the editor and never reads the native clipboard", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
+      clipboardData: {
+        types: ["text/plain"],
+        items: [{ kind: "string", type: "text/plain" }],
+      },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), []);
+    assert.equal(h.argsOf("pasteImageFromClipboard"), undefined);
+  });
+});
+
+test("a paste outside the editor is ignored even when it holds an image", () => {
+  withHarness((h) => {
+    const file = { type: "image/png", name: "paste.png" };
+    const search = h.els.search;
+    const event = h.document.dispatch("paste", {
+      target: search,
+      clipboardData: { types: ["Files"], files: [file] },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("a paste event without file objects falls back to the native clipboard", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
+      clipboardData: { types: [] },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), ["pasteImageFromClipboard"]);
+  });
+});
+
+test("dropping image files on the editor attaches them and shows a drop state", () => {
+  withHarness((h) => {
+    const file = { type: "image/webp", name: "drop.webp" };
+    const over = h.els.editor.dispatch("dragover", {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+    assert.equal(over.defaultPrevented, true);
+    assert.equal(h.els.editor.classList.contains("is-dragover"), true);
+
+    const drop = h.els.editor.dispatch("drop", {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+    assert.equal(drop.defaultPrevented, true);
+    assert.equal(h.els.editor.classList.contains("is-dragover"), false);
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [[file]]);
+  });
+});
+
+test("a uri-list file drag is prevented at the document level", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("dragover", {
+      dataTransfer: { types: ["text/uri-list"], files: [] },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("dropping a file outside the editor is prevented, not opened", () => {
+  withHarness((h) => {
+    const file = { type: "", name: "outside.png" };
+    const event = h.document.dispatch("drop", {
+      dataTransfer: { types: ["Files"], files: [file] },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("a dropped file with an empty MIME type still reaches the gallery", () => {
+  withHarness((h) => {
+    const file = { type: "", name: "linux-drop.png" };
+    const event = h.els.editor.dispatch("drop", {
+      dataTransfer: { types: ["text/uri-list"], files: [file] },
+    });
+
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(h.argsOf("addAttachmentFiles"), [[file]]);
+  });
+});
+
+test("a text drag is not treated as a file drop", () => {
+  withHarness((h) => {
+    const over = h.els.editor.dispatch("dragover", {
+      dataTransfer: { types: ["text/plain"], files: [] },
+    });
+    const drop = h.els.editor.dispatch("drop", {
+      dataTransfer: { types: ["text/plain"], files: [] },
+    });
+
+    assert.equal(over.defaultPrevented, false);
+    assert.equal(drop.defaultPrevented, false);
+    assert.deepEqual(h.names(), []);
+  });
+});
+
+test("image paste and drop are ignored while the entry is read-only", () => {
+  withHarness(
+    (h) => {
+      const file = { type: "image/png" };
+      const paste = h.document.dispatch("paste", {
+        target: h.els.editor,
+        clipboardData: {
+          types: ["Files"],
+          items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
+        },
+      });
+      const drop = h.els.editor.dispatch("drop", {
+        dataTransfer: { types: ["Files"], files: [file] },
+      });
+
+      assert.equal(paste.defaultPrevented, true);
+      assert.equal(drop.defaultPrevented, true);
+      assert.deepEqual(h.names(), ["onAttachmentBlocked", "onAttachmentBlocked"]);
+      assert.deepEqual(h.argsOf("onAttachmentBlocked"), [[file]]);
+      assert.equal(h.argsOf("addAttachmentFiles"), undefined);
+    },
+    { canAttachImages: () => false }
+  );
+});
 
 test("Escape closes the statistics dialog before anything else", () => {
   withHarness(
@@ -923,6 +1132,33 @@ test("the cancel-workspace button closes the picker", () => {
     h.els.cancelWorkspace.dispatch("click");
     assert.deepEqual(h.names(), ["cancelWorkspacePicker"]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Phone layers
+// ---------------------------------------------------------------------------
+//
+// On a phone the app is split into a list layer and an editor layer. The back
+// button is the only way out of the editor, so it must reach `showListLayer`
+// and nothing else.
+
+test("the back button returns to the list layer", () => {
+  withHarness((h) => {
+    h.els.backToList.dispatch("click");
+    assert.deepEqual(h.names(), ["showListLayer"]);
+  });
+});
+
+test("the back button is optional so an older DOM still wires up", () => {
+  // `initEventWiring` reads `els.backToList` behind a guard, so a DOM that
+  // predates the phone layout must still wire up without throwing.
+  const h = harness();
+  try {
+    delete h.els.backToList;
+    assert.doesNotThrow(() => initEventWiring(h.deps));
+  } finally {
+    h.restore();
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
+import { createAttachmentGallery } from "./attachments.js";
+import { createNativeFileDrop } from "./native-drop.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -163,6 +165,10 @@ let statsDialog;
 let settingsDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
+/** @type {ReturnType<typeof createAttachmentGallery>} */
+let attachmentGallery;
+/** @type {ReturnType<typeof createNativeFileDrop>} */
+let nativeFileDrop;
 
 // ---------------------------------------------------------------------------
 // Status / word count
@@ -386,6 +392,7 @@ function refreshForLocale() {
   applyTheme();
   updateWordCount();
   if (calendar.isCalendarOpen()) calendar.renderCalendar();
+  attachmentGallery?.refreshForLocale();
   if (visibleEntries.length > 0 || searchQuery.trim()) renderList();
 
   // The statistics dialog builds its labels in JS, so it has to be redrawn
@@ -1007,6 +1014,7 @@ function lockEditor(date, reason) {
   currentFavourite = false;
   renderFavouriteButton();
   updateWordCount();
+  attachmentGallery?.setLocked(true);
   setStatus(t("broken.lockedStatus"));
 }
 
@@ -1036,6 +1044,7 @@ function lockEntryForReading() {
   els.content.readOnly = true;
   if (els.editor) els.editor.classList.add("is-readonly");
   if (els.editBtn) els.editBtn.hidden = false;
+  attachmentGallery?.setReadOnly();
   setStatus(t("status.readOnly"));
 }
 
@@ -1047,6 +1056,7 @@ function unlockEntryForEditing() {
   els.content.readOnly = false;
   if (els.editor) els.editor.classList.remove("is-readonly");
   if (els.editBtn) els.editBtn.hidden = true;
+  attachmentGallery?.setReadOnly();
   setStatus(t("status.editing"));
   els.content.focus();
 }
@@ -1057,6 +1067,25 @@ function brokenEntryFor(date) {
 }
 
 /** Load the entry for `date` into the editor. */
+// ---------------------------------------------------------------------------
+// Phone layers
+// ---------------------------------------------------------------------------
+//
+// On a phone-sized viewport the app is split into two layers: the list (date
+// picker, search, entry list) and the editor. Only one is on screen at a time.
+// The CSS keys off `data-layer` on `.app`; these helpers are the only writers.
+// On wider viewports the attribute is ignored, so both panes stay visible.
+
+/** Show the list layer. The editor is hidden until a date is picked. */
+function showListLayer() {
+  if (els.app) els.app.dataset.layer = "list";
+}
+
+/** Show the editor layer, filling the window on a phone. */
+function showEditorLayer() {
+  if (els.app) els.app.dataset.layer = "editor";
+}
+
 async function selectDate(date) {
   // Flush any pending save for the previous date before switching.
   if (saveTimer) {
@@ -1064,6 +1093,15 @@ async function selectDate(date) {
     saveTimer = null;
     await saveNow();
   }
+
+  // Picking a date is the phone's "open this entry" gesture, so it moves to the
+  // editor layer. On a wide viewport the attribute has no effect.
+  showEditorLayer();
+
+  // Drop the previous day's gallery immediately; the new list arrives after the
+  // entry decrypts. Keeping the old images visible under the new date would be
+  // worse than a brief empty strip.
+  attachmentGallery?.clear();
 
   currentDate = date;
   els.datePicker.value = date;
@@ -1076,6 +1114,7 @@ async function selectDate(date) {
   const broken = brokenEntryFor(date);
   if (broken) {
     lockEditor(date, broken.reason);
+    attachmentGallery?.setLocked(true);
     scrollDateIntoView(date);
     highlightActive();
     return;
@@ -1103,6 +1142,7 @@ async function selectDate(date) {
     savedContent = content;
     currentFavourite = entry ? Boolean(entry.favourite) : false;
     renderFavouriteButton();
+    await attachmentGallery?.load(date);
     // An entry that already has something in it opens read-only: the user asked
     // to read it, not to change it. A blank date stays editable so a new entry
     // can be typed straight away.
@@ -1120,11 +1160,13 @@ async function selectDate(date) {
     const nowBroken = brokenEntryFor(date);
     if (nowBroken) {
       lockEditor(date, nowBroken.reason);
+      attachmentGallery?.setLocked(true);
       renderList();
       scrollDateIntoView(date);
       highlightActive();
       return;
     }
+    attachmentGallery?.clear();
     setStatus(t("status.loadFailed"));
   }
 
@@ -1231,6 +1273,10 @@ async function deleteCurrent() {
     await invoke("delete_entry", { date: currentDate });
     clearEditorFields();
     updateWordCount();
+    // The entry is gone, but the date is still selected. Reloading shows an
+    // empty gallery (and lets the user add images to a fresh entry) instead of
+    // leaving a cleared, hidden section behind.
+    await attachmentGallery?.load(currentDate);
     setStatus(t("status.deleted"));
     els.deleteBtn.disabled = true;
     els.favouriteBtn.disabled = true;
@@ -1276,6 +1322,7 @@ async function deleteBrokenFile(date) {
       unlockEditor();
       clearEditorFields();
       updateWordCount();
+      await attachmentGallery?.load(date);
     }
     setStatus(t("broken.deleted"));
     await refreshList();
@@ -1320,6 +1367,7 @@ function resetEditorState() {
   els.content.value = "";
   if (els.brokenCount) els.brokenCount.textContent = "";
   if (els.viewBroken) els.viewBroken.hidden = true;
+  attachmentGallery?.clear();
   if (currentView === "broken") {
     currentView = "all";
     syncViewTabs("all");
@@ -1437,6 +1485,37 @@ function initAutoLock() {
 // defined. The order matters only in that `lockScreen` is built last: it is the
 // one that closes over the other controllers.
 
+/**
+ * Attach images the OS dropped as filesystem paths.
+ *
+ * Native drag-drop reports paths instead of `File` objects. A normal read-only
+ * entry unlocks on an explicit drop, matching paste and the HTML5 drop path; a
+ * broken entry stays locked because its contents are unknown.
+ */
+function dropAttachmentPaths(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  if (!currentDate || lockedDate) {
+    setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
+    return;
+  }
+  if (readOnlyEntry) unlockEntryForEditing();
+  attachmentGallery.addPaths(paths);
+}
+
+/**
+ * Fallback for WebKitGTK, which may omit clipboard images from `paste`.
+ *
+ * Reads the clipboard natively and only unlocks a read-only entry after an
+ * image is actually found, so normal text paste never changes the edit state.
+ */
+async function pasteImageFromClipboard() {
+  if (!currentDate || lockedDate) return;
+  const file = await attachmentGallery.clipboardImage();
+  if (!file) return;
+  if (readOnlyEntry) unlockEntryForEditing();
+  await attachmentGallery.addFiles([file]);
+}
+
 function createControllers() {
   calendar = createCalendar({
     els,
@@ -1480,6 +1559,25 @@ function createControllers() {
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
   });
 
+  attachmentGallery = createAttachmentGallery({
+    els,
+    invoke,
+    t,
+    setStatus,
+    canEdit: () => Boolean(currentDate) && !readOnlyEntry && !lockedDate,
+    isLocked: () => Boolean(lockedDate),
+    flushText: saveNow,
+    refreshList,
+    onEntryChanged: syncHeaderActions,
+  });
+
+  nativeFileDrop = createNativeFileDrop({
+    getCurrentWebview: () => window.__TAURI__?.webview?.getCurrentWebview?.(),
+    editor: els.editor,
+    canDrop: () => attachmentGallery.canEdit(),
+    onDrop: dropAttachmentPaths,
+  });
+
   lockScreen = createLockScreen({
     els,
     invoke,
@@ -1512,6 +1610,11 @@ function createControllers() {
 async function enterApp() {
   els.lockScreen.hidden = true;
   els.app.hidden = false;
+
+  // On a phone the first screen is the list: the user picks a date or searches,
+  // and only then does the editor take over. On a wide viewport this attribute
+  // is ignored and both panes are visible.
+  showListLayer();
 
   // The window is created with `contentProtected: true`, so the lock screen is
   // covered too. Re-assert it here in case the workspace picker turned it off.
@@ -1580,6 +1683,30 @@ function wireEvents() {
     scheduleSave,
     updateWordCount,
     selectDate,
+    showListLayer,
+    // Attachments
+    pickAttachment: attachmentGallery.pickFile,
+    canAttachImages: attachmentGallery.canEdit,
+    onAttachmentBlocked: (files) => {
+      // Pasting or dropping an image is an explicit edit gesture. If the entry
+      // is merely read-only, unlock it and continue; a broken entry stays
+      // locked, and there is no date to attach to on the lock screen.
+      if (readOnlyEntry && !lockedDate) {
+        unlockEntryForEditing();
+        attachmentGallery.addFiles(files);
+        return;
+      }
+      setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
+    },
+    addAttachmentFiles: attachmentGallery.addFiles,
+    pasteImageFromClipboard,
+    handleAttachmentClick: attachmentGallery.handleClick,
+    attachmentDragStart: attachmentGallery.handleDragStart,
+    attachmentDragOver: attachmentGallery.handleDragOver,
+    attachmentDrop: attachmentGallery.handleDrop,
+    attachmentDragEnd: attachmentGallery.handleDragEnd,
+    isAttachmentViewerOpen: attachmentGallery.isViewerOpen,
+    closeAttachmentViewer: attachmentGallery.closeViewer,
     deleteCurrent,
     toggleFavourite,
     unlockEntryForEditing,
@@ -1644,6 +1771,12 @@ async function init() {
   // the wiring only reads state lazily through the callbacks, so it is safe to
   // attach before the settings have loaded.
   wireEvents();
+
+  // Native drag-drop is the reliable source of dropped file paths. The HTML5
+  // handlers remain as a fallback for webviews that still populate File objects.
+  nativeFileDrop.start().catch((err) => {
+    console.error("native drag-drop failed:", err);
+  });
 
   // Pick the language first: every other render below reads translated
   // strings, so the dictionaries have to be active before anything is drawn.

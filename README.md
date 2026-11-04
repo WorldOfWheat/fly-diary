@@ -1,21 +1,24 @@
 # Fly Diary
 
 一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **AES-256-GCM 加密的 XML** 檔案儲存。
+目前版本 `0.1.5`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
+把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
 
 ## 功能
 
 - 一天一篇：檔名即日期（`YYYY-MM-DD.xml`），同一天再存只會覆寫，不會產生重複
 - **AES-256-GCM 加密**：日記內容以 RustCrypto 的 `aes-gcm` 加密，每次寫入使用新的隨機 IV
-- **首次啟動設定儲存路徑**：可自訂日記資料夾（含原生資料夾選擇器），路徑寫入設定檔
+- **首次啟動設定儲存路徑**：可自訂日記資料夾（桌面版含原生資料夾選擇器；行動版直接使用 App 私有資料夾），路徑寫入設定檔
 - **解鎖畫面可切換工作區**：不必先解鎖就能改用另一個日記資料夾；若該資料夾已有 vault，直接切換成輸入密碼
 - **密碼保護**：首次啟動設定密碼，之後每次開啟需解鎖；金鑰只存在記憶體，鎖定即清除
-- 每篇日記有 **標題（title）** 與內容，標題以明文儲存以便側邊欄顯示
+- 每篇日記有 **標題（title）** 與內容；兩者都加密，側邊欄的標題來自解密後的 `index.xml` 快取
 - 純 HTML/JS 前端，無框架、無打包步驟
 - 自動儲存（停止輸入 0.8 秒後），切換日期前也會先存檔
 - 側邊欄列出所有日記，可依日期或標題搜尋
 - 日期前後切換、**全螢幕月曆選擇器**（一眼看出哪天寫過、點一下直接跳過去）、「今天」快速鍵
 - **從資料夾匯入**：讀取 `YYYY-MM-DD.txt`，先掃描預覽再確認，並列出失敗的檔案
 - **收藏**：編輯區的星號按鈕可把日記加入收藏，側邊欄切到「收藏」頁只看收藏的日記
+- **圖片相簿**：每篇日記可附圖片，支援檔案選擇、**貼上**、**拖放**、刪除、拖曳／箭頭排序與點擊放大；圖片個別以 AES-256-GCM 加密，前端自動縮到長邊 1000px 的 WebP（必要時 fallback JPEG/PNG）並移除 EXIF
 - **唯讀開啟**：已經寫過的日記點開時先進入唯讀，按編輯區右上角的「解鎖編輯」才能修改；空白日期則直接可寫
 - **損壞檔保護**：無法解密的日記不會讓清單載入失敗，而是收進側邊欄的「損壞」分類（有壞檔才出現）；點開後編輯器鎖定唯讀，可匯出原始檔或確認後刪除
 - **設定頁**：編輯區底部的「設定」按鈕開啟，集中管理日記本（儲存位置、匯入、統計）、閒置自動鎖定、自動儲存延遲、變更密碼與 Argon2id 參數
@@ -24,6 +27,8 @@
 - **Argon2id 自動校準**：實測本機速度，自動挑出約 1 秒可解鎖的參數
 - **繁體中文／英文介面**：右上角一鍵切換，日期格式也跟著語言改變
 - **淺色／深色主題**：解鎖畫面右上角的主題鈕三態循環（跟隨系統 → 淺色 → 深色），選擇存在 `localStorage`
+- **手機版兩層式排版**：`640px` 以下把「列表」與「編輯器」拆成兩層，點日期進入編輯器、按左上角「列表」返回；桌面寬度仍維持兩欄並存
+- **觸控與安全區**：觸控目標加大、停用雙擊縮放延遲，並以 `env(safe-area-inset-*)` 避開瀏海與手勢列
 - 刪除單日記（有確認提示）
 - 使用**本地時區**判定「今天」，不會因 UTC 造成跨日錯亂
 
@@ -85,7 +90,20 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 因為所有尺寸（內距、圖示、日曆、對話框）都是 `rem`，調整根字級會一次縮放整個介面，而不是只有文字變大。虛擬滾動的列高以 `--row-h` 宣告並由 JS 用 `getComputedStyle` 讀回，所以列高會跟著字級變動，捲動位置不會錯位。
 
-視窗變窄時另有兩個斷點：`900px` 以下縮小側邊欄、隱藏日期的星期副標；`640px` 以下改為上下堆疊（側邊欄在上、編輯區在下）。
+視窗變窄時有幾個斷點：`900px` 以下縮小側邊欄、隱藏日期的星期副標；`720px` 以下收起字級數值，只留 `A−` / `A+`；`640px` 以下切換成手機版的兩層式排版（見下節）；`400px` 以下再收緊間距，並把使用者倍率上限壓到 `1.2`，避免 320px 視窗被撐破。視窗高度不足時（`560px` / `520px`）另會壓縮卡片與月曆的垂直間距。
+
+## 手機版排版
+
+`640px` 以下（一路支援到 `tauri.conf.json` 設定的最小 `320×480`）不再維持「側邊欄 + 編輯區」兩欄，而是切成兩層，同一時間只顯示一層：
+
+- **單一 grid 格子**：`.app` 在窄視窗只留一個 `minmax(0, 1fr)` 格子，由 `.app[data-layer="list|editor"]` 決定顯示列表或編輯器。`main.js` 的 `showListLayer()` / `showEditorLayer()` 是唯二寫入這個屬性的地方。
+- **列表優先**：`enterApp()` 進入 App 時先顯示列表；點任一天（`selectDate()`，包含搜尋結果與損壞檔）才切到編輯器，編輯器佔滿整個視窗。
+- **返回鈕**：編輯區左上角的「列表」按鈕（`#back-to-list`）只在窄視窗出現，按一下呼叫 `showListLayer()`。桌面寬度下兩欄並存，按鈕以 `display: none` 隱藏；`wiring.js` 對它做存在性檢查，舊 DOM 沒有這個按鈕也能正常初始化。
+- **標頭壓縮**：窄視窗的狀態列允許換行，狀態文字可縮短並以省略號截斷，避免解鎖／收藏／刪除按鈕被推出畫面。
+- **320px 極窄寬度**：日期導覽縮小、設定列與匯入列改單欄、統計卡片最小寬度降到 `4.5rem`；狀態文字改為視覺隱藏（`clip-path`）而不是 `display: none`，因為它同時是 `role="status"` / `aria-live` 區域，要保留給螢幕閱讀器。
+- **解鎖畫面**：窄視窗時標題與主題／語言開關改成單欄置中；工作區列只留「切換工作區」按鈕，路徑文字在窄視窗隱藏，把寬度讓給按鈕。
+- **觸控裝置**（`pointer: coarse`）：圖示按鈕至少 `2.75rem`、清單列高提高到 `--row-h: 3.75rem`（虛擬滾動會用 `getComputedStyle` 重新量測）。`hover: none` 會關掉觸控後殘留的 hover 樣式，改用 `:active` 回饋。圖片縮圖列可橫向捲動，排序／刪除按鈕在觸控裝置上常駐顯示。
+- **安全區與捲動**：`height: 100dvh`、`viewport-fit=cover` 與 `env(safe-area-inset-*)` 讓內容避開瀏海、手勢列與行動瀏覽器網址列；`touch-action: manipulation` 去掉雙擊縮放延遲，`overscroll-behavior: contain` 阻止內層捲動連鎖到頁面。
 
 ## 多語系
 
@@ -178,6 +196,8 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
 | IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
 | 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
+| 圖片附件     | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
+| 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
 | 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
 | 金鑰生命週期 | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零        |
 
@@ -224,7 +244,8 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 `payload` 解密後是 `\x01` + 收藏旗標（`1` / `0`）+ `"\n"` + `標題` + `"\n"` + `內容`，
 因此**標題、內容與收藏狀態都是密文**，未解鎖時無法得知任何日記寫了什麼。
-`date` 是唯一的明文欄位，而它本來就已經出現在檔名上。
+在日記檔內，`date` 是唯一的明文欄位，而它本來就已經出現在檔名上。附件是另一個 sidecar，
+會額外露出日期資料夾、圖片張數與檔案大小，但圖片內容、原始檔名與 manifest 都是密文。
 
 ### 版本與 AAD
 
@@ -247,7 +268,10 @@ AAD = date || 0x00 || version
    改寫版本屬性會讓驗證標籤失效，該篇日記會被歸類為**損壞**而不是被安靜地解開。
 
 同理，`index.xml` 用 `b"fly-diary/index"` 當 AAD，所以索引密文與日記密文即使使用同一把
-diary key 也**不能互換**。
+diary key 也**不能互換**。附件也各自使用獨立 label：圖片是
+`fly-diary/attachment || 0x00 || 日期 || 0x00 || id || 0x00 || 版本`，manifest 是
+`fly-diary/attachment-manifest || 0x00 || 日期`；因此圖片、manifest、索引與日記四種密文
+彼此都不能互換，附件搬到別的日期也會解密失敗。
 
 | 版本 | payload 內容                              | AAD                                                           |
 | ---- | ----------------------------------------- | ------------------------------------------------------------- |
@@ -319,6 +343,16 @@ Vault 檔（`vault.xml`）：
 > 收藏旗標的權威來源是日記檔內的密文，索引只是鏡射一份，所以重建索引不會弄丟收藏。
 > 沒有第三欄的舊索引（`日期 \t 標題`）仍可讀取，一律視為未收藏。
 
+附件檔（`attachments/YYYY-MM-DD/<id>.bin`）是二進位加密檔，不經過 XML／base64：
+
+```text
+magic "FDAT" | version u8 | IV 12 bytes | AES-256-GCM ciphertext + tag
+```
+
+MIME 與顯示順序存在同資料夾的 `manifest.xml`；manifest 遺失時，解密後可由 magic bytes
+重新判斷 MIME。圖片與 manifest 都不會出現在 `list_entries`，因為掃描只處理頂層的
+`YYYY-MM-DD.xml`。
+
 > 舊版（`version="1"`）vault 使用單次 SHA-256 派生金鑰，並以 `<verifier>` 驗證密碼。
 > 解鎖舊 vault 時會自動遷移：先以舊金鑰解密所有日記、用新的隨機 diary key 重新加密，
 > 最後才改寫 `vault.xml`。若中途失敗，舊 vault 保持原樣，舊密碼仍可解鎖。
@@ -353,7 +387,76 @@ Vault 檔（`vault.xml`）：
 2. **刪除檔案** — 需要二次確認，且訊息會明講無法復原。
 
 匯出成功後會再問一次是否要刪除，讓使用者自己決定；不匯出也可以直接刪除。
-刪除走的是既有的 `delete_entry`，同時會把該日期從索引移除。
+刪除走的是既有的 `delete_entry`，同時會把該日期從索引與附件資料夾移除。
+
+## 圖片附件
+
+圖片是日記的 **sidecar**，不是 entry payload 的一部分。文字格式完全不變，
+所以舊日記不需要遷移，新舊版本也能互相讀取：
+
+```text
+diary/
+├── 2026-10-23.xml
+└── attachments/
+    └── 2026-10-23/
+        ├── manifest.xml
+        ├── 9f2c1a7b4e6d8c039f2c1a7b4e6d8c03.bin
+        └── 4d8e2f1a6b3c9e704d8e2f1a6b3c9e70.bin
+```
+
+- **檔名**：16 bytes 隨機 → 32 個小寫 hex + `.bin`，由後端產生。不使用原始檔名、標題、
+  日期或 SHA-256，避免洩漏與路徑問題。
+- **每張圖獨立加密**：AES-256-GCM，新的隨機 12-byte IV。檔案格式為
+  `FDAT | version | IV | ciphertext`，AAD 是
+  `"fly-diary/attachment" || 0x00 || date || 0x00 || id || 0x00 || version`。
+- **manifest.xml**：外層沿用日記的 `<diary version="4">` envelope，payload 解密後是內層 XML：
+
+  ```xml
+  <manifest version="1" date="2026-10-23">
+    <attachment id="9f2c..." mime="image/webp" width="1000" height="750"/>
+    <attachment id="4d8e..." mime="image/jpeg" width="800" height="1000"/>
+  </manifest>
+  ```
+
+  **元素順序就是顯示順序**。沒有 `added-at`，也不依賴檔名或 mtime。
+  manifest 的 AAD 是 `"fly-diary/attachment-manifest" || 0x00 || date`，
+  所以搬到別天會失敗，也不能和 `index.xml` 或日記密文互換。
+- **上傳前壓縮**：前端用 canvas 將長邊縮到 1000px、WebP quality 0.8；若 WebView 不支援
+  WebP 編碼時，PNG／WebP 來源會 fallback PNG 以保留透明，其他來源 fallback JPEG（透明區填白）。
+  重新編碼會一併清掉 EXIF（包含 GPS）。
+- **限制**：前端輸入上限 20 MB；後端解碼後上限 5 MB、每天最多 200 張；只接受
+  WebP / JPEG / PNG，拒絕 SVG。`mime` 與 magic bytes 必須一致。
+- **加入方式**：除了「加入圖片」按鈕，也可以直接把圖片檔拖進編輯區，或把剪貼簿裡的圖片
+  （例如截圖）貼上。只有真正的圖片檔會被攔截，文字貼上與相簿內部的排序拖曳不受影響。
+  桌面版的檔案拖放走 Tauri 原生事件（`onDragDropEvent`）：它提供的是**檔案路徑**，由
+  `read_dropped_images` 讀成 base64 後，再交給與檔案選擇器相同的壓縮與加密流程。
+  這是刻意的：Linux／WebKitGTK 的 HTML5 `drop` 常常只給 `text/uri-list`、`dataTransfer.files`
+  是空的，只靠前端會出現「有拖放提示、放開卻沒有加入」的情況。HTML5 handler 仍保留作為
+  其他 webview 的備援。原生拖放事件只在桌面版使用；行動版仍以檔案選擇器為主。
+- **貼上圖片**：貼上事件沒有帶 `File` 時，會改用 `read_clipboard_image` 從系統剪貼簿讀取圖片
+  （arboard），再走同一套壓縮流程。這補上 WebKitGTK 不把剪貼簿圖片放進 `clipboardData`
+  的情況；純文字貼上仍完全交給瀏覽器，不會被攔截。只有剪貼簿真的含圖片時才會自動解鎖唯讀日記。
+  原生剪貼簿備援只在桌面版啟用；行動版仍走 WebView 的 paste 事件。
+- **讀取**：`list_attachments` 只解密 manifest；`get_attachment` 才逐張解密，前端延遲載入。
+  剛上傳的圖片直接沿用前端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
+- **唯讀與壞檔**：唯讀模式只能看圖；按鈕新增、刪除、排序都要先「解鎖編輯」。貼上或拖放圖片
+  被視為明確的編輯動作，會自動解鎖一般唯讀日記並繼續加入；壞檔（`lockedDate`）仍完全鎖定，
+  只顯示提示。
+
+### 順序與一致性
+
+新增圖片時依序做「確保 entry 存在 → 寫圖片 → 寫 manifest」；刪除時依序做
+「刪圖片 → 更新 manifest」。這個方向讓 crash 的結果只會是：
+
+- 新增中斷 → 留下未被 manifest 引用的圖片，下次載入時補到最後。
+- 刪除中斷 → manifest 指向不存在的圖片，顯示「圖片遺失」佔位，不會讓已刪除的圖復活。
+
+manifest 遺失或損壞時，會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；
+資料不會不見，但精確順序只能近似恢復。整個日期資料夾沒有對應 XML 時視為孤兒，
+可用 `list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除，不會自動刪除。
+
+刪除日記的順序是 **index → XML → 附件資料夾**；反過來先刪附件會在 crash 時留下
+「日記還在、圖片沒了」的更糟狀態。
 
 ## 設定檔
 
@@ -432,14 +535,16 @@ sudo apt install -y \
 
 ### 2. 安裝前端依賴
 
+專案使用 **pnpm**（版本由 `package.json` 的 `packageManager` 欄位鎖定為 `9.15.4`）：
+
 ```bash
-npm install
+pnpm install
 ```
 
 ### 3. 啟動開發模式
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 ### 4. 執行測試
@@ -452,24 +557,30 @@ npm run dev
 也可以分開執行：
 
 ```bash
-npm test               # 前端（node --test）
-npm run test:rust      # Rust（cargo test）
-npm run coverage       # 前端 + Rust coverage
+pnpm test                # 前端（node --test）
+pnpm run test:rust       # Rust（cargo test）
+pnpm run coverage        # 前端 + Rust coverage
 ```
 
-前端測試放在 `tests/`，用 Node 內建的 test runner，不需要額外安裝套件；受測的純函式在
+前端測試放在 `tests/`，用 Node 內建的 test runner（Node 20 以上；CI 用 Node 24），不需要額外安裝套件；受測的純函式在
 `src/lib/dates.js` 與 `src/lib/stats.js`，`src/i18n.js` 另有字典完整性檢查（兩份字典的
-key 必須一致、`index.html` 與 `main.js` 用到的 key 必須存在）。
+key 必須一致、`index.html`、`main.js` 與 `attachments.js` 用到的 key 必須存在）。
 
-各對話框模組（`calendar.js`、`import-dialog.js`、`stats-dialog.js`、`settings-dialog.js`、
-`lock-screen.js`）都以 `createXxx(deps)` 工廠形式匯出，依賴全部由參數注入，因此可以在
-Node 裡直接測試。`tests/helpers/dom.js` 提供一個約 300 行的極簡 DOM stub（`fakeElement`、
+各對話框與相簿模組（`calendar.js`、`import-dialog.js`、`stats-dialog.js`、`settings-dialog.js`、
+`lock-screen.js`、`attachments.js`）都以 `createXxx(deps)` 工廠形式匯出，依賴全部由參數注入，
+因此可以在 Node 裡直接測試。`tests/helpers/dom.js` 提供一個約 300 行的極簡 DOM stub（`fakeElement`、
 `installDom`、`fakeEls`、`fakeT`、`spy`、`fakeInvoke`），不需要 jsdom 之類的額外套件；
 遇到 stub 不支援的 selector 會直接丟錯，避免測試默默通過。
 
-Rust 測試分兩層：`src-tauri/src/*.rs` 內的單元測試，以及 `src-tauri/tests/vault_lifecycle.rs`
-的整合測試（建立 vault → 寫入 → 上鎖 → 解鎖 → 讀回 → 改密碼）。涵蓋加解密 roundtrip、
-錯誤密碼、密文竄改偵測、XML 序列化、日期驗證、索引重建與匯入流程。
+`tests/styles.test.js` 補上 DOM stub 看不到的一層：它直接讀 `styles.css` 的文字，驗證
+`[hidden]` 疊層不會被 `display` 蓋掉、月曆與 lightbox 的 `z-index` 順序，以及手機版的
+`.app[data-layer]` 顯隱規則與返回鈕的顯示條件。這類規則若寫錯，其他測試不會失敗，但使用者會看到
+一個透明卻吃掉所有點擊的浮層（或永遠離不開編輯器）。
+
+Rust 測試分三層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
+的日記生命週期整合測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
+（新增 → 排序 → 上鎖 → 解鎖 → 讀回 → 刪除）。涵蓋加解密 roundtrip、錯誤密碼、密文竄改偵測、
+XML 序列化、日期驗證、索引重建、匯入流程、manifest 重建與孤兒偵測。
 
 Rust coverage 需要 `cargo-llvm-cov`：
 
@@ -481,10 +592,24 @@ cargo install cargo-llvm-cov --locked
 ### 5. 打包
 
 ```bash
-npm run build
+pnpm build
 ```
 
 Linux 只產出 `.deb` 與 `.rpm`，**不產出 AppImage**。AppImage 會把 GTK 一起打包，並在 `AppRun` 裡把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`；該 cache 不含 `im-ibus.so` / `im-fcitx.so`，導致輸入法在 AppImage 內完全無法切換。`.deb` / `.rpm` 直接使用系統的 GTK 與系統的輸入法模組，沒有這個問題。
+
+### 6. 行動版（Android）
+
+手機版沿用同一份前端，靠 `640px` 斷點切換成兩層式排版。Tauri 產生的 Android 專案位於
+`src-tauri/gen/android`，已列在 `.gitignore`，不隨 repo 提交；需要 Android SDK／NDK 與對應的
+Rust target，之後可用 `pnpm tauri android dev` / `pnpm tauri android build` 建置。
+
+行動版有三個刻意不同的行為：
+
+- **沒有資料夾選擇器**：`pick_diary_dir` 在 `#[cfg(mobile)]` 下直接回傳 App 私有資料夾，不開原生對話框；日記因此固定放在 App 的資料目錄。
+- **不支援資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
+- 選單列只在桌面建置（`build_menu` 包在 `#[cfg(desktop)]`），行動版沒有 `Edit` 選單可掛。
+
+其餘加密、儲存、索引與背景升級流程在桌面與行動版完全相同。
 
 ## 專案結構
 
@@ -500,6 +625,8 @@ fly-diary/
 │   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
 │   ├── settings-dialog.js  # 設定對話框：日記本、自動鎖定、KDF、改密碼（createSettingsDialog）
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準（createLockScreen）
+│   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
+│   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
@@ -511,11 +638,14 @@ fly-diary/
 │   ├── dates.test.js
 │   ├── stats.test.js
 │   ├── i18n.test.js
-│   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce
+│   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕
 │   ├── calendar.test.js    # 月曆格線、焦點移動、月份切換、月份摘要、捲動鎖定
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
+│   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
+│   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
+│   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
@@ -523,15 +653,20 @@ fly-diary/
 │   ├── tauri.conf.json
 │   ├── capabilities/
 │   │   └── default.json
+│   ├── gen/                # Tauri 產生的行動版專案（gitignored）
 │   ├── icons/
 │   ├── tests/
-│   │   └── vault_lifecycle.rs  # 整合測試：建立→寫入→上鎖→解鎖→讀回
+│   │   ├── vault_lifecycle.rs      # 整合測試：建立→寫入→上鎖→解鎖→讀回
+│   │   └── attachments_lifecycle.rs # 附件：新增→排序→上鎖→解鎖→刪除
 │   └── src/
 │       ├── main.rs         # 進入點
-│       ├── lib.rs          # Tauri commands + 解鎖 session 狀態
-│       ├── settings.rs     # 設定檔（日記路徑、自動鎖定）讀寫
+│       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
+│       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM 加解密
+│       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── xml.rs          # XML 序列化 / 解析
+│       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
+│       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
 ├── test.sh                 # 一次跑完兩邊測試與 coverage
 ├── package.json
@@ -546,7 +681,7 @@ fly-diary/
 | `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（保留既有的自動鎖定與自動儲存設定）                     |
 | `set_auto_lock(minutes)`                  | 寫入閒置自動鎖定分鐘數（`0` 表示永不）                                       |
 | `set_autosave_delay(ms)`                  | 寫入自動儲存延遲毫秒數（只接受 `200/400/800/1500/3000`）                     |
-| `pick_diary_dir()`                        | 開啟原生資料夾選擇器，回傳選擇的路徑                                         |
+| `pick_diary_dir()`                        | 桌面版開啟原生資料夾選擇器；行動版直接回傳 App 私有資料夾                     |
 | `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）                                             |
 | `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍                                             |
 | `get_vault_kdf()`                         | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`）                           |
@@ -558,20 +693,32 @@ fly-diary/
 | `is_unlocked()`                           | 目前是否已解鎖                                                               |
 | `get_entry(date)`                         | 讀取並解密某天的日記，不存在回 `null`                                        |
 | `save_entry(date, title, content)`        | 加密後寫入/覆寫某天的日記                                                    |
-| `delete_entry(date)`                      | 刪除某天的日記                                                               |
+| `delete_entry(date)`                      | 刪除某天的日記與附件資料夾                                                   |
+| `save_attachment(date, mime, data, width, height)` | 加密並儲存一張圖片（base64），附加在相簿最後                     |
+| `list_attachments(date)`                  | 依 manifest 順序列出圖片 metadata                                           |
+| `get_attachment(date, id)`                | 解密單張圖片並回傳 base64 與 MIME                                           |
+| `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                 |
+| `read_clipboard_image()`                  | 桌面版從系統剪貼簿讀取圖片並轉成 PNG base64；沒有圖片或行動版回 `null`       |
+| `delete_attachment(date, id)`             | 刪除一張圖片並更新 manifest                                                 |
+| `reorder_attachments(date, ids)`          | 以新的 id 順序重寫 manifest                                                 |
+| `list_orphan_attachments()`               | 列出沒有對應日記的附件資料夾                                                |
+| `delete_orphan_attachments(date)`         | 刪除指定的孤兒附件資料夾                                                    |
 | `list_entries()`                          | 列出所有日記（新到舊，需解鎖才能取得標題）                                   |
 | `list_favourites()`                       | 只列出收藏的日記（新到舊）                                                   |
 | `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態                                           |
 | `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引                                  |
 | `list_broken_entries()`                   | 列出無法解密的日記檔（日期、大小、失敗原因）                                 |
 | `export_broken_entry(date)`               | 開啟存檔對話框，把原始 `.xml` 位元組複製到指定位置                           |
-| `pick_import_dir()`                       | 開啟原生資料夾選擇器，回傳匯入來源路徑                                       |
+| `pick_import_dir()`                       | 桌面版開啟原生資料夾選擇器；行動版回報不支援資料夾匯入                       |
 | `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入                               |
 | `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告                                   |
 | `upgrade_entries()`                       | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
 | `today()`                                 | 回傳本地時區的今天日期                                                       |
 | `diary_path()`                            | 回傳日記資料夾絕對路徑                                                       |
 | `set_screenshot_protection(protected)`    | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
+
+> 行動版（`#[cfg(mobile)]`）的差異只有三處：`pick_diary_dir` 直接回傳 App 私有資料夾、
+> `pick_import_dir` 回報不支援資料夾匯入、選單列不建置。其餘命令桌面與行動版共用同一份實作。
 
 ## 設計重點
 
@@ -585,8 +732,13 @@ fly-diary/
 - **壞檔掃描只在必要時跑**：索引是一份「健康檔案清單」，壞檔對它而言是隱形的，所以「這天沒寫」與「這天的日記壞了」只能靠走訪目錄分辨——`list_broken_entries` 因此必須讀取、解析並解密**每一個**日記檔，成本隨篇數線性成長。但存檔不可能產生壞檔（檔案是程式自己剛用手中的金鑰寫的），所以 `refreshList({ scanBroken: false })` 讓自動儲存跳過這次掃描；掃描只保留在解鎖後首次載入、開啟「損壞」分頁、以及 `get_entry` 讀取失敗時。這是自動儲存不再「卡一下」的關鍵。
 - **壞檔唯讀鎖定**：`selectDate` 在載入前先查壞檔清單，命中就直接鎖定、完全不呼叫 `get_entry`；`saveNow` 與 `scheduleSave` 也都在 `lockedDate` 有值時提早返回。三層防線確保空白編輯器不可能覆蓋掉一個只是暫時解不開的檔案——這是壞檔處理裡唯一會造成永久資料損失的路徑。
 - **匯出不重新序列化**：`export_broken_entry` 用 `fsutil::copy_private` 逐位元組複製原始檔案，不經過 XML 解析再輸出。壞檔的價值就在於它「壞掉的部分」，重新序列化會丟掉未知元素與屬性，反而讓人工搶救更困難。複製同樣走「暫存檔 → `sync_all()` → `rename`」，所以匯出中途失敗只會留下原本的目標檔，不會產生一份看起來成功、其實被截斷的搶救檔。
+- **圖片不改日記格式**：附件放在 `attachments/YYYY-MM-DD/`，以日期資料夾當關聯，日記 XML 完全不動。舊日記沒有這個資料夾，`list_attachments` 回空清單；舊版 App 也會忽略它。這是 sidecar 設計的核心。
+- **固定順序是資料，不是檔名**：manifest 內 `<attachment>` 的元素順序就是顯示順序。新增 append、拖曳只重寫 manifest；不依賴 mtime、檔名或 `added-at`，所以重開、換裝置、同步後都不會亂。
+- **每張圖獨立加密**：圖片各自有 IV 與 AAD（綁日期、id、版本），單張損壞不會影響其他圖片；manifest 用不同 AAD label，不能和 index 或日記密文互換。
+- **附件刪除方向固定**：新增是「圖片 → manifest」，刪除是「圖片 → manifest 移除」；crash 只會留下未引用圖片（會被補回）或遺失佔位，不會讓已刪除的圖片復活。刪除日記則是 index → XML → 附件資料夾。
 - **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan），捲動時以 `index * 列高` 絕對定位。列高由 CSS 的 `--row-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高會跟著變，不會出現捲動錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
+- **手機版只換版面、不改資料流**：`data-layer` 只決定哪一層可見；選日期、存檔、鎖定、壞檔處理都走與桌面版相同的函式。返回鈕只是 `showListLayer()`，不會卸載編輯器，也不會丟棄尚未儲存的內容。
 - **翻譯與程式分離**：靜態文字用 `data-i18n` 屬性標在 HTML 上，動態文字走 `t()`，字典集中在 `i18n.js`。`main.js` 裡不再有硬編碼的中文字串，新增語言不必碰 UI 邏輯。
 - **日期不靠字串拼接**：`formatDate` / `formatMonth` / `formatWeekday` 各自負責一種格式，中文用「年月日」、英文用 `MM/DD/YYYY`，避免把 `年`、`月` 寫死在程式裡。
 - **匯入分兩階段**：`scan_import` 只讀不寫，把每個檔案分類成「可匯入／已存在／失敗」並附上原因；使用者確認後才由 `run_import` 寫入。檔名是日期與標題的唯一來源，不是合法 `YYYY-MM-DD` 就判為失敗，不做猜測。
@@ -606,14 +758,14 @@ fly-diary/
 - **密文綁定日期與版本（AAD）**：日記 payload 以 `日期 || 0x00 || 版本` 作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案、或改寫 `<diary version="…">` 想降級成較弱的 AAD 規則，都會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
 - **背景升級不擋 UI**：`upgrade_entries` 是 `async` 命令，實際改寫跑在 `spawn_blocking`，並以 `upgrade-progress` 事件回報 `(done, total)`。`enterApp()` 刻意不 await，所以解鎖後立刻能寫日記，升級在背後慢慢跑完。
 - **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入前會把新密文解回來比對明文、並比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
-- **所有寫入都是原子的**：`fsutil::write_private` 一律「寫同目錄暫存檔 → `sync_all()` → `rename` 覆蓋」。`rename` 在 POSIX 上是原子操作，所以斷電、磁碟滿、行程被 kill 都只會留下「完整的舊檔」或「完整的新檔」，不會出現截斷的檔案。`sync_all()` 不可省：少了它，`rename` 可能先於資料落地，斷電後會得到一個檔名正確但內容為空的檔案。暫存檔名帶有 pid 與遞增序號，因此平行匯入（rayon 池同時寫多篇）不會互撞同一個暫存檔。失敗路徑會清掉暫存檔，不留下垃圾。這對 `vault.xml` 尤其關鍵——它只有幾百 bytes，卻裝著 salt、KDF 參數與包裝後的金鑰，一旦截斷就等於日記永久無法解鎖。
+- **所有寫入都是原子的**：`fsutil::write_private` 一律「寫同目錄暫存檔 → `sync_all()` → `rename` 覆蓋」。`rename` 在 POSIX 上是原子操作，所以斷電、磁碟滿、行程被 kill 都只會留下「完整的舊檔」或「完整的新檔」，不會出現截斷的檔案。`sync_all()` 不可省：少了它，`rename` 可能先於資料落地，斷電後會得到一個檔名正確但內容為空的檔案。暫存檔名帶有 pid 與遞增序號，因此平行匯入（rayon 池同時寫多篇）不會互撞同一個暫存檔。失敗路徑會清掉暫存檔，不留下垃圾。這對 `vault.xml` 尤其關鍵——它只有幾百 bytes，卻裝著 salt、KDF 參數與包裝後的金鑰，一旦截斷就等於日記永久無法解鎖。附件圖片與每日 manifest 也走同一條路徑，所以新增／排序／刪除不會留下半截檔案。
 - **`rename` 之後再 fsync 目錄**：`sync_all()` 只保證「檔案內容」落地，`rename` 改的是**目錄項目**，那是另一份中繼資料。少了目錄的 flush，斷電後可能出現「新內容在磁碟上、但檔名還指向舊 inode」的狀態。`fsutil::replace` 因此在 `rename` 之後對父目錄做一次 `fsync`（`fsutil::sync_dir`）。這在多裝置同步下格外重要：同步軟體是照目錄項目決定要上傳哪個版本，若改名沒落地，另一台裝置可能把舊檔「復活」回來，覆蓋掉剛寫好的新內容。
 - **Windows 用 `ReplaceFileW` 換檔**：Windows 的 `rename` 不能覆蓋既有檔案，舊做法是「先刪再改名」，中間存在「兩者都不存在」的空窗。現在 `fsutil::replace` 在 Windows 上直接呼叫 `ReplaceFileW` 並帶 `REPLACEFILE_WRITE_THROUGH`，由核心一次完成替換並寫穿，空窗消失。因為 `libc` 只是 Unix 的依賴，這段 FFI 是手動宣告的（`#[link(name = "kernel32")]`），只編譯在 Windows 上。
 - **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此 `rename` 之後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
-- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案或做真正加密的命令都會凍住 webview。`async fn` 本身不夠——函式體沒有 `.await` 就會在第一次 poll 一路跑到完成，仍然佔住一條 runtime worker。因此 `lib.rs` 提供一個 `blocking()` 輔助函式包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_import`、`export_broken_entry`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
+- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案或做真正加密的命令都會凍住 webview。`async fn` 本身不夠——函式體沒有 `.await` 就會在第一次 poll 一路跑到完成，仍然佔住一條 runtime worker。因此 `lib.rs` 提供一個 `blocking()` 輔助函式包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_import`、`export_broken_entry`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
 - **Argon2id 一定離開主執行緒**：`unlock`、`create_vault`、`change_passphrase` 各要跑一到兩次刻意放慢的 Argon2id 派生（單次約一秒），是最容易讓人感覺到凍結的地方。三者都改為 `async` 並把派生交給 `blocking()`；session 只在工作回傳後才寫入，因為 `tauri::State` 無法 move 進 `spawn_blocking`。
 - **金鑰先複製再交給背景執行緒**：`MutexGuard` 不是 `Send`，也不能讓鎖跨越整個寫入過程（會擋住 `lock` 與其他命令）。所有需要金鑰的命令都先用 `session_key()` 把 `[u8; 32]` 複製出來，再 move 進閉包；鎖只持有到複製完成為止。
 - **存檔的四次往返**：寫入一篇日記包含讀取舊檔（取回收藏旗標）、加密寫入、解密索引、重新加密寫入索引。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，這也是它必須離開主執行緒的原因。
@@ -630,6 +782,17 @@ fly-diary/
 - 上述順序保證的是「不會產生無法自癒的狀態」，不是「兩個檔案永遠一致」。若同步軟體在兩次寫入之間把資料夾同步出去，另一台裝置可能短暫看到索引少一天；下次在任一裝置寫入或呼叫 `rebuild_index()` 就會補回。
 - 原子寫入保證的是「檔案內容不會被截斷、且改名本身已 flush」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入；`fsync` 目錄同理，只把 flush 要求送到裝置。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
+- 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在密文裡。
+- 圖片的 manifest 是每日一個檔案；多裝置同時修改同一天時，同步工具可能產生 manifest 衝突，順序會以最後寫入的版本為準。未被引用的圖檔會在下次載入時補回，所以資料不會消失，但順序可能改變。manifest 遺失或損壞時只能依 mtime／檔名近似恢復順序。
+- 備份要複製整個日記資料夾（含 `attachments/`）。`export_broken_entry` 只匯出單一 XML，不含附件；完整搶救請直接複製資料夾。
+- 圖片會在前端重新編碼成 1000px WebP，EXIF（含 GPS）會被移除；若 WebView 不支援 WebP 編碼，PNG／WebP 來源會 fallback PNG 保留透明，其他格式則 fallback JPEG（透明區填白）。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
+- 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。
+- 孤兒附件（整個日期資料夾沒有 XML）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免同步延遲時誤刪。舊版 App 不認識附件，用舊版刪除日記時也會留下孤兒。
+- 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
+- 行動版沒有資料夾選擇器，也沒有資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。想在手機上使用外部資料夾或匯入 `.txt`，目前只能走桌面版。
+- Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。
+- 原生拖放（`onDragDropEvent`）與原生剪貼簿備援目前只在桌面版；行動版仍以檔案選擇器與 WebView 的 paste 事件為主。
+- 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
 - 平行匯入的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。
 - 目前只有繁體中文與英文兩種語言；後端回傳的錯誤訊息（例如 Rust 端的 `Failed to write entry ...`）仍是英文，尚未翻譯。
@@ -642,6 +805,7 @@ fly-diary/
 - 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
+- Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；換一台機器建置時需要重新產生，並自備 Android SDK／NDK 與 Rust target。目前 repo 只包含手機版程式碼與 Android 產生器的輸出，沒有 iOS 專案。
 - 防止截圖只在 Windows 與 macOS 生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
 - 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。

@@ -445,15 +445,17 @@ test("every data-i18n key used in index.html exists", () => {
   assert.deepEqual([...new Set(missing)], [], "unknown data-i18n keys");
 });
 
-test("every t() key used in main.js exists", () => {
-  const js = readFileSync(join(root, "src/main.js"), "utf8");
+test("every t() key used in the frontend exists", () => {
   const zh = new Set(dictionaryKeys("zhHant"));
-  // Only literal keys; template keys are checked by the dynamic-key test below.
-  const re = /\bt\("([a-zA-Z][\w.]*)"/g;
   const missing = [];
-  let match;
-  while ((match = re.exec(js)) !== null) {
-    if (!zh.has(match[1])) missing.push(match[1]);
+  for (const file of ["main.js", "attachments.js"]) {
+    const js = readFileSync(join(root, "src", file), "utf8");
+    // Only literal keys; template keys are checked by the dynamic-key test below.
+    const re = /\bt\("([a-zA-Z][\w.]*)"/g;
+    let match;
+    while ((match = re.exec(js)) !== null) {
+      if (!zh.has(match[1])) missing.push(`${file}: ${match[1]}`);
+    }
   }
   assert.deepEqual([...new Set(missing)], [], "unknown t() keys");
 });
