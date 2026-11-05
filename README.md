@@ -544,8 +544,12 @@ sudo apt install -y \
 專案使用 **pnpm**（版本由 `package.json` 的 `packageManager` 欄位鎖定為 `9.15.4`）：
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
 ```
+
+專案根目錄的 `.npmrc` 設定了 `ignore-scripts=true`，因此安裝依賴時不會執行任何
+lifecycle script。目前兩個 Tauri 套件都不需要 install script；若未來新增的套件真的
+需要，必須在 `.npmrc` 明確放行並在 PR 中說明。
 
 ### 3. 啟動開發模式
 
@@ -564,8 +568,10 @@ pnpm dev
 
 ```bash
 pnpm test                # 前端（node --test）
-pnpm run test:rust       # Rust（cargo test）
+pnpm run test:rust       # Rust（cargo test --locked）
 pnpm run coverage        # 前端 + Rust coverage
+pnpm run audit:npm       # pnpm audit（需要網路）
+pnpm run audit:rust      # cargo audit（需先安裝 cargo-audit）
 ```
 
 前端測試放在 `tests/`，用 Node 內建的 test runner（Node 20 以上；CI 用 Node 24），不需要額外安裝套件；受測的純函式在
@@ -603,7 +609,38 @@ pnpm build
 
 Linux 只產出 `.deb` 與 `.rpm`，**不產出 AppImage**。AppImage 會把 GTK 一起打包，並在 `AppRun` 裡把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`；該 cache 不含 `im-ibus.so` / `im-fcitx.so`，導致輸入法在 AppImage 內完全無法切換。`.deb` / `.rpm` 直接使用系統的 GTK 與系統的輸入法模組，沒有這個問題。
 
-### 6. 行動版（Android）
+### 6. 供應鏈安全
+
+這個 repo 的依賴很少，但仍把供應鏈防護寫進 CI，避免「上游被盜帳號、tag 被移動、
+或 build 時執行惡意 script」直接變成發佈內容：
+
+- **鎖檔與完整性**：`pnpm-lock.yaml`（含 integrity）與 `src-tauri/Cargo.lock`（含 checksum）
+  都進版控；CI、release 與 `test.sh` 一律使用 `--frozen-lockfile` / `--locked`，
+  lockfile 與 manifest 不一致時直接失敗，不會偷偷改成別的版本。
+- **不執行依賴 install script**：`.npmrc` 設定 `ignore-scripts=true`；目前依賴不需要
+  lifecycle script，新增套件若需要就必須在 PR 中明確處理。
+- **精確版本**：`package.json` 的 Tauri 套件改為精確版本；npm 端沒有其他 transitive 依賴。
+- **Actions 固定到 commit SHA**：所有 `uses:` 都 pin 到完整 SHA，並由 Dependabot 更新；
+  可變 tag（例如 `@v4`、`@v0`）不再出現在 workflow 裡。
+- **最小權限**：workflow 預設 `contents: read`，只有 release 的 `publish` job 有
+  `contents: write`；checkout 一律 `persist-credentials: false`。
+- **Release 從乾淨的 target 目錄建置**：release 不 restore `Swatinem/rust-cache`，
+  避免 PR 可寫的 build cache 影響發佈產物。
+- **自動審計**：`.github/workflows/security.yml` 在 PR 與每週排程跑 `cargo audit`
+  與 `pnpm audit`；release 也把同一個 workflow 當成發佈前的 gate，審計沒過就不會 publish。
+  Dependabot 每週檢查 npm、Cargo 與 GitHub Actions。
+- **建置來源證明**：release 產物會用 `actions/attest-build-provenance` 產生
+  provenance，使用者可用 `gh attestation verify <file>` 驗證。
+- **手動設定（GitHub repo settings，程式無法代勞）**：為 `v*` 開啟 tag protection、
+  為 `release` environment 設 required reviewers，並限制誰能 push tag。
+  若之後啟用 Tauri updater，簽章私鑰應放在 `release` environment 的 secrets，
+  不放在一般 repo secrets。
+
+> 這些措施能阻擋 tag 被移動、lockfile 被替換、安裝期 script 與已知漏洞，
+> 但無法防止「某個已鎖定版本的原始碼本身就是惡意」；新增依賴仍應人工 review，
+> 必要時可再加 `cargo vet` / `cargo deny`。
+
+### 7. 行動版（Android）
 
 手機版沿用同一份前端，靠 `640px` 斷點切換成兩層式排版。Tauri 產生的 Android 專案位於
 `src-tauri/gen/android`，已列在 `.gitignore`，不隨 repo 提交；需要 Android SDK／NDK 與對應的
@@ -674,6 +711,13 @@ fly-diary/
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
 │       ├── clipboard.rs    # 桌面剪貼簿檔案清單／bitmap 讀取、大小限制與縮圖
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
+├── .github/
+│   ├── dependabot.yml      # npm / Cargo / Actions 每週更新
+│   └── workflows/
+│       ├── ci.yml          # PR 測試（Actions 全部 pin 到 SHA）
+│       ├── security.yml    # cargo audit + pnpm audit（PR 與每週排程）
+│       └── release.yml     # 建置、發佈與 build provenance
+├── .npmrc                  # ignore-scripts + prefer-frozen-lockfile
 ├── test.sh                 # 一次跑完兩邊測試與 coverage
 ├── package.json
 └── README.md
