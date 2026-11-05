@@ -187,19 +187,19 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 - **diary key**：隨機 32 bytes，真正用來加密日記。它被 master key 包裝後存進 `vault.xml`。
 - 這層間接讓「改密碼」或「升級 KDF 參數」只需要重新包裝 32 bytes，不必重新加密所有日記。
 
-| 項目          | 實作                                                                   |
-| ------------- | ---------------------------------------------------------------------- |
-| 對稱加密      | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
-| 金鑰派生      | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
-| 預設參數      | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                      |
-| 參數範圍      | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                              |
-| Salt          | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
-| IV / Nonce    | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
-| 完整性        | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
-| 圖片附件      | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
-| 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序              |
-| 密碼驗證      | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
-| 金鑰生命週期  | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零        |
+| 項目         | 實作                                                                   |
+| ------------ | ---------------------------------------------------------------------- |
+| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
+| 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
+| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                      |
+| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                              |
+| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
+| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
+| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
+| 圖片附件     | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
+| 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
+| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
+| 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux 排除 dump/fork；鎖定或關閉即抹除、解鎖、unmap |
 
 > ⚠️ **忘記密碼無法救回**：master key 由密碼派生且不落地，沒有後門或回復機制。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
@@ -228,6 +228,19 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 `storage::rewrap_vault` 會先驗證舊密碼（解不開就回「密碼錯誤」），再以**新的隨機 salt** 派生新 master key。
 即使只改參數、密碼不變，salt 也會換新，所以 master key 一定不同。整個過程只改寫 `vault.xml` 一個檔案。
+
+### 記憶體保護
+
+解鎖期間 diary key 必須留在記憶體，因此 `Session` 不直接持有裸陣列，而是 `secure_memory::LockedKey`：
+
+- **專用一頁**：用 `mmap`（Unix）或 `VirtualAlloc`（Windows）配置一頁，key 放在頁首，避免鎖到旁邊不相干的 heap 物件。
+- **不進 swap**：`mlock`（Unix）／`VirtualLock`（Windows）把這一頁鎖在 RAM。
+- **不進 dump、不進 fork**：Linux 另加 `madvise(MADV_DONTDUMP)` 與 `MADV_WIPEONFORK`，core dump 與 fork 出的子行程都不會帶走金鑰。
+- **同使用者也讀不到**：Linux／Android 啟動時 `prctl(PR_SET_DUMPABLE, 0)`，關掉 `/proc/<pid>/mem` 與同使用者 `ptrace` attach；Unix 另保留 `RLIMIT_CORE = 0`。代價是 gdb／profiler 不能直接 attach，開發時若要除錯需暫時註解這行。
+- **一定會抹除**：`Drop` 先 zeroize 整段 key，再 `munlock`／`VirtualUnlock`，最後 `munmap`／`VirtualFree`。
+- **可失敗**：`mlock` 可能因 `RLIMIT_MEMLOCK`、sandbox 或平台限制而失敗；這時仍照常解鎖，只是少了「不進 swap」那層保證，不會把 App 卡住。
+
+這層保護只涵蓋**長時間存活的 session key**。`session_key()` 複製給背景工作的暫時副本、AES key schedule，以及 webview 裡的明文仍是架構性暴露，詳見「已知限制」。
 
 ## 檔案格式
 
@@ -702,11 +715,12 @@ fly-diary/
 │   │   ├── vault_lifecycle.rs      # 整合測試：建立→寫入→上鎖→解鎖→讀回
 │   │   └── attachments_lifecycle.rs # 附件：新增→排序→上鎖→解鎖→刪除
 │   └── src/
-│       ├── main.rs         # 進入點
+│       ├── main.rs         # 進入點；關閉 core dump 與同使用者記憶體存取
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
 │       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM 加解密
 │       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
+│       ├── secure_memory.rs # 鎖定頁存放 diary key（mlock／VirtualLock、防 dump/fork）
 │       ├── xml.rs          # XML 序列化 / 解析
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
 │       ├── clipboard.rs    # 桌面剪貼簿檔案清單／bitmap 讀取、大小限制與縮圖
@@ -805,7 +819,7 @@ fly-diary/
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
 - **抹除貫穿整條金鑰路徑**：`unlock_vault` / `create_vault` / `rewrap_vault` / `migrate_legacy_vault` 都直接回傳 `Zeroizing<[u8; 32]>`，不再經過裸 `[u8; 32]` 的堆疊副本；`crypto::decrypt` / `decrypt_with_aad` 回傳 `Zeroizing<Vec<u8>>`，所以解出來的明文（包含被包裝的 diary key）在離開作用域時自動歸零。`pack` / `pack_index` 產生的明文緩衝同樣是 `Zeroizing`，`Entry` 實作 `Drop` 抹除 `title` 與 `content`。`run_import` / `upgrade_entries` 從 session 取出的金鑰副本也包在 `Zeroizing` 裡，批次結束即抹除。
-- **關閉 core dump**：`main()` 在 Unix 上把 `RLIMIT_CORE` 設為 0。解鎖期間金鑰在記憶體中，若程式崩潰而寫出 core dump，等於把金鑰明文留在磁碟上；關閉 core dump 是最低成本的一道防線。
+- **關閉 core dump**：`main()` 在 Unix 上把 `RLIMIT_CORE` 設為 0；Linux／Android 另外設定 `PR_SET_DUMPABLE = 0`，讓同使用者無法用 `ptrace` 或 `/proc/<pid>/mem` 讀取行程記憶體。兩者一起擋掉「崩潰後把金鑰寫到磁碟」與「其他行程直接讀記憶體」。
 - **密文綁定日期與版本（AAD）**：日記 payload 以 `日期 || 0x00 || 版本` 作為 AES-GCM 的 associated data，索引則用固定標籤。搬動或複製檔案、或改寫 `<diary version="…">` 想降級成較弱的 AAD 規則，都會讓驗證標籤對不上而解密失敗，不會安靜地顯示錯誤那天的內容；索引與日記密文也無法互換。
 - **背景升級不擋 UI**：`upgrade_entries` 是 `async` 命令，實際改寫跑在 `spawn_blocking`，並以 `upgrade-progress` 事件回報 `(done, total)`。`enterApp()` 刻意不 await，所以解鎖後立刻能寫日記，升級在背後慢慢跑完。
 - **升級是冪等且原子的**：已升級的檔案直接跳過，中斷後下次解鎖自動續跑；寫入前會把新密文解回來比對明文、並比對 mtime，因此既不會留下半截檔案，也不會覆蓋使用者同時存下的編輯。
@@ -855,8 +869,9 @@ fly-diary/
 - 設定檔本身未加密，任何人可讀到日記資料夾位置（但沒有密碼仍無法解密內容）。
 - 檔案權限收緊只在 Unix 生效（`0600` / `0700`）。Windows 上沿用 `%APPDATA%` 既有的 per-user ACL，程式本身不額外設定 ACL；若把日記放在共用磁碟或同步資料夾，請自行確認該處的權限設定。
 - AAD 綁定只保護「搬檔」與「索引／日記互換」這類攻擊。若攻擊者同時能改寫檔名與檔案內容，仍可把某一天的密文連同檔名一起搬走——AAD 綁的是檔案自稱的日期，不是外部可信的時間來源。
-- 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `Zeroizing` 的抹除不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
-- 金鑰仍可能被作業系統換出到 swap 或休眠檔。程式未使用 `mlock` / `madvise(MADV_DONTDUMP)`，若需要更強的保證，請在系統層停用 swap 或啟用加密 swap。
+- 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `LockedKey` 的 zeroize／munmap 不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
+- session key 已放進 `LockedKey`（mlock + `MADV_DONTDUMP` / `MADV_WIPEONFORK`），但 `mlock` 是盡力而為，且**不阻止休眠**：hibernation 會把整份 RAM 寫到磁碟。若需要更強的保證，請在系統層停用休眠或使用加密 swap／加密休眠。
+- 記憶體保護只涵蓋長時間存活的 session key。`session_key()` 的暫時副本、AES key schedule、Rust 配置器曾使用過的頁面，以及 webview 內的明文都可能不在鎖定頁內；root 權限的攻擊者也不受 `PR_SET_DUMPABLE` 限制。
 - 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
