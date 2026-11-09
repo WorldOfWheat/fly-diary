@@ -271,6 +271,14 @@ fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
     parse_vault(&text).map(Some)
 }
 
+/// Append one text/entity fragment to an element value.
+///
+/// quick-xml 0.42 emits entity references as separate events, so values that
+/// contain `&`, `<`, etc. arrive in several pieces.
+fn append(target: &mut Option<String>, value: &str) {
+    target.get_or_insert_with(String::new).push_str(value);
+}
+
 /// Parse a vault document.
 ///
 /// Split out from [`read_vault`] so the migration journal — which stores the
@@ -290,35 +298,56 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
     let mut current = String::new();
 
     let mut reader = quick_xml::Reader::from_str(text);
-    reader.config_mut().trim_text(true);
+    // Do not trim individual events: quick-xml 0.42 splits text around entity
+    // references, and trimming each fragment would delete the spaces next to
+    // them. Whole values are trimmed after the loop.
+    reader.config_mut().trim_text(false);
     loop {
         match reader.read_event() {
             Ok(quick_xml::events::Event::Start(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "vault" {
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"version" {
-                            version = String::from_utf8_lossy(&attr.value).to_string();
+                        if attr.key.as_ref() == "version" {
+                            version = attr
+                                .normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                                .map_err(|err| format!("Invalid vault version attribute: {err}"))?
+                                .into_owned();
                         }
                     }
                 }
                 current = name;
             }
             Ok(quick_xml::events::Event::Text(e)) => {
-                let value = e
-                    .unescape()
-                    .map_err(|err| format!("Invalid vault XML: {err}"))?
-                    .to_string();
+                let value = quick_xml::escape::unescape(e.as_ref())
+                    .map_err(|err| format!("Invalid vault XML: {err}"))?;
                 match current.as_str() {
-                    "kdf" => kdf = Some(value),
-                    "kdf-memory" => memory = Some(value),
-                    "kdf-iterations" => iterations = Some(value),
-                    "kdf-parallelism" => parallelism = Some(value),
-                    "salt" => salt = Some(value),
-                    "wrapped-key-iv" => wrapped_key_iv = Some(value),
-                    "wrapped-key" => wrapped_key = Some(value),
-                    "verifier-iv" => verifier_iv = Some(value),
-                    "verifier" => verifier = Some(value),
+                    "kdf" => append(&mut kdf, &value),
+                    "kdf-memory" => append(&mut memory, &value),
+                    "kdf-iterations" => append(&mut iterations, &value),
+                    "kdf-parallelism" => append(&mut parallelism, &value),
+                    "salt" => append(&mut salt, &value),
+                    "wrapped-key-iv" => append(&mut wrapped_key_iv, &value),
+                    "wrapped-key" => append(&mut wrapped_key, &value),
+                    "verifier-iv" => append(&mut verifier_iv, &value),
+                    "verifier" => append(&mut verifier, &value),
+                    _ => {}
+                }
+            }
+            Ok(quick_xml::events::Event::GeneralRef(e)) => {
+                let raw = format!("&{};", e.as_ref());
+                let value = quick_xml::escape::unescape(&raw)
+                    .map_err(|err| format!("Invalid vault XML entity: {err}"))?;
+                match current.as_str() {
+                    "kdf" => append(&mut kdf, &value),
+                    "kdf-memory" => append(&mut memory, &value),
+                    "kdf-iterations" => append(&mut iterations, &value),
+                    "kdf-parallelism" => append(&mut parallelism, &value),
+                    "salt" => append(&mut salt, &value),
+                    "wrapped-key-iv" => append(&mut wrapped_key_iv, &value),
+                    "wrapped-key" => append(&mut wrapped_key, &value),
+                    "verifier-iv" => append(&mut verifier_iv, &value),
+                    "verifier" => append(&mut verifier, &value),
                     _ => {}
                 }
             }
@@ -328,6 +357,19 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
             _ => {}
         }
     }
+
+    // Trim whole values after parsing: trimming each text event would delete
+    // the spaces around entity references.
+    let trim = |value: Option<String>| value.map(|value| value.trim().to_string());
+    let salt = trim(salt);
+    let kdf = trim(kdf);
+    let memory = trim(memory);
+    let iterations = trim(iterations);
+    let parallelism = trim(parallelism);
+    let wrapped_key_iv = trim(wrapped_key_iv);
+    let wrapped_key = trim(wrapped_key);
+    let verifier_iv = trim(verifier_iv);
+    let verifier = trim(verifier);
 
     let salt_b64 = salt.ok_or_else(|| "Vault is missing <salt>".to_string())?;
 

@@ -125,6 +125,14 @@ pub fn validate_diary_dir(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Append one text/entity fragment to an element value.
+///
+/// quick-xml 0.42 emits entity references as separate events, so text that
+/// contains `&`, `<`, etc. arrives in several pieces.
+fn append(target: &mut Option<String>, value: &str) {
+    target.get_or_insert_with(String::new).push_str(value);
+}
+
 /// Read the settings file, returning `None` when it does not exist yet.
 pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
     let path = settings_path(config_dir);
@@ -141,26 +149,39 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
     let mut current = String::new();
 
     let mut reader = Reader::from_str(&text);
-    reader.config_mut().trim_text(true);
+    // Entity references are separate events in quick-xml 0.42; trimming each
+    // event would remove the spaces around them, so whole values are trimmed
+    // after parsing.
+    reader.config_mut().trim_text(false);
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                current = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                current = e.name().as_ref().to_string();
                 if current == "diary-dir" {
                     seen_diary_dir = true;
                 }
             }
             Ok(Event::Text(e)) => {
-                let value = e
-                    .unescape()
-                    .map_err(|err| format!("Invalid settings XML: {err}"))?
-                    .to_string();
+                let value = quick_xml::escape::unescape(e.as_ref())
+                    .map_err(|err| format!("Invalid settings XML: {err}"))?;
                 if current == "diary-dir" {
-                    diary_dir = Some(value);
+                    append(&mut diary_dir, &value);
                 } else if current == "auto-lock-minutes" {
-                    auto_lock = Some(value);
+                    append(&mut auto_lock, &value);
                 } else if current == "autosave-delay-ms" {
-                    autosave_delay = Some(value);
+                    append(&mut autosave_delay, &value);
+                }
+            }
+            Ok(Event::GeneralRef(e)) => {
+                let raw = format!("&{};", e.as_ref());
+                let value = quick_xml::escape::unescape(&raw)
+                    .map_err(|err| format!("Invalid settings XML entity: {err}"))?;
+                if current == "diary-dir" {
+                    append(&mut diary_dir, &value);
+                } else if current == "auto-lock-minutes" {
+                    append(&mut auto_lock, &value);
+                } else if current == "autosave-delay-ms" {
+                    append(&mut autosave_delay, &value);
                 }
             }
             Ok(Event::End(_)) => current.clear(),
@@ -174,7 +195,9 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
         return Err("Settings file is missing <diary-dir>".to_string());
     }
 
-    let raw = diary_dir.unwrap_or_default();
+    let raw = diary_dir
+        .map(|value| value.trim().to_string())
+        .unwrap_or_default();
     if raw.is_empty() {
         return Err("Settings file has an empty <diary-dir>".to_string());
     }

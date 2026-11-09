@@ -147,6 +147,15 @@ fn sanitize(text: &str) -> String {
         .collect()
 }
 
+/// Append one text/entity fragment to an element value.
+///
+/// quick-xml 0.42 can deliver one element's text as several events (a run of
+/// text, then an entity reference, then more text), so values have to be
+/// accumulated instead of overwritten.
+fn append(target: &mut Option<String>, value: &str) {
+    target.get_or_insert_with(String::new).push_str(value);
+}
+
 /// Serialize an encrypted entry to an XML document.
 ///
 /// Escaping is delegated to [`quick_xml::Writer`], which handles the XML
@@ -195,7 +204,11 @@ pub fn to_xml(entry: &EncryptedEntry) -> Result<String, String> {
 /// Version 1 documents (`<title>` + `<content>`) are also accepted.
 pub fn from_xml(xml: &str) -> Result<EncryptedEntry, String> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
+    // Do not trim individual events: quick-xml 0.42 splits text around entity
+    // references, and trimming each fragment would delete the spaces next to
+    // `&amp;`, turning "a & b" into "a&b". Whole values are trimmed after the
+    // loop instead.
+    reader.config_mut().trim_text(false);
 
     let mut date = None;
     let mut iv = None;
@@ -216,13 +229,14 @@ pub fn from_xml(xml: &str) -> Result<EncryptedEntry, String> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 if name == "diary" {
                     for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"version" {
-                            version = String::from_utf8_lossy(&attr.value)
-                                .trim()
-                                .parse()
+                        if attr.key.as_ref() == "version" {
+                            version = attr
+                                .normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                                .ok()
+                                .and_then(|value| value.trim().parse().ok())
                                 .unwrap_or(1);
                         }
                     }
@@ -237,16 +251,31 @@ pub fn from_xml(xml: &str) -> Result<EncryptedEntry, String> {
                 current = Some(name);
             }
             Ok(Event::Text(e)) => {
-                let text = e
-                    .unescape()
-                    .map_err(|err| format!("Invalid XML text: {err}"))?
-                    .to_string();
+                let text = quick_xml::escape::unescape(e.as_ref())
+                    .map_err(|err| format!("Invalid XML text: {err}"))?;
                 match current.as_deref() {
-                    Some("date") => date = Some(text),
-                    Some("iv") => iv = Some(text),
-                    Some("payload") => payload = Some(text),
-                    Some("title") => legacy_title = Some(text),
-                    Some("content") => legacy_content = Some(text),
+                    Some("date") => append(&mut date, &text),
+                    Some("iv") => append(&mut iv, &text),
+                    Some("payload") => append(&mut payload, &text),
+                    Some("title") => append(&mut legacy_title, &text),
+                    Some("content") => append(&mut legacy_content, &text),
+                    _ => {}
+                }
+            }
+            // quick-xml 0.42 yields entity references (`&amp;`, `&#38;`, …)
+            // as their own event instead of leaving them inside `Text`.
+            // Resolve and append so a value containing `&` or `<` is not split
+            // into pieces.
+            Ok(Event::GeneralRef(e)) => {
+                let raw = format!("&{};", e.as_ref());
+                let text = quick_xml::escape::unescape(&raw)
+                    .map_err(|err| format!("Invalid XML entity: {err}"))?;
+                match current.as_deref() {
+                    Some("date") => append(&mut date, &text),
+                    Some("iv") => append(&mut iv, &text),
+                    Some("payload") => append(&mut payload, &text),
+                    Some("title") => append(&mut legacy_title, &text),
+                    Some("content") => append(&mut legacy_content, &text),
                     _ => {}
                 }
             }
@@ -256,6 +285,14 @@ pub fn from_xml(xml: &str) -> Result<EncryptedEntry, String> {
             _ => {}
         }
     }
+
+    // Trim whole values, not individual events, so whitespace next to an
+    // entity reference survives.
+    let date = date.map(|value| value.trim().to_string());
+    let iv = iv.map(|value| value.trim().to_string());
+    let payload = payload.map(|value| value.trim().to_string());
+    let legacy_title = legacy_title.map(|value| value.trim().to_string());
+    let legacy_content = legacy_content.map(|value| value.trim().to_string());
 
     if !seen_date {
         return Err("Missing <date> element".to_string());

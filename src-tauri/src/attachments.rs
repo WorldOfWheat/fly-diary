@@ -289,12 +289,12 @@ fn sniff_mime(bytes: &[u8]) -> Result<&'static str, String> {
 // Manifest XML
 // ---------------------------------------------------------------------------
 
-fn attr_value(e: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>, String> {
+fn attr_value(e: &BytesStart<'_>, name: &str) -> Result<Option<String>, String> {
     for attr in e.attributes() {
         let attr = attr.map_err(|err| format!("Invalid manifest attribute: {err}"))?;
         if attr.key.as_ref() == name {
             return attr
-                .unescape_value()
+                .normalized_value(quick_xml::XmlVersion::Explicit1_0)
                 .map(|value| Some(value.into_owned()))
                 .map_err(|err| format!("Invalid manifest attribute value: {err}"));
         }
@@ -303,7 +303,7 @@ fn attr_value(e: &BytesStart<'_>, name: &[u8]) -> Result<Option<String>, String>
 }
 
 fn required_attr(e: &BytesStart<'_>, name: &str) -> Result<String, String> {
-    attr_value(e, name.as_bytes())?
+    attr_value(e, name)?
         .ok_or_else(|| format!("Manifest is missing the {name} attribute"))
 }
 
@@ -356,7 +356,7 @@ fn unpack_manifest(plain: &[u8], expected_date: &str) -> Result<Manifest, String
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => match e.name().as_ref() {
-                b"manifest" => {
+                "manifest" => {
                     if root_seen {
                         return Err("Manifest has more than one root".to_string());
                     }
@@ -368,7 +368,7 @@ fn unpack_manifest(plain: &[u8], expected_date: &str) -> Result<Manifest, String
                     );
                     date = Some(required_attr(&e, "date")?);
                 }
-                b"attachment" => {
+                "attachment" => {
                     if !root_seen {
                         return Err("Attachment appeared before <manifest>".to_string());
                     }
@@ -378,11 +378,11 @@ fn unpack_manifest(plain: &[u8], expected_date: &str) -> Result<Manifest, String
                     if mime != UNKNOWN_MIME {
                         validate_mime(&mime)?;
                     }
-                    let width = attr_value(&e, b"width")?
+                    let width = attr_value(&e, "width")?
                         .unwrap_or_else(|| "0".to_string())
                         .parse::<u32>()
                         .map_err(|_| "Invalid manifest width".to_string())?;
-                    let height = attr_value(&e, b"height")?
+                    let height = attr_value(&e, "height")?
                         .unwrap_or_else(|| "0".to_string())
                         .parse::<u32>()
                         .map_err(|_| "Invalid manifest height".to_string())?;
