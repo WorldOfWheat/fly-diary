@@ -79,6 +79,7 @@ export const els = {
   attachmentList: $("attachment-list"),
   attachmentEmpty: $("attachment-empty"),
   attachmentAdd: $("attachment-add"),
+  attachmentPaste: $("attachment-paste"),
   attachmentInput: $("attachment-input"),
   attachmentStatus: $("attachment-status"),
   attachmentViewer: $("attachment-viewer"),

@@ -235,8 +235,12 @@
             <section id="attachments" class="attachments" aria-labelledby="attachments-title" hidden>
                 <div class="attachments-head">
                     <h2 id="attachments-title" class="attachments-title" data-i18n="attachments.title">圖片</h2>
-                    <button id="attachment-add" class="btn-attachment" type="button" data-i18n="attachments.add"
-                        data-i18n-title="attachments.addTitle" title="加入圖片">加入圖片</button>
+                    <div class="attachments-actions">
+                        <button id="attachment-paste" class="btn-attachment" type="button" data-i18n="attachments.paste"
+                            data-i18n-title="attachments.pasteTitle" title="貼上圖片">貼上圖片</button>
+                        <button id="attachment-add" class="btn-attachment" type="button" data-i18n="attachments.add"
+                            data-i18n-title="attachments.addTitle" title="加入圖片">加入圖片</button>
+                    </div>
                     <input id="attachment-input" class="attachment-input" type="file"
                         accept="image/webp,image/jpeg,image/png,image/*" multiple hidden />
                 </div>

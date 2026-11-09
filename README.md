@@ -424,24 +424,29 @@ diary/
 - **上傳前壓縮**：前端用 canvas 將長邊縮到 1000px、WebP quality 0.8；若 WebView 不支援
   WebP 編碼時，PNG／WebP 來源會 fallback PNG 以保留透明，其他來源 fallback JPEG（透明區填白）。
   重新編碼會一併清掉 EXIF（包含 GPS）。
-- **限制**：前端輸入上限 20 MB；後端解碼後上限 5 MB、每天最多 200 張；只接受
+- **限制**：前端輸入上限 64 MB；後端解碼後上限 5 MB、每天最多 200 張；只接受
   WebP / JPEG / PNG，拒絕 SVG。`mime` 與 magic bytes 必須一致。
-- **加入方式**：除了「加入圖片」按鈕，也可以直接把圖片檔拖進編輯區，或把剪貼簿裡的圖片
-  （例如截圖）貼上。只有真正的圖片檔會被攔截，文字貼上與相簿內部的排序拖曳不受影響。
+- **加入方式**：除了「加入圖片」與「貼上圖片」按鈕，也可以直接把圖片檔拖進編輯區，或把
+  剪貼簿裡的圖片（例如截圖）貼上。只有真正的圖片檔會被攔截，文字貼上與相簿內部的排序拖曳不受影響。
   桌面版的檔案拖放走 Tauri 原生事件（`onDragDropEvent`）：它提供的是**檔案路徑**，由
   `read_dropped_images` 讀成 base64 後，再交給與檔案選擇器相同的壓縮與加密流程。
   這是刻意的：Linux／WebKitGTK 的 HTML5 `drop` 常常只給 `text/uri-list`、`dataTransfer.files`
   是空的，只靠前端會出現「有拖放提示、放開卻沒有加入」的情況。HTML5 handler 仍保留作為
   其他 webview 的備援。原生拖放事件只在桌面版使用；行動版仍以檔案選擇器為主。
-- **貼上圖片**：貼上事件沒有帶 `File` 時，會改用 `read_clipboard_image` 從系統剪貼簿讀取圖片
-  （arboard），再走同一套壓縮流程。這補上 WebKitGTK 不把剪貼簿圖片放進 `clipboardData`
-  的情況；純文字貼上仍完全交給瀏覽器，不會被攔截。只有剪貼簿真的含圖片時才會自動解鎖唯讀日記。
-  原生剪貼簿備援只在桌面版啟用；行動版仍走 WebView 的 paste 事件。
+- **貼上圖片**：貼上事件沒有帶 `File` 時，桌面版會先呼叫 `read_clipboard_paths` 取得
+  檔案管理員複製的圖片路徑（走與拖放相同的 `read_dropped_images` 流程），再退回
+  `read_clipboard_image`（arboard）把剪貼簿的 RGBA bitmap 轉成 PNG；行動版先試
+  `navigator.clipboard.read()`，不支援時才回報「剪貼簿沒有可讀取的圖片」。先讀檔案清單是
+  刻意的：對「複製檔案」的剪貼簿直接呼叫 `get_image()` 可能卡住等 OS 協商 bitmap。
+  純文字貼上仍完全交給瀏覽器，不會被攔截；唯讀日記不會因為貼上或拖放而自動解鎖，必須先按「解鎖編輯」。
+  剪貼簿 bitmap 上限為 100 MP，長邊超過 2048px 會先在 Rust 用快速縮圖，避免把整張原始照片
+  經 IPC 送到前端。
+- **貼上判斷**：如果剪貼簿同時提供 `text/plain` 與 `image/png`，以圖片為優先；否則圖片會被
+  當成普通文字貼上，看起來就像「沒有反應」。
 - **讀取**：`list_attachments` 只解密 manifest；`get_attachment` 才逐張解密，前端延遲載入。
   剛上傳的圖片直接沿用前端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
-- **唯讀與壞檔**：唯讀模式只能看圖；按鈕新增、刪除、排序都要先「解鎖編輯」。貼上或拖放圖片
-  被視為明確的編輯動作，會自動解鎖一般唯讀日記並繼續加入；壞檔（`lockedDate`）仍完全鎖定，
-  只顯示提示。
+- **唯讀與壞檔**：唯讀模式只能看圖；新增、刪除、排序、貼上與拖放都要先按「解鎖編輯」。
+  貼上或拖放不會自動解鎖日記；壞檔（`lockedDate`）仍完全鎖定，只顯示提示。
 
 ### 順序與一致性
 
@@ -643,7 +648,7 @@ fly-diary/
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
-│   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
+│   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox、剪貼簿
 │   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
@@ -666,7 +671,7 @@ fly-diary/
 │       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── xml.rs          # XML 序列化 / 解析
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
-│       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
+│       ├── clipboard.rs    # 桌面剪貼簿檔案清單／bitmap 讀取、大小限制與縮圖
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
 ├── test.sh                 # 一次跑完兩邊測試與 coverage
 ├── package.json
@@ -698,7 +703,8 @@ fly-diary/
 | `list_attachments(date)`                  | 依 manifest 順序列出圖片 metadata                                           |
 | `get_attachment(date, id)`                | 解密單張圖片並回傳 base64 與 MIME                                           |
 | `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                 |
-| `read_clipboard_image()`                  | 桌面版從系統剪貼簿讀取圖片並轉成 PNG base64；沒有圖片或行動版回 `null`       |
+| `read_clipboard_image()`                  | 桌面版從系統剪貼簿讀取 bitmap 並轉成 PNG base64；沒有圖片或行動版回 `null`    |
+| `read_clipboard_paths()`                  | 讀取剪貼簿中由檔案管理員複製的圖片路徑（桌面版；行動版回空陣列）             |
 | `delete_attachment(date, id)`             | 刪除一張圖片並更新 manifest                                                 |
 | `reorder_attachments(date, ids)`          | 以新的 id 順序重寫 manifest                                                 |
 | `list_orphan_attachments()`               | 列出沒有對應日記的附件資料夾                                                |
@@ -791,7 +797,11 @@ fly-diary/
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
 - 行動版沒有資料夾選擇器，也沒有資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。想在手機上使用外部資料夾或匯入 `.txt`，目前只能走桌面版。
 - Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。
-- 原生拖放（`onDragDropEvent`）與原生剪貼簿備援目前只在桌面版；行動版仍以檔案選擇器與 WebView 的 paste 事件為主。
+- 原生拖放（`onDragDropEvent`）與原生剪貼簿命令（arboard）目前只在桌面版；行動版改用瀏覽器
+  `navigator.clipboard.read()`。若該 WebView 不支援 Async Clipboard API，請改用「加入圖片」；
+  行動版的原生相簿剪貼簿尚未實作。
+- 從網頁複製圖片需要剪貼簿提供 bitmap 或檔案。若來源只放 HTML `<img>`／遠端 URL、沒有實際
+  圖片資料，目前不會主動下載遠端圖片；請改用「另存圖片」或「加入圖片」。
 - 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
 - 平行匯入的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。

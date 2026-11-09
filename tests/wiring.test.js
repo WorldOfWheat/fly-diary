@@ -83,6 +83,7 @@ const ELEMENT_IDS = [
   "title",
   "content",
   "attachmentAdd",
+  "attachmentPaste",
   "attachmentInput",
   "attachmentList",
   "attachmentViewerClose",
@@ -453,6 +454,10 @@ test("the attachment add button and file input reach the gallery", () => {
     h.els.attachmentAdd.dispatch("click");
     assert.deepEqual(h.names(), ["pickAttachment"]);
 
+    h.els.attachmentPaste.dispatch("click");
+    assert.deepEqual(h.names(), ["pickAttachment", "pasteImageFromClipboard"]);
+    assert.deepEqual(h.argsOf("pasteImageFromClipboard"), [true]);
+
     const files = [{ name: "a.png" }];
     h.els.attachmentInput.files = files;
     h.els.attachmentInput.dispatch("change", { target: h.els.attachmentInput });
@@ -518,6 +523,33 @@ test("a paste event without file objects falls back to the native clipboard", ()
 
     assert.equal(event.defaultPrevented, false);
     assert.deepEqual(h.names(), ["pasteImageFromClipboard"]);
+    assert.deepEqual(h.argsOf("pasteImageFromClipboard"), [false]);
+  });
+});
+
+test("an image type wins even when the clipboard also advertises text", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
+      clipboardData: { types: ["text/plain", "image/png"] },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), ["pasteImageFromClipboard"]);
+    assert.deepEqual(h.argsOf("pasteImageFromClipboard"), [true]);
+  });
+});
+
+test("an explicit file paste falls back with the expected-image flag", () => {
+  withHarness((h) => {
+    const event = h.document.dispatch("paste", {
+      target: h.els.editor,
+      clipboardData: { types: ["Files"] },
+    });
+
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(h.names(), ["pasteImageFromClipboard"]);
+    assert.deepEqual(h.argsOf("pasteImageFromClipboard"), [true]);
   });
 });
 

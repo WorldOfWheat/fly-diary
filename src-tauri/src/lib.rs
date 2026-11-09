@@ -631,6 +631,12 @@ async fn read_clipboard_image() -> Result<Option<ClipboardImage>, String> {
     blocking("Read clipboard image", clipboard::read_image).await
 }
 
+/// Return image files copied in a file manager, before trying to read a bitmap.
+#[tauri::command]
+async fn read_clipboard_paths() -> Result<Vec<String>, String> {
+    blocking("Read clipboard paths", || Ok(clipboard::read_file_paths())).await
+}
+
 #[tauri::command]
 async fn delete_attachment(
     app: tauri::AppHandle,
@@ -1068,6 +1074,7 @@ pub fn run() {
             get_attachment,
             read_dropped_images,
             read_clipboard_image,
+            read_clipboard_paths,
             delete_attachment,
             reorder_attachments,
             list_orphan_attachments,

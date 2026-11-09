@@ -1562,6 +1562,12 @@ body.calendar-open {
   text-transform: uppercase;
 }
 
+.attachments-actions {
+  display: flex;
+  flex: none;
+  gap: 0.375rem;
+}
+
 .btn-attachment {
   flex: none;
   padding: 0.25rem 0.625rem;

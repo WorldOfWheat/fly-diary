@@ -26,12 +26,32 @@ export const MAX_LONG_EDGE = 1000;
 /** WebP quality used for the stored image. */
 export const WEBP_QUALITY = 0.8;
 /** Largest input file accepted before decoding. */
-export const MAX_INPUT_BYTES = 20 * 1024 * 1024;
+export const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 
 // Keeps an unloaded thumbnail visually empty instead of making the browser
 // render the `alt` text as an "IMAGE" placeholder.
 const TRANSPARENT_PIXEL =
   "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+
+/** Reject a promise after `ms` so a broken clipboard backend cannot hang the UI. */
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`${label} timed out`)),
+      ms
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 /** Scale `width`/`height` so the longest edge is at most `maxEdge`. */
 export function targetDimensions(width, height, maxEdge = MAX_LONG_EDGE) {
@@ -98,6 +118,45 @@ function imageFileFromBase64(item) {
   });
 }
 
+function prefersBrowserClipboard() {
+  return /Android|iPhone|iPad|iPod/i.test(globalThis.navigator?.userAgent || "");
+}
+
+function fileFromClipboardBlob(blob, type) {
+  const extension = (type.split("/")[1] || "png").split("+")[0];
+  return new File([blob], `clipboard.${extension}`, { type });
+}
+
+/**
+ * Read an image through the Async Clipboard API.
+ *
+ * This is the fallback for mobile and other WebViews where the native
+ * `read_clipboard_image` command is unavailable. It needs a user gesture, so
+ * callers invoke it directly from the paste handler (or a button).
+ */
+export async function clipboardImageFromBrowser() {
+  const clipboard = globalThis.navigator?.clipboard;
+  if (typeof clipboard?.read !== "function") return null;
+  try {
+    const items = await withTimeout(
+      clipboard.read(),
+      5000,
+      "navigator.clipboard.read"
+    );
+    for (const item of items) {
+      const type = (item.types || []).find((candidate) =>
+        candidate.startsWith("image/")
+      );
+      if (!type) continue;
+      const blob = await item.getType(type);
+      if (blob) return fileFromClipboardBlob(blob, type);
+    }
+  } catch (err) {
+    console.error("navigator.clipboard.read failed:", err);
+  }
+  return null;
+}
+
 /** Best-effort MIME for files from Linux drag/drop, where `type` is often empty. */
 export function imageTypeForFile(file) {
   if (file?.type?.startsWith("image/")) return file.type;
@@ -105,6 +164,10 @@ export function imageTypeForFile(file) {
   if (name.endsWith(".png")) return "image/png";
   if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
   if (name.endsWith(".webp")) return "image/webp";
+  if (name.endsWith(".gif")) return "image/gif";
+  if (name.endsWith(".bmp")) return "image/bmp";
+  if (name.endsWith(".tif") || name.endsWith(".tiff")) return "image/tiff";
+  if (name.endsWith(".avif")) return "image/avif";
   return file?.type || "";
 }
 
@@ -221,6 +284,8 @@ export function createAttachmentGallery(deps) {
   const loadingIds = new Set();
   /** Lazily decrypts images as the horizontal strip scrolls. */
   let observer = null;
+  /** Last native clipboard read error, if any. */
+  let clipboardErrorText = "";
   /** Id being dragged, if any. */
   let draggedId = null;
 
@@ -424,6 +489,10 @@ export function createAttachmentGallery(deps) {
       els.attachmentAdd.hidden = !editable();
       els.attachmentAdd.disabled = !editable();
     }
+    // Paste stays available in a read-only entry: pasting is an explicit edit
+    // gesture and main.js unlocks the entry before uploading. Only a broken
+    // entry (whole section hidden) or an in-flight operation disables it.
+    if (has("attachmentPaste")) els.attachmentPaste.disabled = busy;
     if (has("attachmentInput")) els.attachmentInput.disabled = !editable();
 
     // Decrypt lazily as the strip scrolls, but eager-load the first screenful
@@ -540,9 +609,9 @@ export function createAttachmentGallery(deps) {
 
   /** Add every selected file, reporting per-file failures. */
   async function addFiles(fileList) {
-    if (!editable()) return;
+    if (!editable()) return 0;
     const files = Array.from(fileList || []);
-    if (files.length === 0) return;
+    if (files.length === 0) return 0;
 
     const date = currentDate;
     busy = true;
@@ -588,6 +657,7 @@ export function createAttachmentGallery(deps) {
       deps.setStatus?.(deps.t("attachments.failed", { n: failed }));
     }
     setLocalStatus("");
+    return done;
   }
 
   /**
@@ -599,9 +669,9 @@ export function createAttachmentGallery(deps) {
    * resize/EXIF-stripping/encrypt path as the file picker.
    */
   async function addPaths(paths) {
-    if (!editable()) return;
+    if (!editable()) return false;
     const list = Array.from(paths || []);
-    if (list.length === 0) return;
+    if (list.length === 0) return false;
 
     let dropped;
     try {
@@ -609,7 +679,7 @@ export function createAttachmentGallery(deps) {
     } catch (err) {
       console.error("read_dropped_images failed:", err);
       deps.setStatus?.(deps.t("attachments.failed", { n: list.length }));
-      return;
+      return false;
     }
 
     const files = [];
@@ -623,9 +693,9 @@ export function createAttachmentGallery(deps) {
 
     if (files.length === 0) {
       deps.setStatus?.(deps.t("attachments.failed", { n: list.length }));
-      return;
+      return false;
     }
-    await addFiles(files);
+    return (await addFiles(files)) > 0;
   }
 
   /**
@@ -635,13 +705,17 @@ export function createAttachmentGallery(deps) {
    * for text paste. The caller decides whether a read-only entry should be
    * unlocked, so no upload happens here.
    */
-  async function clipboardImage() {
-    if (!currentDate) return null;
+  async function nativeClipboardImage() {
     let image;
     try {
-      image = await deps.invoke("read_clipboard_image");
+      image = await withTimeout(
+        deps.invoke("read_clipboard_image"),
+        5000,
+        "read_clipboard_image"
+      );
     } catch (err) {
       console.error("read_clipboard_image failed:", err);
+      clipboardErrorText = err?.message || String(err);
       return null;
     }
     if (!image) return null;
@@ -651,6 +725,39 @@ export function createAttachmentGallery(deps) {
       console.error("Could not read the clipboard image:", err);
       return null;
     }
+  }
+
+  /** Copied image files (file manager), not a clipboard bitmap. */
+  async function clipboardPaths() {
+    if (!currentDate) return [];
+    try {
+      const paths = await withTimeout(
+        deps.invoke("read_clipboard_paths"),
+        3000,
+        "read_clipboard_paths"
+      );
+      return Array.isArray(paths) ? paths : [];
+    } catch (err) {
+      console.error("read_clipboard_paths failed:", err);
+      return [];
+    }
+  }
+
+  async function clipboardImage() {
+    clipboardErrorText = "";
+    if (!currentDate) return null;
+
+    // On mobile the native command is desktop-only, and the Clipboard API
+    // needs the transient user activation from the paste event; try it first.
+    if (prefersBrowserClipboard()) {
+      const browserImage = await clipboardImageFromBrowser();
+      if (browserImage) return browserImage;
+      return nativeClipboardImage();
+    }
+
+    const nativeImage = await nativeClipboardImage();
+    if (nativeImage) return nativeImage;
+    return clipboardImageFromBrowser();
   }
 
   async function persistOrder(previous) {
@@ -801,7 +908,9 @@ export function createAttachmentGallery(deps) {
     canEdit: () => editable(),
     addFiles,
     addPaths,
+    clipboardPaths,
     clipboardImage,
+    clipboardError: () => clipboardErrorText,
     remove,
     move,
     moveTo,
