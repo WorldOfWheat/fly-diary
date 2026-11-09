@@ -88,7 +88,7 @@ fn encode_clipboard_image(
     }
 
     let buffer = image::RgbaImage::from_raw(width, height, bytes)
-        .ok_or_else(|| "Clipboard image has an invalid size".to_string())?;
+        .ok_or_else(|| "Clipboard image has invalid dimensions".to_string())?;
     let source = image::DynamicImage::ImageRgba8(buffer);
     // `thumbnail` uses a fast integer downsampler, which matters for a 50–100
     // MP bitmap. The frontend still does the final 1000 px resize.
