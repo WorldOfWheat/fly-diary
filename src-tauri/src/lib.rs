@@ -4,6 +4,7 @@ pub mod attachments;
 mod clipboard;
 pub mod crypto;
 mod fsutil;
+mod secure_memory;
 mod settings;
 pub mod storage;
 mod xml;
@@ -13,6 +14,7 @@ use std::sync::Mutex;
 
 use attachments::{AttachmentData, AttachmentMeta, DroppedImage, OrphanAttachment};
 use clipboard::ClipboardImage;
+use secure_memory::LockedKey;
 use serde::{Deserialize, Serialize};
 use storage::{BrokenEntry, Entry, EntryMeta};
 use tauri::Manager;
@@ -71,16 +73,19 @@ struct SettingsView {
 
 /// In-memory session state: the derived AES key while the vault is unlocked.
 ///
-/// The key is wrapped in `Zeroizing` so it is wiped from memory on lock/drop.
+/// The key lives in `LockedKey`, which keeps it on a dedicated page that is
+/// locked into RAM and excluded from dumps where the platform supports it, then
+/// zeroizes the page on lock/drop.
 #[derive(Default)]
 struct Session {
-    key: Option<Zeroizing<[u8; 32]>>,
+    key: Option<LockedKey>,
 }
 
 impl Session {
     fn key(&self) -> Result<&[u8; 32], String> {
         self.key
-            .as_deref()
+            .as_ref()
+            .map(LockedKey::as_bytes)
             .ok_or_else(|| "Diary is locked".to_string())
     }
 }
@@ -396,8 +401,11 @@ async fn create_vault(
     })
     .await?;
 
-    // `create_vault` already returns a `Zeroizing` key, so it is stored as-is.
-    *session.lock().unwrap() = Session { key: Some(key) };
+    // `create_vault` returns a `Zeroizing` key; copy it into the locked page
+    // and let the temporary copy be wiped when it drops.
+    *session.lock().unwrap() = Session {
+        key: Some(LockedKey::new(&key)),
+    };
     Ok(())
 }
 
@@ -410,8 +418,11 @@ async fn unlock(
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
     let key = blocking("Unlock", move || storage::unlock_vault(&dir, &passphrase)).await?;
-    // `unlock_vault` already returns a `Zeroizing` key, so it is stored as-is.
-    *session.lock().unwrap() = Session { key: Some(key) };
+    // `unlock_vault` returns a `Zeroizing` key; move the bytes into the locked
+    // page and let the temporary copy be wiped when it drops.
+    *session.lock().unwrap() = Session {
+        key: Some(LockedKey::new(&key)),
+    };
     Ok(())
 }
 
@@ -487,9 +498,11 @@ async fn change_passphrase(
     .await?;
 
     // The diary key is unchanged, but refresh the session anyway so the
-    // in-memory copy is the one the vault now wraps. `rewrap_vault` already
-    // returns a `Zeroizing` key, so it is stored as-is and still wiped on drop.
-    *session.lock().unwrap() = Session { key: Some(key) };
+    // in-memory copy is the one the vault now wraps. `rewrap_vault` returns a
+    // `Zeroizing` key; copy it into the locked page and wipe the temporary.
+    *session.lock().unwrap() = Session {
+        key: Some(LockedKey::new(&key)),
+    };
     Ok(())
 }
 
@@ -629,6 +642,12 @@ async fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, St
 #[tauri::command]
 async fn read_clipboard_image() -> Result<Option<ClipboardImage>, String> {
     blocking("Read clipboard image", clipboard::read_image).await
+}
+
+/// Return image files copied in a file manager, before trying to read a bitmap.
+#[tauri::command]
+async fn read_clipboard_paths() -> Result<Vec<String>, String> {
+    blocking("Read clipboard paths", || Ok(clipboard::read_file_paths())).await
 }
 
 #[tauri::command]
@@ -1068,6 +1087,7 @@ pub fn run() {
             get_attachment,
             read_dropped_images,
             read_clipboard_image,
+            read_clipboard_paths,
             delete_attachment,
             reorder_attachments,
             list_orphan_attachments,
@@ -1097,7 +1117,7 @@ mod tests {
     /// A session holding a known key, as `unlock` would leave it.
     fn unlocked(key: [u8; 32]) -> Session {
         Session {
-            key: Some(Zeroizing::new(key)),
+            key: Some(LockedKey::new(&key)),
         }
     }
 
@@ -1130,12 +1150,11 @@ mod tests {
 
     #[test]
     fn the_key_is_wiped_when_the_session_is_dropped() {
-        // `Zeroizing` is what guarantees this; the test documents the intent.
+        // `LockedKey` owns protected memory and zeroizes it in `Drop`; the test
+        // documents the intent without reading freed memory (which would be UB).
         let session = unlocked([9u8; 32]);
-        let ptr = session.key.as_ref().unwrap().as_ptr();
+        let ptr = session.key.as_ref().unwrap().as_bytes().as_ptr();
         drop(session);
-        // Reading freed memory would be UB, so only assert the type contract:
-        // the key is stored inside a `Zeroizing`, not a bare array.
         assert!(!ptr.is_null());
     }
 

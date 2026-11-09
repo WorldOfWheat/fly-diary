@@ -1,0 +1,59 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [master]
+  schedule:
+    # Advisories appear after a dependency was merged, so re-audit weekly.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+  # Release calls this workflow so a tag cannot publish without passing the
+  # same audits.
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to audit
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  rust-audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src-tauri
+
+  npm-audit:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.13.0
+          cache: pnpm
+
+      # `.npmrc` sets ignore-scripts, so this never executes dependency scripts.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high

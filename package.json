@@ -1,6 +1,6 @@
 {
   "name": "fly-diary",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.4",
@@ -10,14 +10,16 @@
     "build": "tauri build",
     "test": "node --test tests/*.test.js",
     "test:coverage": "node --test --experimental-test-coverage tests/*.test.js",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "coverage:rust": "cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only",
-    "coverage": "pnpm run test:coverage && pnpm run coverage:rust"
+    "test:rust": "cargo test --locked --manifest-path src-tauri/Cargo.toml",
+    "coverage:rust": "cargo llvm-cov --locked --manifest-path src-tauri/Cargo.toml --summary-only",
+    "coverage": "pnpm run test:coverage && pnpm run coverage:rust",
+    "audit:npm": "pnpm audit --audit-level high",
+    "audit:rust": "cargo audit --file src-tauri/Cargo.lock"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2"
+    "@tauri-apps/api": "2.12.4"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2"
+    "@tauri-apps/cli": "2.12.4"
   }
 }

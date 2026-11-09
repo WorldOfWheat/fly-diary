@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 
 import {
   attachmentDataUrl,
+  clipboardImageFromBrowser,
   createAttachmentGallery,
   imageTypeForFile,
   MAX_INPUT_BYTES,
@@ -90,6 +91,8 @@ test("imageTypeForFile infers MIME from the name when the OS omits it", () => {
   assert.equal(imageTypeForFile({ type: "", name: "photo.PNG" }), "image/png");
   assert.equal(imageTypeForFile({ type: "", name: "photo.jpeg" }), "image/jpeg");
   assert.equal(imageTypeForFile({ type: "", name: "photo.webp" }), "image/webp");
+  assert.equal(imageTypeForFile({ type: "", name: "photo.bmp" }), "image/bmp");
+  assert.equal(imageTypeForFile({ type: "", name: "photo.tiff" }), "image/tiff");
   assert.equal(imageTypeForFile({ type: "text/plain", name: "notes.txt" }), "text/plain");
   assert.equal(imageTypeForFile({ type: "image/gif", name: "x.bin" }), "image/gif");
 });
@@ -325,6 +328,25 @@ test("addPaths reports a failure when the dropped paths cannot be read", async (
   }
 });
 
+test("clipboardPaths returns image files copied in a file manager", async () => {
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      read_clipboard_paths: ["/tmp/photo.png", "/tmp/photo.webp"],
+    },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    assert.deepEqual(await ctx.gallery.clipboardPaths(), [
+      "/tmp/photo.png",
+      "/tmp/photo.webp",
+    ]);
+  } finally {
+    ctx.restore();
+  }
+});
+
 test("clipboardImage asks the backend and wraps the bytes in a File", async () => {
   const ctx = setup({
     invokeTable: {
@@ -343,6 +365,113 @@ test("clipboardImage asks the backend and wraps the bytes in a File", async () =
     assert.equal(file.name, "clipboard.png");
     assert.equal(file.type, "image/png");
     assert.equal(Buffer.from(await file.arrayBuffer()).toString(), "png-bytes");
+  } finally {
+    ctx.restore();
+  }
+});
+
+test("clipboardImage falls back to the browser Clipboard API", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      userAgent: "Mozilla/5.0",
+      clipboard: {
+        read: async () => [
+          {
+            types: ["text/plain", "image/png"],
+            getType: async () => new Blob(["browser-png"], { type: "image/png" }),
+          },
+        ],
+      },
+    },
+  });
+
+  const ctx = setup({
+    invokeTable: { list_attachments: [], read_clipboard_image: null },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    const file = await ctx.gallery.clipboardImage();
+    assert.equal(file.type, "image/png");
+    assert.equal(Buffer.from(await file.arrayBuffer()).toString(), "browser-png");
+  } finally {
+    ctx.restore();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous);
+    else delete globalThis.navigator;
+  }
+});
+
+test("mobile clipboard reads the browser API before the desktop command", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      userAgent: "Mozilla/5.0 (Linux; Android 15)",
+      clipboard: {
+        read: async () => [
+          {
+            types: ["image/png"],
+            getType: async () => new Blob(["android-png"], { type: "image/png" }),
+          },
+        ],
+      },
+    },
+  });
+
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      read_clipboard_image: () => {
+        throw new Error("native command should not run on mobile");
+      },
+    },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    const file = await ctx.gallery.clipboardImage();
+    assert.equal(Buffer.from(await file.arrayBuffer()).toString(), "android-png");
+    assert.equal(
+      ctx.invoke.calls.filter((call) => call.command === "read_clipboard_image").length,
+      0
+    );
+  } finally {
+    ctx.restore();
+    if (previous) Object.defineProperty(globalThis, "navigator", previous);
+    else delete globalThis.navigator;
+  }
+});
+
+test("clipboardImageFromBrowser returns null without the Clipboard API", async () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { userAgent: "Mozilla/5.0" },
+  });
+  try {
+    assert.equal(await clipboardImageFromBrowser(), null);
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "navigator", previous);
+    else delete globalThis.navigator;
+  }
+});
+
+test("clipboardError records a native clipboard failure", async () => {
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      read_clipboard_image: () => {
+        throw new Error("image too large");
+      },
+    },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    assert.equal(await ctx.gallery.clipboardImage(), null);
+    assert.match(ctx.gallery.clipboardError(), /image too large/);
   } finally {
     ctx.restore();
   }

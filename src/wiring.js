@@ -101,8 +101,18 @@ function clipboardImages(clipboardData) {
  */
 function clipboardMayHoldImage(clipboardData) {
   const types = Array.from(clipboardData?.types ?? []);
-  if (types.length === 0) return true;
+  // Some photo apps advertise both `text/plain` and an image type. The image
+  // must win, otherwise the native clipboard fallback is skipped and pasting a
+  // bitmap appears to do nothing.
+  if (types.some((type) => type.startsWith("image/"))) return true;
+  if (types.includes("Files") || types.includes("text/uri-list")) return true;
   if (types.includes("text/plain")) return false;
+  return types.length === 0;
+}
+
+/** True when the clipboard explicitly advertises an image or file drag. */
+function clipboardExpectsImage(clipboardData) {
+  const types = Array.from(clipboardData?.types ?? []);
   return types.some(
     (type) =>
       type.startsWith("image/") ||
@@ -228,6 +238,11 @@ export function initEventWiring(deps) {
   // -------------------------------------------------------------------------
 
   if (els.attachmentAdd) on(els.attachmentAdd, "click", deps.pickAttachment);
+  if (els.attachmentPaste) {
+    on(els.attachmentPaste, "click", () =>
+      deps.pasteImageFromClipboard?.(true)
+    );
+  }
   if (els.attachmentInput) {
     on(els.attachmentInput, "change", (event) =>
       deps.addAttachmentFiles(event.target.files)
@@ -270,7 +285,9 @@ export function initEventWiring(deps) {
     // backend only when the clipboard looks like it might hold an image, so a
     // normal text paste is never delayed or intercepted.
     if (clipboardMayHoldImage(event.clipboardData)) {
-      deps.pasteImageFromClipboard?.();
+      deps.pasteImageFromClipboard?.(
+        clipboardExpectsImage(event.clipboardData)
+      );
     }
   });
 

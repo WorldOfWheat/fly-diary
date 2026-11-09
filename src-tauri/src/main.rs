@@ -28,7 +28,27 @@ fn disable_core_dumps() {
 #[cfg(not(unix))]
 fn disable_core_dumps() {}
 
+/// Block same-user processes from reading this process's memory.
+///
+/// `RLIMIT_CORE = 0` stops a crash from writing the key to disk; this closes
+/// the other common hole on Linux: another process running as the same user
+/// attaching with `ptrace` or opening `/proc/<pid>/mem`. The side effect is
+/// that debuggers and profilers can no longer attach, which is acceptable for
+/// a diary app (and can be changed locally while developing).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn block_same_user_memory_access() {
+    // SAFETY: `prctl` is variadic; `PR_SET_DUMPABLE` reads one integer argument
+    // and ignores the rest. Passing zero is always valid.
+    unsafe {
+        let _ = libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0);
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn block_same_user_memory_access() {}
+
 fn main() {
     disable_core_dumps();
+    block_same_user_memory_access();
     fly_diary_lib::run()
 }

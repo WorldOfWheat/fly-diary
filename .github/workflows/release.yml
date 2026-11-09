@@ -10,19 +10,24 @@ on:
         required: true
         type: string
 
+# Default to read-only; only the publish job gets write access.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       # A release tag can point at any commit, including one on a branch that
       # predates the test suites (e.g. master, which has no tests/ or test.sh).
       # Check out the tag itself so the tests match the code being released.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Install Linux deps
         run: |
@@ -35,24 +40,31 @@ jobs:
       # cannot resolve `pnpm store path`. The version comes from the
       # `packageManager` field in package.json; declaring it here as well makes
       # pnpm/action-setup fail with ERR_PNPM_BAD_PM_VERSION.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.13.0
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
-          workspaces: src-tauri
+          toolchain: 1.98.1
 
       - run: pnpm install --frozen-lockfile
       - run: ./test.sh --no-cov
 
+  audit:
+    uses: ./.github/workflows/security.yml
+    with:
+      ref: ${{ inputs.tag || github.ref }}
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+
   publish:
-    needs: test
+    needs: [test, audit]
     strategy:
       fail-fast: false
       matrix:
@@ -61,13 +73,22 @@ jobs:
           - platform: macos-latest
           - platform: windows-latest
     runs-on: ${{ matrix.platform }}
+    timeout-minutes: 60
+    # Configure required reviewers / protected branches on this environment in
+    # the repository settings. It also gives signing secrets a scoped home.
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       # Check out the same ref the test job validated, otherwise a
       # workflow_dispatch run with a tag input can leave the workspace empty
       # and pnpm/action-setup then fails with "No pnpm version is specified".
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
 
       - name: Install Linux deps
         if: matrix.platform == 'ubuntu-22.04'
@@ -83,24 +104,25 @@ jobs:
       # version there makes pnpm/action-setup fail with
       # ERR_PNPM_BAD_PM_VERSION, and omitting it entirely makes the action
       # fail with "No pnpm version is specified" if package.json is missing.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 9.15.4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 24
+          node-version: 24.13.0
           cache: pnpm
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
         with:
-          workspaces: src-tauri
+          toolchain: 1.98.1
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@v0
+      # No build cache here on purpose: release artifacts are built from a
+      # clean target directory instead of restoring cache written by other
+      # workflows.
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -109,3 +131,9 @@ jobs:
           releaseBody: "See the assets below to download and install."
           releaseDraft: true
           prerelease: false
+
+      # SLSA-style provenance for every bundle produced on this runner. Users
+      # can verify the artifacts with `gh attestation verify`.
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+        with:
+          subject-path: "src-tauri/target/release/bundle/**/*"

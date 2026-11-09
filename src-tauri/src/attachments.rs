@@ -71,7 +71,7 @@ pub const MAX_ATTACHMENT_BYTES: usize = 5 * 1024 * 1024;
 
 /// Largest original file accepted from a native drag-drop path. Mirrors the
 /// frontend's `MAX_INPUT_BYTES`; the image is resized before it is stored.
-pub const MAX_DROPPED_FILE_BYTES: u64 = 20 * 1024 * 1024;
+pub const MAX_DROPPED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Maximum number of files accepted in a single native drop.
 pub const MAX_DROPPED_FILES: usize = 20;
@@ -148,17 +148,21 @@ pub fn read_dropped_images(paths: &[String]) -> Result<Vec<DroppedImage>, String
     let mut images = Vec::with_capacity(paths.len());
     for path in paths {
         let path = Path::new(path);
-        let metadata = fs::metadata(path)
-            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        let metadata =
+            fs::metadata(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
         if !metadata.is_file() {
             return Err(format!("{} is not a file", path.display()));
         }
         if metadata.len() > MAX_DROPPED_FILE_BYTES {
-            return Err(format!("{} is larger than 20 MB", path.display()));
+            return Err(format!(
+                "{} is larger than {} MB",
+                path.display(),
+                MAX_DROPPED_FILE_BYTES / (1024 * 1024)
+            ));
         }
 
-        let bytes = fs::read(path)
-            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        let bytes =
+            fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
         let name = path
             .file_name()
             .and_then(|name| name.to_str())

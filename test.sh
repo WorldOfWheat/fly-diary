@@ -41,12 +41,12 @@ echo
 echo "==> Rust tests"
 if [[ $COVERAGE -eq 1 ]]; then
   if cargo llvm-cov --version >/dev/null 2>&1; then
-    cargo llvm-cov --manifest-path src-tauri/Cargo.toml --summary-only
+    cargo llvm-cov --locked --manifest-path src-tauri/Cargo.toml --summary-only
   else
     echo "cargo-llvm-cov is not installed; running tests without coverage."
     echo "Install it with: cargo install cargo-llvm-cov --locked"
-    cargo test --manifest-path src-tauri/Cargo.toml
+    cargo test --locked --manifest-path src-tauri/Cargo.toml
   fi
 else
-  cargo test --manifest-path src-tauri/Cargo.toml
+  cargo test --locked --manifest-path src-tauri/Cargo.toml
 fi

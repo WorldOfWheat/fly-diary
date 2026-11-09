@@ -1494,25 +1494,66 @@ function initAutoLock() {
  */
 function dropAttachmentPaths(paths) {
   if (!Array.isArray(paths) || paths.length === 0) return;
-  if (!currentDate || lockedDate) {
-    setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
+  if (!currentDate || lockedDate || readOnlyEntry) {
+    setStatus(
+      t(
+        lockedDate
+          ? "broken.lockedStatus"
+          : readOnlyEntry
+            ? "attachments.blocked"
+            : "attachments.noDate"
+      )
+    );
     return;
   }
-  if (readOnlyEntry) unlockEntryForEditing();
   attachmentGallery.addPaths(paths);
 }
 
 /**
  * Fallback for WebKitGTK, which may omit clipboard images from `paste`.
  *
- * Reads the clipboard natively and only unlocks a read-only entry after an
- * image is actually found, so normal text paste never changes the edit state.
+ * Reads the clipboard natively, but refuses to touch a read-only or locked
+ * entry. Editing state only changes through the explicit unlock button.
  */
-async function pasteImageFromClipboard() {
-  if (!currentDate || lockedDate) return;
+async function pasteImageFromClipboard(expectImage = false) {
+  if (!currentDate || lockedDate || readOnlyEntry) {
+    if (expectImage) {
+      setStatus(
+        t(
+          lockedDate
+            ? "broken.lockedStatus"
+            : readOnlyEntry
+              ? "attachments.blocked"
+              : "attachments.noDate"
+        )
+      );
+    }
+    return;
+  }
+
+  if (expectImage) setStatus(t("attachments.clipboardReading"));
+
+  // Copying a file in a file manager puts paths on the clipboard; reading that
+  // is much faster than asking the OS to negotiate a bitmap.
+  const paths = await attachmentGallery.clipboardPaths();
+  if (paths.length > 0 && (await attachmentGallery.addPaths(paths))) {
+    return;
+  }
+
+  // The file list may be stale (for example a browser's temporary file), so a
+  // failed path read falls through to the bitmap reader.
   const file = await attachmentGallery.clipboardImage();
-  if (!file) return;
-  if (readOnlyEntry) unlockEntryForEditing();
+  if (!file) {
+    if (expectImage) {
+      setStatus(
+        attachmentGallery.clipboardError()
+          ? t("attachments.clipboardFailed")
+          : t("attachments.clipboardEmpty")
+      );
+    }
+    return;
+  }
+
   await attachmentGallery.addFiles([file]);
 }
 
@@ -1687,16 +1728,18 @@ function wireEvents() {
     // Attachments
     pickAttachment: attachmentGallery.pickFile,
     canAttachImages: attachmentGallery.canEdit,
-    onAttachmentBlocked: (files) => {
-      // Pasting or dropping an image is an explicit edit gesture. If the entry
-      // is merely read-only, unlock it and continue; a broken entry stays
-      // locked, and there is no date to attach to on the lock screen.
-      if (readOnlyEntry && !lockedDate) {
-        unlockEntryForEditing();
-        attachmentGallery.addFiles(files);
-        return;
-      }
-      setStatus(t(lockedDate ? "broken.lockedStatus" : "attachments.blocked"));
+    onAttachmentBlocked: () => {
+      // Read-only is a deliberate gate: an image paste/drop must not silently
+      // unlock the entry. The user has to press "解鎖編輯" explicitly.
+      setStatus(
+        t(
+          lockedDate
+            ? "broken.lockedStatus"
+            : readOnlyEntry
+              ? "attachments.blocked"
+              : "attachments.noDate"
+        )
+      );
     },
     addAttachmentFiles: attachmentGallery.addFiles,
     pasteImageFromClipboard,
