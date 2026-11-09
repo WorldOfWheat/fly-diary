@@ -20,7 +20,7 @@ jobs:
       # Actions are pinned to full commit SHAs so a moved tag cannot change the
       # code that runs with this repository's token. Dependabot keeps them up
       # to date.
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -35,9 +35,9 @@ jobs:
       # cannot resolve `pnpm store path`. The version comes from the
       # `packageManager` field in package.json; declaring it here as well makes
       # pnpm/action-setup fail with ERR_PNPM_BAD_PM_VERSION.
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.13.0
           cache: pnpm
