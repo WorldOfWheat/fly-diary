@@ -1,7 +1,7 @@
 # Fly Diary
 
 一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **AES-256-GCM 加密的 XML** 檔案儲存。
-目前版本 `0.1.5`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
+目前版本 `0.1.6`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
 把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
 
 ## 功能
@@ -187,19 +187,19 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 - **diary key**：隨機 32 bytes，真正用來加密日記。它被 master key 包裝後存進 `vault.xml`。
 - 這層間接讓「改密碼」或「升級 KDF 參數」只需要重新包裝 32 bytes，不必重新加密所有日記。
 
-| 項目         | 實作                                                                   |
-| ------------ | ---------------------------------------------------------------------- |
-| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
-| 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
-| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                      |
-| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                              |
-| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
-| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
-| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
-| 圖片附件     | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
-| 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
-| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
-| 金鑰生命週期 | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零        |
+| 項目          | 實作                                                                   |
+| ------------- | ---------------------------------------------------------------------- |
+| 對稱加密      | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
+| 金鑰派生      | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
+| 預設參數      | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                      |
+| 參數範圍      | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                              |
+| Salt          | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
+| IV / Nonce    | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
+| 完整性        | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
+| 圖片附件      | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
+| 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序              |
+| 密碼驗證      | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
+| 金鑰生命週期  | 只存在 Rust 端記憶體（`Zeroizing<[u8; 32]>`），鎖定或關閉即歸零        |
 
 > ⚠️ **忘記密碼無法救回**：master key 由密碼派生且不落地，沒有後門或回復機制。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
@@ -421,6 +421,7 @@ diary/
   **元素順序就是顯示順序**。沒有 `added-at`，也不依賴檔名或 mtime。
   manifest 的 AAD 是 `"fly-diary/attachment-manifest" || 0x00 || date`，
   所以搬到別天會失敗，也不能和 `index.xml` 或日記密文互換。
+
 - **上傳前壓縮**：前端用 canvas 將長邊縮到 1000px、WebP quality 0.8；若 WebView 不支援
   WebP 編碼時，PNG／WebP 來源會 fallback PNG 以保留透明，其他來源 fallback JPEG（透明區填白）。
   重新編碼會一併清掉 EXIF（包含 GPS）。
@@ -680,48 +681,48 @@ fly-diary/
 
 ## Tauri Commands
 
-| Command                                   | 說明                                                                         |
-| ----------------------------------------- | ---------------------------------------------------------------------------- |
-| `get_settings()`                          | 讀取設定檔（是否已設定、日記路徑、預設路徑、自動鎖定與自動儲存延遲及可選值） |
-| `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（保留既有的自動鎖定與自動儲存設定）                     |
-| `set_auto_lock(minutes)`                  | 寫入閒置自動鎖定分鐘數（`0` 表示永不）                                       |
-| `set_autosave_delay(ms)`                  | 寫入自動儲存延遲毫秒數（只接受 `200/400/800/1500/3000`）                     |
-| `pick_diary_dir()`                        | 桌面版開啟原生資料夾選擇器；行動版直接回傳 App 私有資料夾                     |
-| `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）                                             |
-| `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍                                             |
-| `get_vault_kdf()`                         | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`）                           |
-| `calibrate_kdf()`                         | 實測本機速度，回傳約 1 秒可解鎖的參數                                        |
-| `change_passphrase(current, new, kdf?)`   | 驗證目前密碼後重新包裝 diary key（新密碼留空＝只改參數）                     |
-| `create_vault(passphrase, kdf?)`          | 建立 vault 並立即解鎖，可指定 KDF 參數                                       |
-| `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體                                                   |
-| `lock()`                                  | 清除記憶體中的金鑰                                                           |
-| `is_unlocked()`                           | 目前是否已解鎖                                                               |
-| `get_entry(date)`                         | 讀取並解密某天的日記，不存在回 `null`                                        |
-| `save_entry(date, title, content)`        | 加密後寫入/覆寫某天的日記                                                    |
-| `delete_entry(date)`                      | 刪除某天的日記與附件資料夾                                                   |
-| `save_attachment(date, mime, data, width, height)` | 加密並儲存一張圖片（base64），附加在相簿最後                     |
-| `list_attachments(date)`                  | 依 manifest 順序列出圖片 metadata                                           |
-| `get_attachment(date, id)`                | 解密單張圖片並回傳 base64 與 MIME                                           |
-| `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                 |
-| `read_clipboard_image()`                  | 桌面版從系統剪貼簿讀取 bitmap 並轉成 PNG base64；沒有圖片或行動版回 `null`    |
-| `read_clipboard_paths()`                  | 讀取剪貼簿中由檔案管理員複製的圖片路徑（桌面版；行動版回空陣列）             |
-| `delete_attachment(date, id)`             | 刪除一張圖片並更新 manifest                                                 |
-| `reorder_attachments(date, ids)`          | 以新的 id 順序重寫 manifest                                                 |
-| `list_orphan_attachments()`               | 列出沒有對應日記的附件資料夾                                                |
-| `delete_orphan_attachments(date)`         | 刪除指定的孤兒附件資料夾                                                    |
-| `list_entries()`                          | 列出所有日記（新到舊，需解鎖才能取得標題）                                   |
-| `list_favourites()`                       | 只列出收藏的日記（新到舊）                                                   |
-| `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態                                           |
-| `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引                                  |
-| `list_broken_entries()`                   | 列出無法解密的日記檔（日期、大小、失敗原因）                                 |
-| `export_broken_entry(date)`               | 開啟存檔對話框，把原始 `.xml` 位元組複製到指定位置                           |
-| `pick_import_dir()`                       | 桌面版開啟原生資料夾選擇器；行動版回報不支援資料夾匯入                       |
-| `scan_import(importDir)`                  | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入                               |
-| `run_import(importDir, dates, overwrite)` | 平行匯入指定日期，回傳成功／略過／失敗報告                                   |
-| `upgrade_entries()`                       | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
-| `today()`                                 | 回傳本地時區的今天日期                                                       |
-| `diary_path()`                            | 回傳日記資料夾絕對路徑                                                       |
-| `set_screenshot_protection(protected)`    | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
+| Command                                            | 說明                                                                         |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `get_settings()`                                   | 讀取設定檔（是否已設定、日記路徑、預設路徑、自動鎖定與自動儲存延遲及可選值） |
+| `set_diary_dir(path)`                              | 將日記路徑寫入設定檔（保留既有的自動鎖定與自動儲存設定）                     |
+| `set_auto_lock(minutes)`                           | 寫入閒置自動鎖定分鐘數（`0` 表示永不）                                       |
+| `set_autosave_delay(ms)`                           | 寫入自動儲存延遲毫秒數（只接受 `200/400/800/1500/3000`）                     |
+| `pick_diary_dir()`                                 | 桌面版開啟原生資料夾選擇器；行動版直接回傳 App 私有資料夾                    |
+| `vault_exists()`                                   | 是否已建立 vault（判斷首次啟動）                                             |
+| `get_kdf_defaults()`                               | 回傳 Argon2id 預設值與可調整範圍                                             |
+| `get_vault_kdf()`                                  | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`）                           |
+| `calibrate_kdf()`                                  | 實測本機速度，回傳約 1 秒可解鎖的參數                                        |
+| `change_passphrase(current, new, kdf?)`            | 驗證目前密碼後重新包裝 diary key（新密碼留空＝只改參數）                     |
+| `create_vault(passphrase, kdf?)`                   | 建立 vault 並立即解鎖，可指定 KDF 參數                                       |
+| `unlock(passphrase)`                               | 驗證密碼，將金鑰載入記憶體                                                   |
+| `lock()`                                           | 清除記憶體中的金鑰                                                           |
+| `is_unlocked()`                                    | 目前是否已解鎖                                                               |
+| `get_entry(date)`                                  | 讀取並解密某天的日記，不存在回 `null`                                        |
+| `save_entry(date, title, content)`                 | 加密後寫入/覆寫某天的日記                                                    |
+| `delete_entry(date)`                               | 刪除某天的日記與附件資料夾                                                   |
+| `save_attachment(date, mime, data, width, height)` | 加密並儲存一張圖片（base64），附加在相簿最後                                 |
+| `list_attachments(date)`                           | 依 manifest 順序列出圖片 metadata                                            |
+| `get_attachment(date, id)`                         | 解密單張圖片並回傳 base64 與 MIME                                            |
+| `read_dropped_images(paths)`                       | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                  |
+| `read_clipboard_image()`                           | 桌面版從系統剪貼簿讀取 bitmap 並轉成 PNG base64；沒有圖片或行動版回 `null`   |
+| `read_clipboard_paths()`                           | 讀取剪貼簿中由檔案管理員複製的圖片路徑（桌面版；行動版回空陣列）             |
+| `delete_attachment(date, id)`                      | 刪除一張圖片並更新 manifest                                                  |
+| `reorder_attachments(date, ids)`                   | 以新的 id 順序重寫 manifest                                                  |
+| `list_orphan_attachments()`                        | 列出沒有對應日記的附件資料夾                                                 |
+| `delete_orphan_attachments(date)`                  | 刪除指定的孤兒附件資料夾                                                     |
+| `list_entries()`                                   | 列出所有日記（新到舊，需解鎖才能取得標題）                                   |
+| `list_favourites()`                                | 只列出收藏的日記（新到舊）                                                   |
+| `set_favourite(date, favourite)`                   | 加入／取消收藏，回傳實際儲存的狀態                                           |
+| `rebuild_index()`                                  | 丟棄 `index.xml` 並重新掃描所有日記重建索引                                  |
+| `list_broken_entries()`                            | 列出無法解密的日記檔（日期、大小、失敗原因）                                 |
+| `export_broken_entry(date)`                        | 開啟存檔對話框，把原始 `.xml` 位元組複製到指定位置                           |
+| `pick_import_dir()`                                | 桌面版開啟原生資料夾選擇器；行動版回報不支援資料夾匯入                       |
+| `scan_import(importDir)`                           | 掃描資料夾並分類為可匯入／已存在／失敗，不寫入                               |
+| `run_import(importDir, dates, overwrite)`          | 平行匯入指定日期，回傳成功／略過／失敗報告                                   |
+| `upgrade_entries()`                                | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
+| `today()`                                          | 回傳本地時區的今天日期                                                       |
+| `diary_path()`                                     | 回傳日記資料夾絕對路徑                                                       |
+| `set_screenshot_protection(protected)`             | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
 
 > 行動版（`#[cfg(mobile)]`）的差異只有三處：`pick_diary_dir` 直接回傳 App 私有資料夾、
 > `pick_import_dir` 回報不支援資料夾匯入、選單列不建置。其餘命令桌面與行動版共用同一份實作。
