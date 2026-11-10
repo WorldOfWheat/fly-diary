@@ -144,8 +144,14 @@ test("secondary text on favourite rows does not rely on the muted token", () => 
 });
 
 test("the textarea and placeholder styles keep text and focus visible", () => {
-  assert.match(css, /textarea:focus-visible/);
-  assert.match(css, /#content:focus-visible/);
+  assert.match(
+    css,
+    /html\[data-input-modality="keyboard"\] textarea:focus/
+  );
+  assert.match(
+    css,
+    /html\[data-input-modality="keyboard"\] #content:focus/
+  );
   assert.match(css, /::placeholder\s*\{[^}]*opacity:\s*1/);
   assert.doesNotMatch(css, /#content::placeholder\s*\{[^}]*opacity:\s*0\./);
 });

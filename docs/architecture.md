@@ -22,6 +22,7 @@ fly-diary/
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準、短語解鎖（createLockScreen）
 │   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
+│   ├── input-modality.js   # 記錄指標／鍵盤輸入，讓焦點環只在鍵盤操作時出現
 │   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
@@ -29,8 +30,9 @@ fly-diary/
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
+│       ├── reset.css       # 瀏覽器預設：盒模型、媒體、表單、hidden
 │       ├── tokens.css      # 色彩、字體、間距、dark theme
-│       ├── base.css        # reset、焦點、共用 primitive、app shell
+│       ├── base.css        # 焦點、共用 primitive、app shell、scoped 間距
 │       ├── lock.css        # 解鎖／建立 vault 畫面
 │       ├── sidebar.css     # 搜尋、篩選、虛擬滾動列
 │       ├── editor.css      # 編輯器標頭與日期導覽

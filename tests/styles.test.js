@@ -393,3 +393,44 @@ test("a locked editor dims its inputs", () => {
     assert.ok(locked.length > 0, `no rule found for ${selector}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Focus rings follow the last input method
+// ---------------------------------------------------------------------------
+//
+// WebKitGTK can match `:focus-visible` after a pointer click. `input-modality.js`
+// sets `data-input-modality` on <html>, and every accent focus ring must be
+// gated on the keyboard value. The drag-over outline is not focus styling.
+
+test("every accent focus ring is gated to keyboard input", () => {
+  const focusRings = rules.filter(
+    (rule) =>
+      !rule.selector.includes(".editor.is-dragover") &&
+      declarations(rule.body, "outline").some((value) =>
+        value.includes("var(--accent)")
+      )
+  );
+
+  assert.ok(focusRings.length > 0, "no accent focus rings found");
+  for (const rule of focusRings) {
+    assert.match(
+      rule.selector,
+      /\[data-input-modality="keyboard"\]/,
+      `${rule.selector} must only apply after keyboard input`
+    );
+  }
+});
+
+test("pointer focus does not fall back to the UA outline", () => {
+  const suppression = rulesFor(
+    'html[data-input-modality="pointer"] :focus'
+  );
+
+  assert.ok(suppression.length > 0, "pointer focus suppression is missing");
+  assert.ok(
+    suppression.some((rule) =>
+      declarations(rule.body, "outline").includes("none")
+    ),
+    "pointer focus must set outline: none"
+  );
+});
