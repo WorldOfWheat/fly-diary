@@ -57,7 +57,7 @@ function harness(overrides = {}) {
     set_autosave_delay: null,
     change_passphrase: null,
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
-    get_recovery_status: { enabled: false, recoveryId: null },
+    get_recovery_status: { enabled: false },
     remove_recovery: null,
     ...(overrides.invokeTable ?? {}),
   });
@@ -582,7 +582,7 @@ test("openSettings reports an enabled recovery phrase and offers replacement", a
 
       assert.equal(
         els.recoveryStatus.textContent,
-        "recovery.statusEnabled(id=id-1)",
+        "recovery.statusEnabled",
       );
       assert.equal(
         els.recoveryGenerateBtn.textContent,
@@ -592,7 +592,7 @@ test("openSettings reports an enabled recovery phrase and offers replacement", a
     },
     {
       invokeTable: {
-        get_recovery_status: { enabled: true, recoveryId: "id-1" },
+        get_recovery_status: { enabled: true },
       },
     },
   );

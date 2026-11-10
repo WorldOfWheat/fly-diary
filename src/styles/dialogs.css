@@ -469,18 +469,6 @@
   width: 40rem;
 }
 
-.recovery-id {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  line-height: 1.6;
-  color: var(--text-muted);
-  overflow-wrap: anywhere;
-}
-
-.recovery-id:empty {
-  display: none;
-}
-
 /* The one-time word grid. Selection and copying are disabled in three layers:
    `user-select: none` here, the copy/context-menu handlers in `wiring.js`, and
    the absence of a copy/print button. This is a UX barrier, not a promise that

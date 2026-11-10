@@ -106,14 +106,13 @@ Vault 檔（`vault.xml`）：
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
 <recovery version="1">
-  <id>BASE64(16 bytes)</id>
   <iv>BASE64(12 bytes)</iv>
   <wrapped-key>BASE64(AES-256-GCM ciphertext + tag)</wrapped-key>
 </recovery>
 ```
 
 - `wrapped-key` 是用 recovery key 包裝的 diary key；recovery key 由 12 個 BIP39 英文單字解碼出的 128-bit 熵，經 domain-separated SHA-256 展成 32 bytes。
-- AAD 是 `"fly-diary/recovery" || 0x00 || id || 0x00 || version`；`id` 是隨機 16 bytes，UI 會以 **12 個 BIP39 英文單字**顯示在短語旁（AAD 使用解碼後的原生 bytes）。把 blob 搬到別的日記本或改寫 `id` 都會解密失敗。
+- AAD 是 `"fly-diary/recovery" || 0x00 || version`，把 recovery 密文移作其他用途會解密失敗。把 blob 搬到別的日記本時，解出的金鑰會再經 `diary_key_matches` 驗證，不符合就拒絕並保持 vault 不變。
 - **刻意放在 `vault.xml` 之外**：舊版 App 改密碼或 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的欄位會被丟掉。獨立檔案不會被舊版覆寫；而 diary key 在改密碼時不變，所以短語持續有效。
 - 寫入同樣走 `write_private`（`0600`、先寫暫存檔再 rename），失敗不會留下半截檔案。
 - 重新產生短語會覆寫此檔並換新的 `id`；停用短語會刪除此檔。兩者都不會重新加密日記。

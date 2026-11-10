@@ -17,7 +17,6 @@ import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
 const RECOVERY_IDS = [
   "recoveryOverlay",
   "recoveryError",
-  "recoveryId",
   "recoveryWords",
   "recoveryContinueBtn",
   "recoveryCancel",
@@ -35,7 +34,6 @@ const WORDS =
     " ",
   );
 const INDICES = [0, 4, 11];
-const RECOVERY_ID = WORDS.join(" ");
 
 function harness(overrides = {}) {
   resetWordlistCache();
@@ -49,10 +47,9 @@ function harness(overrides = {}) {
       // A copy, because `close()` wipes the array it was handed.
       words: [...WORDS],
       indices: INDICES,
-      recoveryId: RECOVERY_ID,
     },
     get_bip39_words: WORDS,
-    confirm_recovery_phrase: RECOVERY_ID,
+    confirm_recovery_phrase: null,
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -91,7 +88,7 @@ function confirmationInputs(els) {
   return els.recoveryConfirmFields.findAll((child) => child.tagName === "INPUT");
 }
 
-test("open renders the phrase and its BIP39 id, but not the confirmation window", async () => {
+test("open renders the phrase, but not the confirmation window", async () => {
   await withDialog(async ({ dialog, els }) => {
     await dialog.open();
 
@@ -103,8 +100,6 @@ test("open renders the phrase and its BIP39 id, but not the confirmation window"
       els.recoveryWords.children.map((item) => item.children[1].textContent),
       WORDS,
     );
-    assert.match(els.recoveryId.textContent, /recovery\.idLabel/);
-    assert.match(els.recoveryId.textContent, new RegExp(RECOVERY_ID));
     assert.equal(confirmationInputs(els).length, 0);
     assert.equal(document.activeElement, els.recoveryContinueBtn);
   });
@@ -187,7 +182,6 @@ test("confirm writes the phrase and closes after the right answers", async () =>
 
     assert.deepEqual(invoke.argsOf("confirm_recovery_phrase"), {
       phrase: WORDS.join(" "),
-      recoveryId: RECOVERY_ID,
       indices: INDICES,
       answers: ["ABANDON", "above", "accident"],
     });
@@ -197,7 +191,7 @@ test("confirm writes the phrase and closes after the right answers", async () =>
     assert.equal(els.recoveryWords.children.length, 0);
     assert.equal(els.recoveryConfirmFields.children.length, 0);
     assert.equal(onEnabled.count(), 1);
-    assert.deepEqual(onEnabled.args()[0], [RECOVERY_ID]);
+    assert.deepEqual(onEnabled.args()[0], []);
     assert.deepEqual(setStatus.args()[0], ["recovery.enabled", true]);
   });
 });
@@ -257,7 +251,7 @@ test("a forced close during confirmation does not report success", async () => {
       assert.equal(els.recoveryWords.children.length, 0);
       assert.equal(els.recoveryConfirmFields.children.length, 0);
 
-      release(RECOVERY_ID);
+      release();
       await confirming;
 
       assert.equal(onEnabled.count(), 0);
@@ -284,6 +278,5 @@ test("close wipes the words and both windows", async () => {
     assert.equal(els.recoveryConfirmOverlay.hidden, true);
     assert.equal(els.recoveryWords.children.length, 0);
     assert.equal(els.recoveryConfirmFields.children.length, 0);
-    assert.equal(els.recoveryId.textContent, "");
   });
 });

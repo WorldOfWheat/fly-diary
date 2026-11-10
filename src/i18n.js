@@ -144,7 +144,7 @@ const zhHant = {
   "recovery.settingsHint":
     "啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。",
   "recovery.statusDisabled": "尚未設定回復短語。",
-  "recovery.statusEnabled": "已設定回復短語（BIP39 編號 {id}）。",
+  "recovery.statusEnabled": "已設定回復短語。",
   "recovery.generate": "產生回復短語",
   "recovery.regenerate": "重新產生回復短語",
   "recovery.remove": "停用回復短語",
@@ -155,7 +155,6 @@ const zhHant = {
   "recovery.createTitle": "備份回復短語",
   "recovery.createHint":
     "以下 12 個單字只會顯示這一次。請用紙筆依序抄寫，不要截圖、不要存到裝置或雲端硬碟，也不要和日記放在同一個資料夾。",
-  "recovery.idLabel": "短語編號（BIP39）：{id}（請一併抄下）",
   "recovery.wordsLabel": "回復短語單字",
   "recovery.copyHint":
     "這個畫面不允許選取或複製，請確實抄寫。若單字外流，搭配日記檔案就能解密全部內容。",
@@ -497,7 +496,7 @@ const en = {
   "recovery.settingsHint":
     "When enabled, the app generates 12 BIP39 English words. Write them on paper and store them away from the diary; they can reset the passphrase if you forget it. The phrase is a second key: anyone who has it and the diary files can read everything.",
   "recovery.statusDisabled": "No recovery phrase is configured.",
-  "recovery.statusEnabled": "Recovery phrase configured (BIP39 ID {id}).",
+  "recovery.statusEnabled": "Recovery phrase configured.",
   "recovery.generate": "Generate recovery phrase",
   "recovery.regenerate": "Replace recovery phrase",
   "recovery.remove": "Remove recovery phrase",
@@ -508,7 +507,6 @@ const en = {
   "recovery.createTitle": "Back up recovery phrase",
   "recovery.createHint":
     "These 12 words are shown only once. Write them down in order on paper. Do not screenshot them, save them on this device or in cloud storage, or keep them in the same folder as the diary.",
-  "recovery.idLabel": "Phrase ID (BIP39): {id} (write this down too)",
   "recovery.wordsLabel": "Recovery phrase words",
   "recovery.copyHint":
     "This screen does not allow selection or copying. Write the words down. If they leak, anyone with the diary files can decrypt everything.",

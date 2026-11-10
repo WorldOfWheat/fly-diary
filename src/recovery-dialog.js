@@ -36,7 +36,7 @@ import {
  *   invoke   — (command: string, args?: object) => Promise<any>
  *   t        — (key: string, params?: object) => string
  *   setStatus — (text: string, saved?: boolean) => void
- *   onEnabled — (recoveryId: string) => void
+ *   onEnabled — () => void
  */
 export function createRecoveryDialog(deps) {
   const { els } = deps;
@@ -87,7 +87,6 @@ export function createRecoveryDialog(deps) {
       pending.words.fill("");
       pending.words = [];
       pending.indices = [];
-      pending.recoveryId = "";
       pending.fields = [];
     }
     pending = null;
@@ -95,7 +94,6 @@ export function createRecoveryDialog(deps) {
     if (els.recoveryConfirmFields) {
       els.recoveryConfirmFields.replaceChildren();
     }
-    if (els.recoveryId) els.recoveryId.textContent = "";
     showPhraseError("");
     showConfirmError("");
   }
@@ -149,12 +147,8 @@ export function createRecoveryDialog(deps) {
       pending = {
         words: data.words,
         indices: data.indices,
-        recoveryId: data.recoveryId,
         fields: [],
       };
-      els.recoveryId.textContent = deps.t("recovery.idLabel", {
-        id: data.recoveryId,
-      });
       renderWords(data.words);
       els.recoveryContinueBtn?.focus?.();
     } catch (err) {
@@ -231,21 +225,19 @@ export function createRecoveryDialog(deps) {
     // success state for a dialog that is no longer on screen.
     const current = pending;
     const phrase = current.words.join(" ");
-    const recoveryId = current.recoveryId;
     const indices = current.indices;
 
     setBusy(true);
     try {
       await deps.invoke("confirm_recovery_phrase", {
         phrase,
-        recoveryId,
         indices,
         answers,
       });
       setBusy(false);
       if (!isOpen() || pending !== current) return;
       close();
-      deps.onEnabled?.(recoveryId);
+      deps.onEnabled?.();
       deps.setStatus(deps.t("recovery.enabled"), true);
     } catch (err) {
       console.error("confirm_recovery_phrase failed:", err);

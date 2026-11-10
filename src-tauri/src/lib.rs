@@ -535,8 +535,6 @@ async fn change_passphrase(
 struct RecoveryPhraseView {
     words: Vec<String>,
     indices: Vec<usize>,
-    /// Twelve BIP39 words encoding the random 16-byte recovery identifier.
-    recovery_id: String,
 }
 
 /// Generate a recovery phrase for the user to write down.
@@ -548,11 +546,9 @@ struct RecoveryPhraseView {
 #[tauri::command]
 fn generate_recovery_phrase() -> Result<RecoveryPhraseView, String> {
     let entropy = bip39::generate_entropy();
-    let id_entropy = bip39::generate_entropy();
     Ok(RecoveryPhraseView {
         words: bip39::entropy_to_words(&entropy)?,
         indices: bip39::confirmation_indices(),
-        recovery_id: bip39::entropy_to_words(&id_entropy)?.join(" "),
     })
 }
 
@@ -576,15 +572,14 @@ async fn confirm_recovery_phrase(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     phrase: String,
-    recovery_id: String,
     indices: Vec<usize>,
     answers: Vec<String>,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let key = session_key(&session)?;
     let dir = diary_dir(&app)?;
 
     blocking("Confirm recovery phrase", move || {
-        storage::confirm_recovery_phrase(&dir, &*key, &phrase, &recovery_id, &indices, &answers)
+        storage::confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers)
     })
     .await
 }

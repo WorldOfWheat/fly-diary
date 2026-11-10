@@ -144,7 +144,6 @@ export const els = {
   // Recovery phrase dialog
   recoveryOverlay: $("recovery-overlay"),
   recoveryClose: $("recovery-close"),
-  recoveryId: $("recovery-id"),
   recoveryWords: $("recovery-words"),
   recoveryConfirmOverlay: $("recovery-confirm-overlay"),
   recoveryConfirmFields: $("recovery-confirm-fields"),

@@ -148,9 +148,7 @@ export function createSettingsDialog(deps) {
     try {
       const status = await deps.invoke("get_recovery_status");
       if (status.enabled) {
-        els.recoveryStatus.textContent = deps.t("recovery.statusEnabled", {
-          id: status.recoveryId,
-        });
+        els.recoveryStatus.textContent = deps.t("recovery.statusEnabled");
         els.recoveryGenerateBtn.textContent = deps.t("recovery.regenerate");
         els.recoveryRemoveBtn.hidden = false;
       } else {

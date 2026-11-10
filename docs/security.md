@@ -43,7 +43,7 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 | 圖片附件     | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
 | 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
 | 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
-| 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁 `recovery-id` 與版本 |
+| 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本 |
 | 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux 排除 dump/fork；鎖定或關閉即抹除、解鎖、unmap |
 
 > ⚠️ **忘記密碼無法救回**（除非已啟用回復短語）：master key 由密碼派生且不落地，沒有後門。
@@ -86,7 +86,7 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 短語包裝存在 `recovery.xml`，而不是 `vault.xml`。這是刻意的：舊版 App 在改密碼或改 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的 recovery 欄位會被靜默刪掉。獨立檔案對舊版而言不存在，所以不會被覆寫；而 diary key 在改密碼時不變，短語也就持續有效。
 
-`recovery.xml` 的格式是 `id`、`iv`、`wrapped-key`；AAD 是 `"fly-diary/recovery" || 0x00 || id || 0x00 || version`。`id` 是隨機 16 bytes，會以 **12 個 BIP39 英文單字**顯示在短語旁，讓使用者辨識短語屬於哪個日記本；檔案內仍以 base64 儲存同樣的 16 bytes，以維持舊版 sidecar 相容。把 recovery blob 換到另一個 vault 或改寫 id 都會讓 GCM 驗證失敗。
+`recovery.xml` 的格式是 `iv`、`wrapped-key`；AAD 是 `"fly-diary/recovery" || 0x00 || version`，讓 recovery 密文不會被當成日記、索引或附件的密文使用。把 recovery blob 換到另一個 vault 時，短語仍可能解出一把金鑰，但接著的 `diary_key_matches` 驗證會失敗並保持 vault 不變。
 
 **顯示與確認**：
 
