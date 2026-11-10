@@ -537,6 +537,29 @@
   }
 }
 
+/* Recovery phrase dialog: keep all twelve words visible without horizontal
+   scrolling on a phone, and stack the confirmation inputs once the three-column
+   grid would make them too narrow to type into. */
+@media (max-width: 640px) {
+  .recovery-words {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recovery-unlock-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .recovery-confirm-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .recovery-foot-hint {
+    display: none;
+  }
+}
+
 /* Respect users who asked the OS to reduce motion. */
 @media (prefers-reduced-motion: reduce) {
   *,

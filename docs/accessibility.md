@@ -15,7 +15,8 @@ Fly Diary 的目標是 **WCAG 2.2 AA**，不是 AAA。WCAG 的合規聲明必須
   - KDF、設定頁欄位沿用既有的 `<label for>`。
 - **焦點**
   - `textarea`、`select`、`a` 與 `#content` 都有 `:focus-visible`；`#content` 的焦點環畫在內側，不會被編輯區裁掉。
-  - 月曆、設定、匯入、統計四個 modal 使用共用的 focus trap：Tab／Shift+Tab 在對話框內循環，關閉後焦點回到開啟前的元素（月曆保留原本的 `dateLabel` 還原規則）。
+  - 月曆、設定、匯入、統計、回復短語與獨立確認視窗都使用共用的 focus trap：Tab／Shift+Tab 在對話框內循環，關閉後焦點回到開啟前的元素（月曆保留原本的 `dateLabel` 還原規則）。
+  - BIP39 單字磁磚是 `role="combobox"` + `role="listbox"`：方向鍵移動建議、Enter 選取或前往下一個字、Escape 關閉建議；每個輸入都有「第 N 個字」標籤。
 - **錯誤與狀態**
   - `#lock-error`、`#import-error`、`#settings-error` 都是 `role="alert"`。
   - 儲存狀態、圖片狀態、匯入進度使用 `role="status"`／`aria-live`／`role="progressbar"`。

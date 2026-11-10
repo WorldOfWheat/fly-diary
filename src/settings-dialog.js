@@ -27,6 +27,7 @@ import { createFocusTrap } from "./focus-trap.js";
 //   openImport         — () => void | Promise<void>
 //   openStats          — () => void
 //   changeDiaryDir     — () => void | Promise<void>
+//   openRecovery       — () => void | Promise<void>
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -142,6 +143,48 @@ export function createSettingsDialog(deps) {
     );
   }
 
+  /** Show whether a recovery phrase is configured and adjust the buttons. */
+  async function refreshRecoveryStatus() {
+    try {
+      const status = await deps.invoke("get_recovery_status");
+      if (status.enabled) {
+        els.recoveryStatus.textContent = deps.t("recovery.statusEnabled");
+        els.recoveryGenerateBtn.textContent = deps.t("recovery.regenerate");
+        els.recoveryRemoveBtn.hidden = false;
+      } else {
+        els.recoveryStatus.textContent = deps.t("recovery.statusDisabled");
+        els.recoveryGenerateBtn.textContent = deps.t("recovery.generate");
+        els.recoveryRemoveBtn.hidden = true;
+      }
+    } catch (err) {
+      console.error("get_recovery_status failed:", err);
+      els.recoveryStatus.textContent = "";
+      els.recoveryGenerateBtn.textContent = deps.t("recovery.generate");
+      els.recoveryRemoveBtn.hidden = true;
+    }
+  }
+
+  /** Remove the recovery phrase after a confirmation prompt. */
+  async function removeRecovery() {
+    if (!confirm(deps.t("recovery.removeConfirm"))) return;
+    els.settingsError.textContent = "";
+    try {
+      await deps.invoke("remove_recovery");
+      await refreshRecoveryStatus();
+      deps.setStatus(deps.t("recovery.removed"), true);
+    } catch (err) {
+      console.error("remove_recovery failed:", err);
+      els.settingsError.textContent = deps.t("recovery.errRemove", {
+        message: typeof err === "string" ? err : String(err),
+      });
+    }
+  }
+
+  /** Open the recovery dialog from the settings section. */
+  function openRecovery() {
+    return deps.openRecovery?.();
+  }
+
   /** Show the folder the diary is stored in. */
   async function renderDiaryPath() {
     try {
@@ -179,6 +222,7 @@ export function createSettingsDialog(deps) {
       const params = await deps.invoke("get_vault_kdf");
       renderVaultKdf(params);
       fillSettingsKdf(params);
+      await refreshRecoveryStatus();
     } catch (err) {
       console.error("settings load failed:", err);
       els.settingsError.textContent = deps.t("settings.errSave", {
@@ -321,6 +365,9 @@ export function createSettingsDialog(deps) {
     closeSettings,
     calibrateKdf,
     saveSettings,
+    refreshRecoveryStatus,
+    removeRecovery,
+    openRecovery,
     openImport: () => handOver(deps.openImport),
     openStats: () => handOver(deps.openStats),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),

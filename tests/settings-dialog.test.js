@@ -30,6 +30,9 @@ const SETTINGS_IDS = [
   "settingsKdfMemory",
   "settingsKdfIterations",
   "settingsKdfParallelism",
+  "recoveryStatus",
+  "recoveryGenerateBtn",
+  "recoveryRemoveBtn",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -54,6 +57,8 @@ function harness(overrides = {}) {
     set_autosave_delay: null,
     change_passphrase: null,
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
+    get_recovery_status: { enabled: false },
+    remove_recovery: null,
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -67,6 +72,7 @@ function harness(overrides = {}) {
     openImport: spy(),
     openStats: spy(),
     changeDiaryDir: spy(),
+    openRecovery: spy(),
     ...overrides.deps,
   };
 
@@ -569,6 +575,64 @@ test("saveSettings applies a parameter-only change with the current passphrase",
   });
 });
 
+test("openSettings reports an enabled recovery phrase and offers replacement", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.openSettings();
+
+      assert.equal(
+        els.recoveryStatus.textContent,
+        "recovery.statusEnabled",
+      );
+      assert.equal(
+        els.recoveryGenerateBtn.textContent,
+        "recovery.regenerate",
+      );
+      assert.equal(els.recoveryRemoveBtn.hidden, false);
+    },
+    {
+      invokeTable: {
+        get_recovery_status: { enabled: true },
+      },
+    },
+  );
+});
+
+test("removeRecovery asks for confirmation, then refreshes the status", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    await settings.openSettings();
+
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await settings.removeRecovery();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.equal(invoke.commands().includes("remove_recovery"), true);
+    assert.equal(els.recoveryStatus.textContent, "recovery.statusDisabled");
+    assert.equal(els.recoveryRemoveBtn.hidden, true);
+    assert.deepEqual(deps.setStatus.args()[0], ["recovery.removed", true]);
+  });
+});
+
+test("removeRecovery does nothing when the confirmation is declined", async () => {
+  await withSettings(async ({ settings, invoke }) => {
+    await settings.openSettings();
+
+    const original = globalThis.confirm;
+    globalThis.confirm = () => false;
+    try {
+      await settings.removeRecovery();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.equal(invoke.commands().includes("remove_recovery"), false);
+  });
+});
+
 test("saveSettings requires the current passphrase for a parameter-only change", async () => {
   await withSettings(async ({ settings, els, invoke }) => {
     await settings.openSettings();
@@ -584,7 +648,10 @@ test("saveSettings requires the current passphrase for a parameter-only change",
       .commands()
       .filter(
         (c) =>
-          c !== "diary_path" && c !== "get_settings" && c !== "get_vault_kdf",
+          c !== "diary_path" &&
+          c !== "get_settings" &&
+          c !== "get_vault_kdf" &&
+          c !== "get_recovery_status",
       );
     assert.deepEqual(writes, []);
   });

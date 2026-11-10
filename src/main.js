@@ -25,6 +25,7 @@ import { createCalendar } from "./calendar.js";
 import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
+import { createRecoveryDialog } from "./recovery-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
 import { createAttachmentGallery } from "./attachments.js";
 import { createNativeFileDrop } from "./native-drop.js";
@@ -163,6 +164,8 @@ let importDialog;
 let statsDialog;
 /** @type {ReturnType<typeof createSettingsDialog>} */
 let settingsDialog;
+/** @type {ReturnType<typeof createRecoveryDialog>} */
+let recoveryDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
 /** @type {ReturnType<typeof createAttachmentGallery>} */
@@ -1609,10 +1612,20 @@ function createControllers() {
     setAutoLockMinutes,
     setAutosaveDelay,
     // The vault-wide actions live in the settings dialog now. They are passed
-    // as thunks because `importDialog` and `lockScreen` are built below.
+    // as thunks because `importDialog`, `recoveryDialog` and `lockScreen` are
+    // built below.
     openImport: () => importDialog.startImport(),
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
+    openRecovery: () => recoveryDialog.open(),
+  });
+
+  recoveryDialog = createRecoveryDialog({
+    els,
+    invoke,
+    t,
+    setStatus,
+    onEnabled: () => settingsDialog.refreshRecoveryStatus(),
   });
 
   attachmentGallery = createAttachmentGallery({
@@ -1649,6 +1662,7 @@ function createControllers() {
     closeCalendar: () => calendar.closeCalendar(),
     closeImport: () => importDialog.closeImport(),
     closeSettings: () => settingsDialog.closeSettings(),
+    closeRecovery: (options) => recoveryDialog.close(options),
     renderDateLabel,
     lockAndFlush,
     setScreenshotProtection,
@@ -1734,6 +1748,9 @@ function wireEvents() {
     resetKdfFields: lockScreen.resetKdfFields,
     updateKdfEstimate: lockScreen.updateKdfEstimate,
     refreshSetupVaultState: lockScreen.refreshSetupVaultState,
+    showRecoveryForm: lockScreen.showRecoveryForm,
+    hideRecoveryForm: lockScreen.hideRecoveryForm,
+    handleRecoverySubmit: lockScreen.handleRecoverySubmit,
     lockNow: lockScreen.lockNow,
     // Editor
     scheduleSave,
@@ -1788,6 +1805,13 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
+    // Recovery phrase: create/show-once dialog and removal.
+    openRecovery: settingsDialog.openRecovery,
+    removeRecovery: settingsDialog.removeRecovery,
+    closeRecovery: recoveryDialog.close,
+    continueRecovery: recoveryDialog.continueToConfirm,
+    confirmRecovery: recoveryDialog.confirm,
+    isRecoveryOpen: recoveryDialog.isOpen,
     // The vault-wide actions hosted by the settings dialog.
     openImportFromSettings: settingsDialog.openImport,
     openStatsFromSettings: settingsDialog.openStats,

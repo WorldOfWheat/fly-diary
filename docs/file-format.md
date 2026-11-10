@@ -99,6 +99,26 @@ Vault 檔（`vault.xml`）：
 
 `wrapped-key` 解密後就是 diary key。檔案內沒有任何明文密碼或未包裝的金鑰。
 
+### 回復短語檔（`recovery.xml`）
+
+啟用回復短語後，日記資料夾會多一個 sidecar：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<recovery version="1">
+  <iv>BASE64(12 bytes)</iv>
+  <wrapped-key>BASE64(AES-256-GCM ciphertext + tag)</wrapped-key>
+</recovery>
+```
+
+- `wrapped-key` 是用 recovery key 包裝的 diary key；recovery key 由 12 個 BIP39 英文單字解碼出的 128-bit 熵，經 domain-separated SHA-256 展成 32 bytes。
+- AAD 是 `"fly-diary/recovery" || 0x00 || version`，把 recovery 密文移作其他用途會解密失敗。把 blob 搬到別的日記本時，解出的金鑰會再經 `diary_key_matches` 驗證，不符合就拒絕並保持 vault 不變。
+- **刻意放在 `vault.xml` 之外**：舊版 App 改密碼或 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的欄位會被丟掉。獨立檔案不會被舊版覆寫；而 diary key 在改密碼時不變，所以短語持續有效。
+- 寫入同樣走 `write_private`（`0600`、先寫暫存檔再 rename），失敗不會留下半截檔案。
+- 重新產生短語會覆寫此檔並換新的 `id`；停用短語會刪除此檔。兩者都不會重新加密日記。
+- 用短語復原時只改寫 `vault.xml`（新 salt、新 master key 包裝同一把 diary key），此檔保持不變，所以短語仍然有效。
+- 備份必須包含這個檔案；只複製 `vault.xml` 與日記檔會讓短語失效。
+
 索引檔（`index.xml`）：
 
 ```xml
@@ -266,7 +286,8 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 - Windows：`%APPDATA%\com.flydiary.app\diary\`
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
-按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。整個資料夾可直接備份，但**沒有密碼就無法還原內容**。
+按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。整個資料夾可直接備份（含 `recovery.xml`，如果有），
+但**沒有密碼或回復短語就無法還原內容**。
 
 ### 切換工作區
 

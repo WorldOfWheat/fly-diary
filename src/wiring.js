@@ -203,6 +203,11 @@ export function initEventWiring(deps) {
   on(els.kdfIterations, "input", deps.updateKdfEstimate);
   on(els.kdfParallelism, "input", deps.updateKdfEstimate);
 
+  // Recovery phrase form, which replaces the passphrase form on the same card.
+  if (els.recoveryOpen) on(els.recoveryOpen, "click", deps.showRecoveryForm);
+  if (els.recoveryBack) on(els.recoveryBack, "click", deps.hideRecoveryForm);
+  if (els.recoveryForm) on(els.recoveryForm, "submit", deps.handleRecoverySubmit);
+
   // Detect an existing vault as soon as the user edits the path, so a
   // returning user is switched to the unlock form instead of being asked to
   // create one.
@@ -445,6 +450,45 @@ export function initEventWiring(deps) {
     if (e.target === els.settingsOverlay) deps.closeSettings();
   });
 
+  // Recovery phrase settings + one-time display dialog.
+  if (els.recoveryGenerateBtn) {
+    on(els.recoveryGenerateBtn, "click", deps.openRecovery);
+  }
+  if (els.recoveryRemoveBtn) {
+    on(els.recoveryRemoveBtn, "click", deps.removeRecovery);
+  }
+  if (els.recoveryOverlay) {
+    on(els.recoveryClose, "click", deps.closeRecovery);
+    on(els.recoveryCancel, "click", deps.closeRecovery);
+    on(els.recoveryContinueBtn, "click", deps.continueRecovery);
+    on(els.recoveryOverlay, "mousedown", (e) => {
+      if (e.target === els.recoveryOverlay) deps.closeRecovery();
+    });
+
+    // The phrase is for writing down, not for the clipboard. `user-select:
+    // none` in the stylesheet stops normal selection; these handlers close the
+    // remaining routes (keyboard copy, context menu, drag).
+    if (els.recoveryWords) {
+      for (const type of ["copy", "cut", "contextmenu", "dragstart", "selectstart"]) {
+        on(els.recoveryWords, type, (event) => event.preventDefault());
+      }
+      on(els.recoveryWords, "keydown", (event) => {
+        if ((event.ctrlKey || event.metaKey) && event.key?.toLowerCase() === "c") {
+          event.preventDefault();
+        }
+      });
+    }
+  }
+
+  if (els.recoveryConfirmOverlay) {
+    on(els.recoveryConfirmClose, "click", deps.closeRecovery);
+    on(els.recoveryConfirmCancel, "click", deps.closeRecovery);
+    on(els.recoveryConfirmSubmit, "click", deps.confirmRecovery);
+    on(els.recoveryConfirmOverlay, "mousedown", (e) => {
+      if (e.target === els.recoveryConfirmOverlay) deps.closeRecovery();
+    });
+  }
+
   // The vault-wide actions hosted by the settings dialog. Each one closes the
   // dialog before handing over, so only one overlay is ever on screen.
   on(els.settingsImportBtn, "click", deps.openImportFromSettings);
@@ -528,6 +572,12 @@ export function initEventWiring(deps) {
     if (e.key === "Escape" && deps.isAttachmentViewerOpen?.()) {
       e.preventDefault();
       deps.closeAttachmentViewer();
+      return;
+    }
+
+    if (e.key === "Escape" && deps.isRecoveryOpen?.()) {
+      e.preventDefault();
+      deps.closeRecovery();
       return;
     }
 
