@@ -67,11 +67,13 @@
                     data-i18n="common.cancel">取消</button>
             </div>
 
+            <label class="sr-only" for="passphrase" data-i18n="lock.passphraseLabel">密碼</label>
             <input id="passphrase" class="lock-input" type="password" data-i18n-placeholder="lock.passphrase"
-                placeholder="密碼" autocomplete="current-password" />
+                placeholder="密碼" autocomplete="current-password" aria-describedby="lock-error" />
+            <label class="sr-only" for="passphrase-confirm" data-i18n="lock.passphraseConfirmLabel">再次輸入密碼</label>
             <input id="passphrase-confirm" class="lock-input" type="password"
                 data-i18n-placeholder="lock.passphraseConfirm" placeholder="再次輸入密碼" autocomplete="new-password"
-                hidden />
+                aria-describedby="lock-error" hidden />
 
             <!-- First run only: Argon2id cost parameters. -->
             <details id="advanced-field" class="lock-advanced" hidden>
@@ -92,7 +94,7 @@
                 <button id="kdf-reset" class="btn-browse" type="button" data-i18n="lock.kdfReset">恢復預設值</button>
             </details>
 
-            <p id="lock-error" class="lock-error"></p>
+            <p id="lock-error" class="lock-error" role="alert"></p>
 
             <button id="lock-submit" class="btn-primary lock-submit" type="submit"
                 data-i18n="lock.submitUnlock">解鎖</button>
@@ -113,17 +115,18 @@
                  re-filter rather than a second list to keep in sync. The broken
                  tab is different: it is hidden until a file fails to decrypt,
                  and it renders its own (non-virtualised) list. -->
-            <div class="view-switch" role="tablist" data-i18n-aria-label="sidebar.viewFavouritesTitle" aria-label="收藏">
-                <button id="view-all" class="view-tab is-active" type="button" role="tab" aria-selected="true"
+            <div class="view-switch" role="group" data-i18n-aria-label="sidebar.viewLabel" aria-label="日記檢視">
+                <button id="view-all" class="view-tab is-active" type="button" aria-pressed="true"
                     data-i18n="sidebar.viewAll" data-i18n-title="sidebar.viewAllTitle" title="顯示所有日記">全部</button>
-                <button id="view-favourites" class="view-tab" type="button" role="tab" aria-selected="false"
+                <button id="view-favourites" class="view-tab" type="button" aria-pressed="false"
                     data-i18n="sidebar.viewFavourites" data-i18n-title="sidebar.viewFavouritesTitle"
                     title="只顯示收藏的日記">收藏</button>
-                <button id="view-broken" class="view-tab view-tab-broken" type="button" role="tab" aria-selected="false"
+                <button id="view-broken" class="view-tab view-tab-broken" type="button" aria-pressed="false"
                     data-i18n="sidebar.viewBroken" data-i18n-title="sidebar.viewBrokenTitle" title="無法解密的日記檔"
                     hidden>損壞<span id="broken-count" class="view-badge"></span></button>
             </div>
             <div class="search-wrap">
+                <label class="sr-only" for="search" data-i18n="sidebar.searchLabel">搜尋日期或標題</label>
                 <input id="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期或標題…"
                     autocomplete="off" />
             </div>
@@ -220,11 +223,13 @@
             </div>
 
             <div class="title-wrap">
+                <label class="sr-only" for="title" data-i18n="editor.titleLabel">日記標題</label>
                 <input id="title" class="title-input" type="text" data-i18n-placeholder="editor.titlePlaceholder"
                     placeholder="標題" maxlength="200" />
             </div>
 
             <div class="editor-body">
+                <label class="sr-only" for="content" data-i18n="editor.contentLabel">日記內容</label>
                 <textarea id="content" data-i18n-placeholder="editor.contentPlaceholder" placeholder="今天過得如何？"
                     spellcheck="false"></textarea>
             </div>
@@ -408,7 +413,7 @@
             </div>
 
             <footer class="modal-foot">
-                <span id="import-error" class="import-error"></span>
+                <span id="import-error" class="import-error" role="alert"></span>
                 <button id="import-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
                 <button id="import-confirm" class="btn-primary" type="button" data-i18n="sidebar.import">匯入</button>
             </footer>
@@ -530,7 +535,7 @@
             </div>
 
             <footer class="modal-foot">
-                <span id="settings-error" class="import-error"></span>
+                <span id="settings-error" class="import-error" role="alert"></span>
                 <button id="settings-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
                 <button id="settings-save" class="btn-primary" type="button" data-i18n="settings.save">儲存</button>
             </footer>

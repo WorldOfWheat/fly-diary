@@ -198,7 +198,7 @@ function updateWordCount() {
 /**
  * Height of one row in CSS pixels.
  *
- * The stylesheet is the source of truth: `.entry-item` is `height: var(--row-h)`
+ * The stylesheet is the source of truth: `.entry-row` is `height: var(--row-h)`
  * and the root font size is fluid, so the row height changes with the window.
  * We read the resolved value once at startup and again whenever the root size
  * changes (see `watchRowHeight`), instead of hard-coding a number that would
@@ -563,12 +563,19 @@ function formatBytes(bytes) {
 /** Build the DOM node for one entry row. */
 function createRow(entry, index) {
   const li = document.createElement("li");
-  li.className =
+  li.className = "entry-row";
+  li.style.top = `${index * ROW_HEIGHT}px`;
+
+  // The row itself is the interactive element: a real button gives keyboard
+  // users Enter/Space and screen readers an unambiguous "button" role.
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className =
     "entry-item" +
     (entry.favourite ? " favourite" : "") +
     (entry.date === currentDate ? " active" : "");
-  li.dataset.date = entry.date;
-  li.style.top = `${index * ROW_HEIGHT}px`;
+  button.dataset.date = entry.date;
+  if (entry.date === currentDate) button.setAttribute("aria-current", "date");
 
   const dateRow = document.createElement("div");
   dateRow.className = "entry-date";
@@ -583,8 +590,9 @@ function createRow(entry, index) {
   preview.className = "entry-preview" + (entry.title ? "" : " empty");
   preview.textContent = entry.title || t("common.untitled");
 
-  li.append(dateRow, preview);
-  li.addEventListener("click", () => selectDate(entry.date));
+  button.append(dateRow, preview);
+  button.addEventListener("click", () => selectDate(entry.date));
+  li.appendChild(button);
   return li;
 }
 
@@ -637,10 +645,13 @@ function renderBrokenList() {
   const frag = document.createDocumentFragment();
   for (const broken of rows) {
     const li = document.createElement("li");
-    li.className = "entry-item broken-item";
-    li.dataset.date = broken.date;
-    li.style.position = "static";
-    li.style.height = "auto";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "entry-item broken-item";
+    button.dataset.date = broken.date;
+    if (broken.date === currentDate) {
+      button.setAttribute("aria-current", "date");
+    }
 
     const dateRow = document.createElement("div");
     dateRow.className = "entry-date";
@@ -657,8 +668,9 @@ function renderBrokenList() {
       broken.size
     )}`;
 
-    li.append(dateRow, preview);
-    li.addEventListener("click", () => selectDate(broken.date));
+    button.append(dateRow, preview);
+    button.addEventListener("click", () => selectDate(broken.date));
+    li.appendChild(button);
     frag.appendChild(li);
   }
   els.list.replaceChildren(frag);
@@ -715,8 +727,11 @@ function resetList() {
 
 /** Update the active highlight without rebuilding the list. */
 function highlightActive() {
-  for (const li of els.list.querySelectorAll(".entry-item")) {
-    li.classList.toggle("active", li.dataset.date === currentDate);
+  for (const item of els.list.querySelectorAll(".entry-item")) {
+    const active = item.dataset.date === currentDate;
+    item.classList.toggle("active", active);
+    if (active) item.setAttribute("aria-current", "date");
+    else item.removeAttribute("aria-current");
   }
 }
 
@@ -884,7 +899,7 @@ function renderFavouriteButton() {
 /**
  * Paint the active state on the three sidebar tabs.
  *
- * `aria-selected` is the source of truth for assistive tech; the `is-active`
+ * `aria-pressed` is the source of truth for assistive tech; the `is-active`
  * class is what the stylesheet keys off. Both have to move together, which is
  * why this lives in one place instead of being repeated at each call site.
  */
@@ -897,7 +912,7 @@ function syncViewTabs(view) {
     if (!btn) continue;
     const active = name === view;
     btn.classList.toggle("is-active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
   }
 }
 

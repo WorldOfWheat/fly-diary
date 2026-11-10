@@ -1,3 +1,5 @@
+import { createFocusTrap } from "./focus-trap.js";
+
 // ---------------------------------------------------------------------------
 // Settings dialog
 // ---------------------------------------------------------------------------
@@ -39,6 +41,7 @@ const DEFAULT_AUTOSAVE_DELAY_CHOICES = [200, 400, 800, 1500, 3000];
  */
 export function createSettingsDialog(deps) {
   const { els } = deps;
+  const focusTrap = createFocusTrap(els.settingsOverlay);
 
   /**
    * The Argon2id parameters currently recorded in the vault, as last read from
@@ -184,12 +187,14 @@ export function createSettingsDialog(deps) {
     }
 
     els.settingsOverlay.hidden = false;
+    focusTrap.activate();
     els.settingsCurrentPass.focus();
   }
 
   /** Close the settings dialog without saving. */
   function closeSettings() {
     els.settingsOverlay.hidden = true;
+    focusTrap.deactivate();
     els.settingsError.textContent = "";
     // Never leave a passphrase sitting in a hidden input.
     els.settingsCurrentPass.value = "";

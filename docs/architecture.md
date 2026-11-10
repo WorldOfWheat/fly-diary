@@ -20,6 +20,7 @@ fly-diary/
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準（createLockScreen）
 │   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
+│   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
@@ -40,6 +41,8 @@ fly-diary/
 │   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   ├── docs-links.test.js      # README 與 docs/ 的相對連結、文件索引可達性
+│   ├── a11y.test.js            # 表單標籤、live region、對比、target size
+│   ├── focus-trap.test.js      # modal Tab 循環與焦點還原
 │   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
@@ -63,7 +66,7 @@ fly-diary/
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
 │       └── storage.rs      # vault 與加密日記的檔案儲存層
-├── docs/                   # 文件（security / file-format / ui / architecture / development / reference）
+├── docs/                   # 文件（security / file-format / ui / accessibility / architecture / development / reference）
 ├── .github/
 │   ├── dependabot.yml      # npm / Cargo / Actions 每週更新
 │   └── workflows/

@@ -17,6 +17,7 @@
 //   formatDate     — (iso: string) => string
 //   weekdayName    — (dayIndex: number) => string
 
+import { createFocusTrap } from "./focus-trap.js";
 import {
   barFractions,
   computeStreaks,
@@ -32,6 +33,7 @@ import {
  */
 export function createStatsDialog(deps) {
   const { els } = deps;
+  const focusTrap = createFocusTrap(els.statsOverlay);
 
   /** Whether the statistics dialog is open. */
   function isStatsOpen() {
@@ -54,6 +56,10 @@ export function createStatsDialog(deps) {
       const bar = document.createElement("div");
       bar.className = "stats-bar";
       bar.title = item.title;
+      // The bar is a graphical object; without a text alternative a screen
+      // reader only gets the month label and misses the value.
+      bar.setAttribute("role", "img");
+      bar.setAttribute("aria-label", `${item.label}: ${item.title}`);
 
       const fill = document.createElement("div");
       fill.className = "stats-bar-fill" + (item.count === 0 ? " empty" : "");
@@ -123,12 +129,14 @@ export function createStatsDialog(deps) {
   function openStats() {
     renderStats();
     els.statsOverlay.hidden = false;
+    focusTrap.activate();
     els.statsDone.focus();
   }
 
   /** Close the statistics dialog. */
   function closeStats() {
     els.statsOverlay.hidden = true;
+    focusTrap.deactivate();
   }
 
   return { renderBarChart, renderStats, openStats, closeStats, isStatsOpen };

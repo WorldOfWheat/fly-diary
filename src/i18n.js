@@ -62,8 +62,10 @@ const zhHant = {
   "lock.subtitle.switching":
     "選擇要開啟的日記資料夾，已有加密日記的資料夾會直接要求輸入密碼",
   "lock.passphrase": "密碼",
+  "lock.passphraseLabel": "密碼",
   "lock.passphraseSet": "設定密碼",
   "lock.passphraseConfirm": "再次輸入密碼",
+  "lock.passphraseConfirmLabel": "再次輸入密碼",
   "lock.advanced": "進階選項（金鑰派生參數）",
   "lock.advancedHint":
     "密碼會經由 Argon2id 派生主金鑰，再由主金鑰包裝日記金鑰。提高參數會讓暴力破解更困難，但解鎖也會變慢。",
@@ -87,6 +89,7 @@ const zhHant = {
   "sidebar.newToday": "今天",
   "sidebar.newTodayTitle": "前往今天 (Ctrl/Cmd+T)",
   "sidebar.search": "搜尋日期或標題…",
+  "sidebar.searchLabel": "搜尋日期或標題",
   "sidebar.pathTitle": "日記儲存位置",
   "sidebar.import": "匯入",
   "sidebar.importTitle": "從資料夾匯入日記",
@@ -139,6 +142,7 @@ const zhHant = {
   "settings.errSave": "儲存失敗：{message}",
   "sidebar.empty": "還沒有任何日記",
   "sidebar.emptyFiltered": "沒有符合的日記",
+  "sidebar.viewLabel": "日記檢視",
   "sidebar.viewAll": "全部",
   "sidebar.viewAllTitle": "顯示所有日記",
   "sidebar.viewFavourites": "收藏",
@@ -217,7 +221,9 @@ const zhHant = {
   "editor.favouriteOn": "已收藏",
   "editor.favouriteTitle": "加入收藏 (Ctrl/Cmd+D)",
   "editor.unfavouriteTitle": "取消收藏 (Ctrl/Cmd+D)",
+  "editor.titleLabel": "日記標題",
   "editor.titlePlaceholder": "標題",
+  "editor.contentLabel": "日記內容",
   "editor.contentPlaceholder": "今天過得如何？",
   "editor.wordCount": "{chars} 字 · {lines} 行",
 
@@ -360,8 +366,10 @@ const en = {
   "lock.subtitle.switching":
     "Choose the diary folder to open. A folder that already holds an encrypted diary will ask for its passphrase.",
   "lock.passphrase": "Passphrase",
+  "lock.passphraseLabel": "Passphrase",
   "lock.passphraseSet": "Set a passphrase",
   "lock.passphraseConfirm": "Repeat passphrase",
+  "lock.passphraseConfirmLabel": "Repeat passphrase",
   "lock.advanced": "Advanced (key derivation parameters)",
   "lock.advancedHint":
     "The passphrase is stretched into a master key with Argon2id, and that master key wraps the diary key. Higher values make brute force harder but unlocking slower.",
@@ -385,6 +393,7 @@ const en = {
   "sidebar.newToday": "Today",
   "sidebar.newTodayTitle": "Go to today (Ctrl/Cmd+T)",
   "sidebar.search": "Search date or title…",
+  "sidebar.searchLabel": "Search date or title",
   "sidebar.pathTitle": "Diary location",
   "sidebar.import": "Import",
   "sidebar.importTitle": "Import diaries from a folder",
@@ -440,6 +449,7 @@ const en = {
   "settings.errSave": "Could not save: {message}",
   "sidebar.empty": "No entries yet",
   "sidebar.emptyFiltered": "No matching entries",
+  "sidebar.viewLabel": "Diary view",
   "sidebar.viewAll": "All",
   "sidebar.viewAllTitle": "Show every entry",
   "sidebar.viewFavourites": "Favourites",
@@ -522,7 +532,9 @@ const en = {
   "editor.favouriteOn": "Favourited",
   "editor.favouriteTitle": "Add to favourites (Ctrl/Cmd+D)",
   "editor.unfavouriteTitle": "Remove from favourites (Ctrl/Cmd+D)",
+  "editor.titleLabel": "Diary title",
   "editor.titlePlaceholder": "Title",
+  "editor.contentLabel": "Diary content",
   "editor.contentPlaceholder": "How was your day?",
   "editor.wordCount": "{chars} words · {lines} lines",
 

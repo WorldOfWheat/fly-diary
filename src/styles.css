@@ -35,8 +35,12 @@
   --panel: #ffffff;
   --sidebar-bg: #f0efec;
   --border: #e2e0db;
+  /* A stronger outline for form controls and icon-only buttons: the decorative
+     `--border` is below the 3:1 non-text contrast requirement on the light
+     surfaces. */
+  --border-strong: #8a8780;
   --text: #2b2a27;
-  --text-muted: #8a8780;
+  --text-muted: #6f6c66;
   --accent: #4a7c59;
   --accent-hover: #3d6849;
   --danger: #b4544a;
@@ -96,6 +100,7 @@
   --panel: #262523;
   --sidebar-bg: #201f1d;
   --border: #3a3835;
+  --border-strong: #76726b;
   --text: #e9e7e2;
   --text-muted: #9c988f;
   --accent: #74b287;
@@ -230,6 +235,21 @@ body {
 
 /* ---------- Shared primitives ---------- */
 
+/* Label text that is available to assistive tech but does not change the
+   visual design. Do not use `display: none`: that would remove the label from
+   the accessibility tree as well. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Every text input in the app shares this look. */
 .lock-input,
 #search,
@@ -255,9 +275,26 @@ button {
 
 button:focus-visible,
 input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+a:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* `#content` sets `outline: none` in the shared input reset; restore a visible
+   keyboard focus ring inside the text area. */
+#content:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Placeholders are text too: they need the same 4.5:1 contrast as labels.
+   Keep them solid rather than the browser's faded default. */
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
 }
 
 /* ---------- App shell ---------- */
@@ -352,7 +389,7 @@ summary:focus-visible {
   padding: 0;
   color: var(--text-muted);
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
@@ -402,13 +439,14 @@ summary:focus-visible {
 /* Language switch: a small pill showing the *other* language. */
 .lang-toggle {
   min-width: 2.25rem;
+  min-height: 1.75rem;
   padding: 0.25rem 0.5rem;
   font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--text-muted);
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
@@ -438,7 +476,7 @@ summary:focus-visible {
   padding: 0.5625rem 0.75rem;
   font-size: 0.875rem;
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
 }
 
@@ -512,11 +550,12 @@ summary:focus-visible {
 
 .btn-browse {
   flex: none;
+  min-height: 1.75rem;
   padding: 0 0.75rem;
   font-size: 0.75rem;
   color: var(--text);
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   white-space: nowrap;
 }
@@ -627,6 +666,7 @@ summary:focus-visible {
 
 .view-tab {
   flex: 1;
+  min-height: 1.75rem;
   padding: 0.3125rem 0.5rem;
   font-size: 0.75rem;
   font-weight: 500;
@@ -681,7 +721,7 @@ summary:focus-visible {
   padding: 0.4375rem 0.625rem;
   font-size: 0.8125rem;
   background: var(--panel);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
 }
 
@@ -717,17 +757,36 @@ summary:focus-visible {
 
 /* Rows are absolutely positioned by `renderList()` at `index * --row-h`. The
    painted box is one gap shorter than that pitch, which is what separates the
-   rows visually without breaking the scroll math. */
-.entry-item {
+   rows visually without breaking the scroll math. The `<li>` wrapper carries
+   the position; the inner button is the keyboard-accessible target. */
+.entry-row {
   position: absolute;
   left: 0.5rem;
   right: 0.5rem;
   height: calc(var(--row-h) - var(--row-gap));
+}
+
+.entry-item {
+  display: block;
+  width: 100%;
+  height: 100%;
   padding: 0.4375rem 0.625rem;
   overflow: hidden;
   border-radius: var(--radius);
+  text-align: left;
   cursor: pointer;
   transition: background 0.12s ease;
+}
+
+.entry-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Broken rows flow normally and size to their content. */
+.broken-item {
+  position: static;
+  height: auto;
 }
 
 .entry-item:hover {
@@ -785,7 +844,13 @@ summary:focus-visible {
 
 .entry-item .entry-preview.empty {
   font-style: italic;
-  opacity: 0.6;
+}
+
+/* The dark favourite background is too close to the muted text token; use the
+   normal text colour on highlighted rows so secondary text stays above 4.5:1. */
+.entry-item.favourite .entry-weekday,
+.entry-item.favourite .entry-preview {
+  color: var(--text);
 }
 
 /* The empty-state row lives inside the absolutely positioned `entry-list`, so
@@ -800,10 +865,11 @@ summary:focus-visible {
 
 .btn-lock {
   flex: none;
+  min-height: 1.75rem;
   padding: 0.1875rem 0.5rem;
   font-size: 0.6875rem;
   color: var(--text-muted);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
 }
 
 .btn-lock:hover {
@@ -884,12 +950,13 @@ summary:focus-visible {
   display: none;
   flex: none;
   align-items: center;
+  min-height: 1.75rem;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem 0.25rem 0.25rem;
   font-size: 0.75rem;
   color: var(--text-muted);
   background: transparent;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
   cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease;
@@ -1244,10 +1311,10 @@ body.calendar-open {
   outline-offset: -2px;
 }
 
-/* Days outside the displayed month stay clickable but recede. */
+/* Days outside the displayed month stay clickable but recede. The muted token
+   already meets 4.5:1, so do not dim the text further. */
 .cal-day.outside {
   color: var(--text-muted);
-  opacity: 0.55;
 }
 
 .cal-day.today {
@@ -1344,6 +1411,7 @@ body.calendar-open {
    is open read-only, so it is styled as the one obvious action rather than as
    another quiet icon button. */
 .btn-edit {
+  min-height: 1.75rem;
   padding: 0.3125rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 600;
@@ -1370,6 +1438,7 @@ body.calendar-open {
 .btn-favourite {
   display: inline-flex;
   align-items: center;
+  min-height: 1.75rem;
   gap: 0.3125rem;
   padding: 0.3125rem 0.625rem;
   font-size: 0.75rem;
@@ -1495,7 +1564,7 @@ body.calendar-open {
 .title-input::placeholder {
   font-weight: 400;
   color: var(--text-muted);
-  opacity: 0.5;
+  opacity: 1;
 }
 
 .title-input:focus {
@@ -1523,7 +1592,7 @@ body.calendar-open {
 
 #content::placeholder {
   color: var(--text-muted);
-  opacity: 0.6;
+  opacity: 1;
 }
 
 /* ---------- Image attachments ---------- */
@@ -1681,8 +1750,8 @@ body.calendar-open {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.375rem;
-  height: 1.375rem;
+  width: 1.75rem;
+  height: 1.75rem;
   padding: 0;
   font-size: 0.875rem;
   line-height: 1;
@@ -1973,8 +2042,8 @@ body.calendar-open {
 
 .modal-close {
   flex: none;
-  width: 1.625rem;
-  height: 1.625rem;
+  width: 1.75rem;
+  height: 1.75rem;
   font-size: 1.125rem;
   line-height: 1;
   color: var(--text-muted);
@@ -2911,6 +2980,11 @@ body.calendar-open {
   .font-value {
     height: 1.75rem;
     padding: 0 0.5rem;
+  }
+
+  .attachment-control {
+    min-width: 2.25rem;
+    min-height: 2.25rem;
   }
 
   .btn-lock,

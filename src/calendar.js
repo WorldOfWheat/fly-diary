@@ -1,3 +1,5 @@
+import { createFocusTrap } from "./focus-trap.js";
+
 // ---------------------------------------------------------------------------
 // Calendar overlay
 // ---------------------------------------------------------------------------
@@ -47,6 +49,7 @@ import {
  */
 export function createCalendar(deps) {
   const { els } = deps;
+  const focusTrap = createFocusTrap(els.calendar);
 
   /** First day of the month currently displayed, as `YYYY-MM-01`. */
   let calendarMonth = "";
@@ -164,6 +167,7 @@ export function createCalendar(deps) {
     );
     renderCalendar();
     els.calendar.hidden = false;
+    focusTrap.activate();
     els.dateLabel.setAttribute("aria-expanded", "true");
     setBackgroundScrollLocked(true);
 
@@ -178,6 +182,7 @@ export function createCalendar(deps) {
   function closeCalendar({ restoreFocus = false } = {}) {
     if (!isCalendarOpen()) return;
     els.calendar.hidden = true;
+    focusTrap.deactivate({ restore: false });
     els.dateLabel.setAttribute("aria-expanded", "false");
     setBackgroundScrollLocked(false);
     if (restoreFocus) els.dateLabel.focus();
