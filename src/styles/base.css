@@ -127,21 +127,32 @@ button {
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
 }
 
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
-a:focus-visible,
-summary:focus-visible {
+/* Focus rings are keyboard-only. `input-modality.js` records whether the last
+   input was a pointer or the keyboard; WebKitGTK can otherwise match
+   `:focus-visible` after a mouse click. Using `:focus` here (rather than
+   `:focus-visible`) also works in webviews without `:focus-visible` support;
+   the attribute does the filtering. */
+html[data-input-modality="keyboard"] button:focus,
+html[data-input-modality="keyboard"] input:focus,
+html[data-input-modality="keyboard"] textarea:focus,
+html[data-input-modality="keyboard"] select:focus,
+html[data-input-modality="keyboard"] a:focus,
+html[data-input-modality="keyboard"] summary:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
 /* `#content` sets `outline: none` in the shared input reset; restore a visible
    keyboard focus ring inside the text area. */
-#content:focus-visible {
+html[data-input-modality="keyboard"] #content:focus {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
+}
+
+/* Pointer focus must not fall back to the UA ring either. Component focus
+   rules are gated the same way, so this only has to beat the browser default. */
+html[data-input-modality="pointer"] :focus {
+  outline: none;
 }
 
 /* Placeholders are text too: they need the same 4.5:1 contrast as labels.

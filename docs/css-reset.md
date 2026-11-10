@@ -56,6 +56,17 @@ reset 檔位於 [`src/styles/reset.css`](../src/styles/reset.css)，由入口
 - `.sidebar-header h1 { margin: 0 }`：sidebar 標題是 flex row 的一員。
 - 觸控行為、`overscroll-behavior` 與焦點樣式也留在 `base.css`，因為它們是 app 行為，不是瀏覽器預設。
 
+## 焦點外框
+
+`reset.css` 不處理焦點。焦點樣式由 `input-modality.js` 與 `base.css` 合作：
+
+- `input-modality.js` 在 `pointerdown`／`mousedown`／`touchstart` 時把
+  `<html data-input-modality="pointer">`，在 `keydown` 時改成 `"keyboard"`。
+- `base.css` 與各元件只對 `data-input-modality="keyboard"` 顯示 `--accent` 焦點環；
+  pointer 模式用 `:focus { outline: none }` 抑制 WebKitGTK 對 `:focus-visible` 的誤判。
+- 這保留鍵盤 Tab／Enter 的可見焦點（WCAG 2.2 focus visible），但滑鼠點擊不會再到處出現綠框。
+- 文字輸入框在鍵盤模式下仍會把邊框改成 `--accent`；滑鼠點擊時只保留一般邊框與游標。
+
 ## 如何覆寫
 
 - 直接用 class 或更高等級的選擇器即可；reset 的表單規則特異度為 0。

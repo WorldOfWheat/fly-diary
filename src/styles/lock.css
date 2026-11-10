@@ -118,7 +118,7 @@
   border-color: var(--accent);
 }
 
-.icon-toggle:focus-visible {
+html[data-input-modality="keyboard"] .icon-toggle:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -175,7 +175,7 @@
   border-color: var(--accent);
 }
 
-.lang-toggle:focus-visible {
+html[data-input-modality="keyboard"] .lang-toggle:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -197,7 +197,7 @@
   border-radius: var(--radius);
 }
 
-.lock-input:focus {
+html[data-input-modality="keyboard"] .lock-input:focus {
   border-color: var(--accent);
 }
 

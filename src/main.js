@@ -29,6 +29,7 @@ import { createRecoveryDialog } from "./recovery-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
 import { createAttachmentGallery } from "./attachments.js";
 import { createNativeFileDrop } from "./native-drop.js";
+import { initInputModality } from "./input-modality.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -1845,6 +1846,10 @@ function wireEvents() {
 // ---------------------------------------------------------------------------
 
 async function init() {
+  // Focus rings follow the last input method. Do this before any controller
+  // can move focus, so the lock screen's initial focus is not ringed.
+  initInputModality();
+
   // Controllers first: the wiring below hands out their methods, so they have
   // to exist before any listener is attached.
   createControllers();

@@ -223,7 +223,7 @@ body.calendar-open {
   background: var(--hover-strong);
 }
 
-.cal-day:focus-visible {
+html[data-input-modality="keyboard"] .cal-day:focus {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }

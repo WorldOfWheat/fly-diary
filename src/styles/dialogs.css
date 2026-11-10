@@ -363,8 +363,8 @@
   border-radius: var(--radius);
 }
 
-.settings-input:focus,
-.settings-select:focus {
+html[data-input-modality="keyboard"] .settings-input:focus,
+html[data-input-modality="keyboard"] .settings-select:focus {
   outline: none;
   border-color: var(--accent);
 }
@@ -551,7 +551,7 @@
   transition: border-color 0.12s ease;
 }
 
-.word-field-shell:focus-within {
+html[data-input-modality="keyboard"] .word-field-shell:focus-within {
   border-color: var(--accent);
 }
 

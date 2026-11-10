@@ -39,7 +39,7 @@
   background: var(--accent);
 }
 
-.btn-edit:focus-visible {
+html[data-input-modality="keyboard"] .btn-edit:focus {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

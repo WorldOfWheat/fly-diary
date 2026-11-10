@@ -22,6 +22,7 @@ fly-diary/
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準、短語解鎖（createLockScreen）
 │   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
+│   ├── input-modality.js   # 記錄指標／鍵盤輸入，讓焦點環只在鍵盤操作時出現
 │   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
