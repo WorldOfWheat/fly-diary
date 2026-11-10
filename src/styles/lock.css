@@ -26,6 +26,15 @@
   display: none !important;
 }
 
+/* The passphrase form and the recovery form share one card slot. Only one is
+   visible at a time; hidden must win over the flex display below. */
+.lock-stack {
+  display: flex;
+  flex-direction: column;
+  width: 24rem;
+  max-width: 100%;
+}
+
 .lock-card {
   display: flex;
   flex-direction: column;
@@ -37,6 +46,35 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
+}
+
+.lock-card[hidden] {
+  display: none !important;
+}
+
+/* Secondary entry point under the main unlock button. */
+.lock-recovery-open {
+  align-self: center;
+  margin-top: 0.125rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.lock-recovery-open:hover {
+  color: var(--accent);
+}
+
+.lock-recovery-open[hidden] {
+  display: none !important;
+}
+
+/* Recovery phrases are entered as one whitespace-separated string. */
+.lock-recovery-input {
+  min-height: 4.5rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  resize: vertical;
 }
 
 /* Title and the two switches share a row. The switches are pinned to the right

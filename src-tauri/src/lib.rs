@@ -1,6 +1,7 @@
 // `crypto`, `storage` and `attachments` are public so the integration tests in
 // `tests/` can drive the vault lifecycle through the same API the commands use.
 pub mod attachments;
+mod bip39;
 mod clipboard;
 pub mod crypto;
 mod fsutil;
@@ -373,6 +374,27 @@ async fn vault_exists(app: tauri::AppHandle, path: Option<String>) -> Result<boo
     blocking("Vault exists", move || storage::vault_exists(&dir)).await
 }
 
+/// Whether the selected vault has a recovery phrase configured.
+///
+/// The lock screen uses this to hide "Use recovery phrase" for vaults that
+/// never enabled one. Like [`vault_exists`], an explicit path lets the setup
+/// screen inspect a folder before it is saved.
+#[tauri::command]
+async fn recovery_exists(app: tauri::AppHandle, path: Option<String>) -> Result<bool, String> {
+    let dir = match path {
+        Some(p) => {
+            let dir = PathBuf::from(p.trim());
+            settings::validate_diary_dir(&dir)?;
+            dir
+        }
+        None => diary_dir(&app)?,
+    };
+    blocking("Recovery exists", move || {
+        Ok(storage::recovery_exists(&dir))
+    })
+    .await
+}
+
 /// Create a new vault protected by `passphrase` and unlock it immediately.
 ///
 /// `kdf` is optional so the frontend can omit it and get the defaults.
@@ -500,6 +522,119 @@ async fn change_passphrase(
     // The diary key is unchanged, but refresh the session anyway so the
     // in-memory copy is the one the vault now wraps. `rewrap_vault` returns a
     // `Zeroizing` key; copy it into the locked page and wipe the temporary.
+    *session.lock().unwrap() = Session {
+        key: Some(LockedKey::new(&key)),
+    };
+    Ok(())
+}
+
+/// A freshly generated recovery phrase, plus the positions the UI must ask the
+/// user to re-type before it may be written to disk.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoveryPhraseView {
+    words: Vec<String>,
+    indices: Vec<usize>,
+    recovery_id: String,
+}
+
+/// Generate a recovery phrase for the user to write down.
+///
+/// Nothing is persisted here. The phrase is only written to `recovery.xml` by
+/// [`confirm_recovery_phrase`] after the user has re-typed the requested words,
+/// so closing the dialog or crashing before confirmation cannot leave the diary
+/// with a recovery phrase nobody recorded.
+#[tauri::command]
+fn generate_recovery_phrase() -> Result<RecoveryPhraseView, String> {
+    let entropy = bip39::generate_entropy();
+    Ok(RecoveryPhraseView {
+        words: bip39::entropy_to_words(&entropy)?,
+        indices: bip39::confirmation_indices(),
+        recovery_id: crypto::random_bytes_b64(storage::RECOVERY_ID_BYTES),
+    })
+}
+
+/// Persist a recovery phrase after the user has confirmed it.
+///
+/// The session key is the diary key, so the wrapping always targets the vault
+/// that is currently open. `indices` and `answers` are checked against `phrase`
+/// again in the backend: the frontend is not trusted to skip the confirmation
+/// step by mistake.
+#[tauri::command]
+async fn confirm_recovery_phrase(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    phrase: String,
+    recovery_id: String,
+    indices: Vec<usize>,
+    answers: Vec<String>,
+) -> Result<String, String> {
+    let key = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+
+    blocking("Confirm recovery phrase", move || {
+        storage::confirm_recovery_phrase(&dir, &*key, &phrase, &recovery_id, &indices, &answers)
+    })
+    .await
+}
+
+/// Whether a recovery phrase is configured for the current vault.
+#[tauri::command]
+async fn get_recovery_status(app: tauri::AppHandle) -> Result<storage::RecoveryStatus, String> {
+    let dir = diary_dir(&app)?;
+    blocking("Recovery status", move || storage::recovery_status(&dir)).await
+}
+
+/// Remove the recovery phrase. Entries and the passphrase are untouched.
+#[tauri::command]
+async fn remove_recovery(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<(), String> {
+    // Requiring an unlocked session keeps the command unavailable while the app
+    // is locked, like the other vault-wide writes.
+    let _ = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    blocking("Remove recovery phrase", move || {
+        storage::remove_recovery(&dir)
+    })
+    .await
+}
+
+/// Unlock with a recovery phrase and set a new passphrase.
+///
+/// The diary key is unwrapped with the phrase, then re-wrapped under a fresh
+/// Argon2id master key. No entry is re-encrypted, and the recovery phrase stays
+/// valid because it wraps the same diary key.
+#[tauri::command]
+async fn recover_vault(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    phrase: String,
+    new_passphrase: String,
+    kdf: Option<KdfView>,
+) -> Result<(), String> {
+    if new_passphrase.chars().count() < 6 {
+        return Err("New passphrase must be at least 6 characters".to_string());
+    }
+
+    let dir = diary_dir(&app)?;
+    let params = match kdf {
+        Some(view) => crypto::KdfParams {
+            memory_kib: view.memory_kib,
+            iterations: view.iterations,
+            parallelism: view.parallelism,
+        },
+        None => storage::vault_kdf_params(&dir)?.unwrap_or_default(),
+    };
+
+    let key = blocking("Recover vault", move || {
+        let diary_key = storage::recover_diary_key(&dir, &phrase)?;
+        storage::reset_passphrase(&dir, &*diary_key, &new_passphrase, params)?;
+        Ok(diary_key)
+    })
+    .await?;
+
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
@@ -1072,6 +1207,7 @@ pub fn run() {
             pick_diary_dir,
             get_kdf_defaults,
             vault_exists,
+            recovery_exists,
             create_vault,
             unlock,
             lock,
@@ -1079,6 +1215,11 @@ pub fn run() {
             get_vault_kdf,
             calibrate_kdf,
             change_passphrase,
+            generate_recovery_phrase,
+            confirm_recovery_phrase,
+            get_recovery_status,
+            remove_recovery,
+            recover_vault,
             get_entry,
             save_entry,
             delete_entry,

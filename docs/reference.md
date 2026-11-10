@@ -32,10 +32,16 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `set_autosave_delay(ms)`                  | 寫入自動儲存延遲毫秒數（只接受 `200/400/800/1500/3000`）                     |
 | `pick_diary_dir()`                        | 桌面版開啟原生資料夾選擇器；行動版直接回傳 App 私有資料夾                     |
 | `vault_exists()`                          | 是否已建立 vault（判斷首次啟動）                                             |
+| `recovery_exists(path?)`                  | 指定日記資料夾是否設有 `recovery.xml`（解鎖畫面用來決定是否顯示短語入口）   |
 | `get_kdf_defaults()`                      | 回傳 Argon2id 預設值與可調整範圍                                             |
 | `get_vault_kdf()`                         | 回傳目前 vault 的 Argon2id 參數（舊格式回 `null`）                           |
 | `calibrate_kdf()`                         | 實測本機速度，回傳約 1 秒可解鎖的參數                                        |
 | `change_passphrase(current, new, kdf?)`   | 驗證目前密碼後重新包裝 diary key（新密碼留空＝只改參數）                     |
+| `generate_recovery_phrase()`              | 產生 12 個 BIP39 單字、3 個確認位置與短語編號；不寫入任何檔案                |
+| `confirm_recovery_phrase(phrase, recoveryId, indices, answers)` | 驗證 checksum 與指定單字後寫入 `recovery.xml`（需解鎖）       |
+| `get_recovery_status()`                   | 回傳 `{ enabled, recoveryId }`                                               |
+| `remove_recovery()`                       | 刪除 `recovery.xml`（需解鎖）                                                |
+| `recover_vault(phrase, newPassphrase, kdf?)` | 用回復短語解開 diary key，以新密碼重新包裝 `vault.xml` 並解鎖             |
 | `create_vault(passphrase, kdf?)`          | 建立 vault 並立即解鎖，可指定 KDF 參數                                       |
 | `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體                                                   |
 | `lock()`                                  | 清除記憶體中的金鑰                                                           |

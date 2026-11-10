@@ -2,7 +2,7 @@
 
 [← 回到 README](../README.md) · [文件索引](README.md)
 
-Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼」。以下說明金鑰階層、KDF、AAD、記憶體保護、供應鏈防護與已知限制。
+Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼或回復短語」。以下說明金鑰階層、KDF、AAD、回復短語、記憶體保護、供應鏈防護與已知限制。
 
 ## 加密設計
 
@@ -15,6 +15,12 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
                                   ▼
                     wrapped diary key（存於 vault.xml）
                                   │
+回復短語 ──BIP39 解碼──▶ entropy ──SHA-256(domain)──▶ recovery key
+                                  │
+                                  │ AES-256-GCM
+                                  ▼
+              recovery-wrapped diary key（存於 recovery.xml）
+                                  │
                                   │ AES-256-GCM
                                   ▼
                               日記檔案
@@ -22,7 +28,8 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 - **master key**：由密碼經 Argon2id 派生，只用來包裝 diary key，不直接加密日記。
 - **diary key**：隨機 32 bytes，真正用來加密日記。它被 master key 包裝後存進 `vault.xml`。
-- 這層間接讓「改密碼」或「升級 KDF 參數」只需要重新包裝 32 bytes，不必重新加密所有日記。
+- **recovery key**（可選）：12 個 BIP39 英文單字編碼 128-bit 隨機值，經 domain-separated SHA-256 展成 32 bytes，用來包裝同一把 diary key。它存在 `recovery.xml`，不影響 `vault.xml`。
+- 這層間接讓「改密碼」、「升級 KDF 參數」或「重新產生回復短語」都只需要重新包裝 32 bytes，不必重新加密所有日記。
 
 | 項目         | 實作                                                                   |
 | ------------ | ---------------------------------------------------------------------- |
@@ -36,9 +43,10 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 | 圖片附件     | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
 | 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
 | 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
+| 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁 `recovery-id` 與版本 |
 | 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux 排除 dump/fork；鎖定或關閉即抹除、解鎖、unmap |
 
-> ⚠️ **忘記密碼無法救回**：master key 由密碼派生且不落地，沒有後門或回復機制。
+> ⚠️ **忘記密碼無法救回**（除非已啟用回復短語）：master key 由密碼派生且不落地，沒有後門。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
 
 ### KDF 校準
@@ -65,6 +73,28 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 `storage::rewrap_vault` 會先驗證舊密碼（解不開就回「密碼錯誤」），再以**新的隨機 salt** 派生新 master key。
 即使只改參數、密碼不變，salt 也會換新，所以 master key 一定不同。整個過程只改寫 `vault.xml` 一個檔案。
+
+### 回復短語（可選）
+
+回復短語是**第二把獨立的鑰匙**，不是第二組密碼：
+
+- 程式產生 128-bit 隨機值，編碼成 12 個 BIP39 英文單字。使用者不能自訂短語，否則熵會降到可猜測。
+- 128-bit 已經遠超離線暴力破解可行範圍，因此**不需要 Argon2id**；只做 domain-separated SHA-256 展成 AES-256 key。有效強度仍是短語的 128 bits。
+- 它包裝的是同一把 diary key，所以啟用、重新產生或停用短語都**不會重新加密任何日記**；改密碼或改 KDF 參數也不會讓短語失效。
+- 復原流程只做兩件事：用短語解開 diary key，再用**新密碼**與新 salt 重新包裝 `vault.xml`。日記、索引與附件完全不動。
+- 解出 diary key 後，會先用 `index.xml`（或第一篇可解密的日記）實際驗證它屬於這個 vault，才允許覆寫 `vault.xml`。這擋掉「把別的日記本的 `recovery.xml` 複製過來」時用錯誤金鑰蓋掉正確 wrapped key 的情況；驗證失敗時 vault 保持原樣。
+
+短語包裝存在 `recovery.xml`，而不是 `vault.xml`。這是刻意的：舊版 App 在改密碼或改 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的 recovery 欄位會被靜默刪掉。獨立檔案對舊版而言不存在，所以不會被覆寫；而 diary key 在改密碼時不變，短語也就持續有效。
+
+`recovery.xml` 的格式是 `id`、`iv`、`wrapped-key`；AAD 是 `"fly-diary/recovery" || 0x00 || id || 0x00 || version`。`id` 是隨機 16 bytes，會印在短語旁，讓使用者辨識短語屬於哪個日記本；把 recovery blob 換到另一個 vault 或改寫 id 都會讓 GCM 驗證失敗。
+
+**顯示與確認**：
+
+- 短語只在產生時顯示一次，之後無法再次查看。
+- 顯示畫面用 `user-select: none`，並攔截 `copy` / `cut` / `contextmenu` / `dragstart` / `selectstart`，且沒有複製或列印按鈕。這是**UI 層面的抄寫引導，不是安全邊界**：webview 仍可被檢視，真正的要求是使用者把短語寫在紙上。
+- 確認時要求重新輸入三個隨機位置的單字；後端會再驗證一次 BIP39 checksum 與這三個答案，通過後才寫入 `recovery.xml`。取消或中途關閉不會留下任何檔案。
+
+**風險**：短語等於完整的讀取權。取得短語與日記資料夾的人不需要密碼、也沒有速率限制就能解密全部內容。短語必須與日記分開保存；不要截圖、不要放進同一個同步資料夾或雲端相簿。備份日記資料夾時要一併複製 `recovery.xml`，否則短語無法使用；刪除 `recovery.xml` 等於停用短語。
 
 ### 記憶體保護
 
@@ -149,3 +179,10 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - 防止截圖只在 Windows 與 macOS 生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
 - 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。
+- 回復短語是 12 個**英文** BIP39 單字；目前沒有繁中或其他語言的 wordlist，也不接受使用者自訂短語。
+- 回復短語只顯示一次，之後無法查看。忘記短語且忘記密碼時，資料無法救回。
+- 短語包裝存在 `recovery.xml`；刪除或損毀該檔會讓短語失效。備份與還原時要讓 `vault.xml`、`recovery.xml` 與日記檔保持同一組，不要只還原其中一個。
+- 以較舊的備份還原整個資料夾時，舊的 `recovery.xml` 與舊短語也會一起回來，即使目前短語已被重新產生。判斷短語是否仍有效時，以 `recovery.xml` 的 `id` 為準。
+- 「不可複製」只是 CSS 與事件攔截，不是安全邊界；開發者工具、螢幕截圖或相機仍可取得畫面上的單字。它的目的是提醒使用者親手抄寫，並避免剪貼簿同步把短語帶到雲端。
+- 短語包裝以 128-bit 熵為輸入；有效安全強度是 128 bits，不是 256 bits。這是刻意的取捨：12 個字比 24 個字更容易正確抄寫，而 128 bits 仍遠超離線暴力破解。
+- 產生與確認期間，短語會以明文存在 webview 的 JS 字串、DOM 與 Rust 的暫時緩衝中；`clearPhrase()` 會清空陣列與 DOM，但 JS 字串無法可靠抹除，和密碼欄位的限制相同。

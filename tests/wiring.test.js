@@ -78,6 +78,16 @@ const ELEMENT_IDS = [
   "kdfMemory",
   "kdfIterations",
   "kdfParallelism",
+  "recoveryOpen",
+  "recoveryForm",
+  "recoveryBack",
+  "recoveryGenerateBtn",
+  "recoveryRemoveBtn",
+  "recoveryOverlay",
+  "recoveryClose",
+  "recoveryCancel",
+  "recoveryConfirmBtn",
+  "recoveryWords",
   "diaryDir",
   "editor",
   "title",
@@ -178,6 +188,14 @@ function harness(overrides = {}) {
     resetKdfFields: spy("resetKdfFields"),
     updateKdfEstimate: spy("updateKdfEstimate"),
     refreshSetupVaultState: spy("refreshSetupVaultState"),
+    showRecoveryForm: spy("showRecoveryForm"),
+    hideRecoveryForm: spy("hideRecoveryForm"),
+    handleRecoverySubmit: spy("handleRecoverySubmit"),
+    openRecovery: spy("openRecovery"),
+    removeRecovery: spy("removeRecovery"),
+    closeRecovery: spy("closeRecovery"),
+    confirmRecovery: spy("confirmRecovery"),
+    isRecoveryOpen: () => false,
     scheduleSave: spy("scheduleSave"),
     updateWordCount: spy("updateWordCount"),
     toggleCalendar: spy("toggleCalendar"),
@@ -1287,4 +1305,77 @@ test("the broken tab is optional so an older DOM still wires up", () => {
   } finally {
     h.restore();
   }
+});
+
+// ---------------------------------------------------------------------------
+// Recovery phrase
+// ---------------------------------------------------------------------------
+
+test("recovery form and dialog controls call their handlers", () => {
+  withHarness((h) => {
+    h.els.recoveryOpen.dispatch("click");
+    h.els.recoveryBack.dispatch("click");
+    h.els.recoveryForm.dispatch("submit");
+    h.els.recoveryGenerateBtn.dispatch("click");
+    h.els.recoveryRemoveBtn.dispatch("click");
+    h.els.recoveryClose.dispatch("click");
+    h.els.recoveryCancel.dispatch("click");
+    h.els.recoveryConfirmBtn.dispatch("click");
+
+    assert.deepEqual(h.names(), [
+      "showRecoveryForm",
+      "hideRecoveryForm",
+      "handleRecoverySubmit",
+      "openRecovery",
+      "removeRecovery",
+      "closeRecovery",
+      "closeRecovery",
+      "confirmRecovery",
+    ]);
+  });
+});
+
+test("the recovery dialog backdrop closes it, but a click inside does not", () => {
+  withHarness((h) => {
+    h.els.recoveryOverlay.dispatch("mousedown", {
+      target: h.els.recoveryOverlay,
+    });
+    h.els.recoveryOverlay.dispatch("mousedown", {
+      target: h.els.recoveryWords,
+    });
+
+    assert.equal(h.names().filter((name) => name === "closeRecovery").length, 1);
+  });
+});
+
+test("the recovery word list blocks copy and selection routes", () => {
+  withHarness((h) => {
+    for (const type of [
+      "copy",
+      "cut",
+      "contextmenu",
+      "dragstart",
+      "selectstart",
+    ]) {
+      const event = h.els.recoveryWords.dispatch(type);
+      assert.equal(event.defaultPrevented, true, `${type} must be blocked`);
+    }
+
+    const copyChord = h.els.recoveryWords.dispatch("keydown", {
+      key: "c",
+      ctrlKey: true,
+    });
+    assert.equal(copyChord.defaultPrevented, true);
+  });
+});
+
+test("Escape closes the recovery dialog before the statistics dialog", () => {
+  withHarness(
+    (h) => {
+      h.document.dispatch("keydown", { key: "Escape" });
+
+      assert.deepEqual(h.names(), ["closeRecovery"]);
+    },
+    { isRecoveryOpen: () => true, isStatsOpen: () => true },
+  );
 });

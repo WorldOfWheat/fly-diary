@@ -23,6 +23,7 @@ import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
 const LOCK_IDS = [
   "app",
   "lockScreen",
+  "lockForm",
   "lockError",
   "lockSubtitle",
   "lockSubmit",
@@ -38,6 +39,14 @@ const LOCK_IDS = [
   "kdfParallelism",
   "kdfEstimate",
   "diaryPath",
+  "recoveryOpen",
+  "recoveryForm",
+  "recoveryPhrase",
+  "recoveryNewPass",
+  "recoveryNewPassConfirm",
+  "recoveryUnlockError",
+  "recoverySubmit",
+  "recoveryBack",
 ];
 
 /** The KDF bounds the fake backend reports. */
@@ -68,11 +77,13 @@ function harness(overrides = {}) {
       autoLockMinutes: 5,
     },
     vault_exists: true,
+    recovery_exists: false,
     diary_path: "/home/u/diary",
     today: "2026-10-23",
     set_diary_dir: null,
     unlock: null,
     create_vault: null,
+    recover_vault: null,
     pick_diary_dir: "/home/u/other",
     ...(overrides.invokeTable ?? {}),
   });
@@ -91,6 +102,7 @@ function harness(overrides = {}) {
     closeCalendar: spy(),
     closeImport: spy(),
     closeSettings: spy(),
+    closeRecovery: spy(),
     renderDateLabel: spy(),
     lockAndFlush: spy(async () => {}),
     setScreenshotProtection: spy(async () => {}),
@@ -999,6 +1011,201 @@ test("lockNow does not close the calendar twice", async () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Recovery phrase unlock
+// ---------------------------------------------------------------------------
+
+/** Put the controller in the "vault exists, recovery form open" state. */
+function openRecovery(lock, els) {
+  lock.setConfigured(true);
+  lock.setVaultInitialized(true);
+  lock.setRecoveryAvailable(true);
+  lock.renderLockScreen();
+  lock.showRecoveryForm();
+  assert.equal(els.recoveryForm.hidden, false);
+}
+
+test("showRecoveryForm only replaces the passphrase form for an existing vault", async () => {
+  await withLock(async ({ lock, els }) => {
+    lock.setConfigured(true);
+    lock.setVaultInitialized(false);
+    lock.renderLockScreen();
+
+    lock.showRecoveryForm();
+    assert.equal(lock.isRecoveryMode(), false);
+    assert.equal(els.recoveryForm.hidden, true);
+
+    lock.setVaultInitialized(true);
+    lock.setRecoveryAvailable(true);
+    lock.renderLockScreen();
+    lock.showRecoveryForm();
+
+    assert.equal(lock.isRecoveryMode(), true);
+    assert.equal(els.lockForm.hidden, true);
+    assert.equal(els.recoveryForm.hidden, false);
+    assert.equal(els.recoveryOpen.hidden, false);
+    assert.equal(document.activeElement, els.recoveryPhrase);
+  });
+});
+
+test("the recovery button follows whether the vault has a sidecar", async () => {
+  let hasRecovery = false;
+  await withLock(
+    async ({ lock, els }) => {
+      lock.setConfigured(true);
+
+      await lock.refreshVaultState();
+      lock.renderLockScreen();
+      assert.equal(els.recoveryOpen.hidden, true);
+
+      hasRecovery = true;
+      await lock.refreshVaultState();
+      lock.renderLockScreen();
+      assert.equal(els.recoveryOpen.hidden, false);
+
+      hasRecovery = false;
+      await lock.refreshVaultState();
+      lock.renderLockScreen();
+      assert.equal(els.recoveryOpen.hidden, true);
+    },
+    { invokeTable: { recovery_exists: () => hasRecovery } },
+  );
+});
+
+test("hideRecoveryForm returns to the passphrase form and clears the secrets", async () => {
+  await withLock(async ({ lock, els }) => {
+    openRecovery(lock, els);
+    els.recoveryPhrase.value = "abandon";
+    els.recoveryNewPass.value = "secret123";
+    els.recoveryNewPassConfirm.value = "secret123";
+
+    lock.hideRecoveryForm();
+
+    assert.equal(lock.isRecoveryMode(), false);
+    assert.equal(els.lockForm.hidden, false);
+    assert.equal(els.recoveryForm.hidden, true);
+    assert.equal(els.recoveryPhrase.value, "");
+    assert.equal(els.recoveryNewPass.value, "");
+    assert.equal(els.recoveryNewPassConfirm.value, "");
+    assert.equal(document.activeElement, els.passphrase);
+  });
+});
+
+test("showLockScreen leaves recovery mode behind", async () => {
+  await withLock(async ({ lock, els }) => {
+    openRecovery(lock, els);
+
+    lock.showLockScreen();
+
+    assert.equal(lock.isRecoveryMode(), false);
+    assert.equal(els.recoveryForm.hidden, true);
+    assert.equal(els.recoveryPhrase.value, "");
+  });
+});
+
+test("showing the lock screen force-closes the one-time phrase dialog", async () => {
+  await withLock(async ({ lock, deps }) => {
+    lock.showLockScreen();
+
+    assert.deepEqual(deps.closeRecovery.args()[0], [{ force: true }]);
+  });
+});
+
+test("recovery submit validates the phrase and the new passphrase", async () => {
+  await withLock(async ({ lock, els, invoke }) => {
+    openRecovery(lock, els);
+    const event = submitEvent();
+
+    await lock.handleRecoverySubmit(event);
+    assert.equal(event.prevented, true);
+    assert.equal(els.recoveryUnlockError.textContent, "recovery.errPhrase");
+
+    els.recoveryPhrase.value = "abandon abandon abandon";
+    els.recoveryNewPass.value = "123";
+    els.recoveryNewPassConfirm.value = "123";
+    await lock.handleRecoverySubmit(submitEvent());
+    assert.equal(els.recoveryUnlockError.textContent, "lock.errTooShort");
+
+    els.recoveryNewPass.value = "123456";
+    els.recoveryNewPassConfirm.value = "1234567";
+    await lock.handleRecoverySubmit(submitEvent());
+    assert.equal(els.recoveryUnlockError.textContent, "lock.errMismatch");
+
+    assert.equal(invoke.commands().includes("recover_vault"), false);
+  });
+});
+
+test("recovery persists the folder when it is reached before setup finishes", async () => {
+  await withLock(async ({ lock, els, invoke }) => {
+    lock.setConfigured(false);
+    lock.setVaultInitialized(true);
+    lock.setRecoveryAvailable(true);
+    lock.renderLockScreen();
+    lock.showRecoveryForm();
+    els.diaryDir.value = "/home/u/diary";
+    els.recoveryPhrase.value = "abandon";
+    els.recoveryNewPass.value = "new-pass";
+    els.recoveryNewPassConfirm.value = "new-pass";
+
+    await lock.handleRecoverySubmit(submitEvent());
+
+    assert.deepEqual(invoke.argsOf("set_diary_dir"), { path: "/home/u/diary" });
+    assert.equal(invoke.commands().includes("recover_vault"), true);
+  });
+});
+
+test("a successful recovery invokes the backend and enters the app", async () => {
+  await withLock(async ({ lock, els, invoke, deps }) => {
+    openRecovery(lock, els);
+    els.recoveryPhrase.value =
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    els.recoveryNewPass.value = "new-pass";
+    els.recoveryNewPassConfirm.value = "new-pass";
+
+    await lock.handleRecoverySubmit(submitEvent());
+
+    assert.deepEqual(invoke.argsOf("recover_vault"), {
+      phrase:
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      newPassphrase: "new-pass",
+    });
+    assert.equal(lock.isRecoveryMode(), false);
+    assert.equal(els.recoveryPhrase.value, "");
+    assert.equal(els.recoveryNewPass.value, "");
+    assert.equal(deps.enterApp.count(), 1);
+  });
+});
+
+test("a rejected recovery keeps the form open and shows the backend message", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      openRecovery(lock, els);
+      els.recoveryPhrase.value = "abandon";
+      els.recoveryNewPass.value = "new-pass";
+      els.recoveryNewPassConfirm.value = "new-pass";
+
+      const originalError = console.error;
+      console.error = () => {};
+      try {
+        await lock.handleRecoverySubmit(submitEvent());
+      } finally {
+        console.error = originalError;
+      }
+
+      assert.equal(lock.isRecoveryMode(), true);
+      assert.match(els.recoveryUnlockError.textContent, /does not match/);
+      assert.equal(els.recoverySubmit.disabled, false);
+    },
+    {
+      invokeTable: {
+        recover_vault: () => {
+          throw new Error("does not match");
+        },
+      },
+    }
+  );
+});
+
 /** Shared deps for the tests that build a second controller. */
 function lockDeps(els) {
   return {
@@ -1014,6 +1221,7 @@ function lockDeps(els) {
     closeCalendar: spy(),
     closeImport: spy(),
     closeSettings: spy(),
+    closeRecovery: spy(),
     renderDateLabel: spy(),
     lockAndFlush: spy(async () => {}),
     setScreenshotProtection: spy(async () => {}),
