@@ -1,7 +1,7 @@
 # Fly Diary
 
 一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **AES-256-GCM 加密的 XML** 檔案儲存。
-目前版本 `0.1.6`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
+目前版本 `0.1.7`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
 把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
 
 ## 功能亮點
@@ -46,16 +46,16 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 
 ## 文件
 
-| 文件 | 內容 |
-| --- | --- |
-| [security.md](docs/security.md) | 金鑰階層、KDF、AAD 與版本、記憶體保護、供應鏈安全、已知限制 |
-| [file-format.md](docs/file-format.md) | 日記／vault／索引／附件的檔案格式、設定檔與儲存位置 |
-| [ui.md](docs/ui.md) | 唯讀、月曆、縮放、手機版、多語系、設定頁、主題 |
-| [css-reset.md](docs/css-reset.md) | 瀏覽器 reset 的規則目的、載入順序與覆寫方式 |
-| [accessibility.md](docs/accessibility.md) | WCAG 2.2 AA 目標、已完成項目、手動驗證與剩餘缺口 |
-| [architecture.md](docs/architecture.md) | 專案結構與設計取捨 |
-| [development.md](docs/development.md) | 系統依賴、開發指令、測試、打包、Android |
-| [reference.md](docs/reference.md) | 鍵盤快速鍵與 Tauri Commands |
+| 文件                                      | 內容                                                        |
+| ----------------------------------------- | ----------------------------------------------------------- |
+| [security.md](docs/security.md)           | 金鑰階層、KDF、AAD 與版本、記憶體保護、供應鏈安全、已知限制 |
+| [file-format.md](docs/file-format.md)     | 日記／vault／索引／附件的檔案格式、設定檔與儲存位置         |
+| [ui.md](docs/ui.md)                       | 唯讀、月曆、縮放、手機版、多語系、設定頁、主題              |
+| [css-reset.md](docs/css-reset.md)         | 瀏覽器 reset 的規則目的、載入順序與覆寫方式                 |
+| [accessibility.md](docs/accessibility.md) | WCAG 2.2 AA 目標、已完成項目、手動驗證與剩餘缺口            |
+| [architecture.md](docs/architecture.md)   | 專案結構與設計取捨                                          |
+| [development.md](docs/development.md)     | 系統依賴、開發指令、測試、打包、Android                     |
+| [reference.md](docs/reference.md)         | 鍵盤快速鍵與 Tauri Commands                                 |
 
 ## 安全摘要
 
