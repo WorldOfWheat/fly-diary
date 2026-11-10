@@ -3,13 +3,15 @@
 // ---------------------------------------------------------------------------
 //
 // The dialog has one critical invariant: the backend must not be asked to write
-// `recovery.xml` until the three requested words have been re-typed. These
-// tests drive the generate → render → confirm loop with the DOM stub.
+// `recovery.xml` until the three requested words have been re-typed in the
+// separate confirmation window. The phrase display is cleared before that
+// window opens, so the answers cannot be read off the screen.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createRecoveryDialog } from "../src/recovery-dialog.js";
+import { resetWordlistCache } from "../src/word-input.js";
 import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
 
 const RECOVERY_IDS = [
@@ -17,20 +19,30 @@ const RECOVERY_IDS = [
   "recoveryError",
   "recoveryId",
   "recoveryWords",
+  "recoveryContinueBtn",
+  "recoveryCancel",
+  "recoveryClose",
+  "recoveryConfirmOverlay",
   "recoveryConfirmFields",
-  "recoveryConfirmBtn",
+  "recoveryConfirmError",
+  "recoveryConfirmSubmit",
+  "recoveryConfirmCancel",
+  "recoveryConfirmClose",
 ];
 
-const WORDS = "abandon ability able about above absent absorb abstract absurd abuse access accident".split(
-  " ",
-);
+const WORDS =
+  "abandon ability able about above absent absorb abstract absurd abuse access accident".split(
+    " ",
+  );
 const INDICES = [0, 4, 11];
-const RECOVERY_ID = "cmVjb3ZlcnktaWQ=";
+const RECOVERY_ID = WORDS.join(" ");
 
 function harness(overrides = {}) {
+  resetWordlistCache();
   const restore = installDom();
   const els = fakeEls(RECOVERY_IDS);
   els.recoveryOverlay.hidden = true;
+  els.recoveryConfirmOverlay.hidden = true;
 
   const invoke = fakeInvoke({
     generate_recovery_phrase: {
@@ -39,6 +51,7 @@ function harness(overrides = {}) {
       indices: INDICES,
       recoveryId: RECOVERY_ID,
     },
+    get_bip39_words: WORDS,
     confirm_recovery_phrase: RECOVERY_ID,
     ...(overrides.invokeTable ?? {}),
   });
@@ -78,11 +91,12 @@ function confirmationInputs(els) {
   return els.recoveryConfirmFields.findAll((child) => child.tagName === "INPUT");
 }
 
-test("open renders the phrase, its id and the confirmation fields", async () => {
+test("open renders the phrase and its BIP39 id, but not the confirmation window", async () => {
   await withDialog(async ({ dialog, els }) => {
     await dialog.open();
 
     assert.equal(els.recoveryOverlay.hidden, false);
+    assert.equal(els.recoveryConfirmOverlay.hidden, true);
     assert.equal(dialog.isOpen(), true);
     assert.equal(els.recoveryWords.children.length, 12);
     assert.deepEqual(
@@ -90,8 +104,9 @@ test("open renders the phrase, its id and the confirmation fields", async () => 
       WORDS,
     );
     assert.match(els.recoveryId.textContent, /recovery\.idLabel/);
-    assert.equal(confirmationInputs(els).length, 3);
-    assert.equal(document.activeElement, confirmationInputs(els)[0]);
+    assert.match(els.recoveryId.textContent, new RegExp(RECOVERY_ID));
+    assert.equal(confirmationInputs(els).length, 0);
+    assert.equal(document.activeElement, els.recoveryContinueBtn);
   });
 });
 
@@ -102,9 +117,47 @@ test("open calls only generate_recovery_phrase", async () => {
   });
 });
 
+test("continue opens a separate confirmation window and removes the phrase", async () => {
+  await withDialog(async ({ dialog, els }) => {
+    await dialog.open();
+    await dialog.continueToConfirm();
+
+    assert.equal(els.recoveryOverlay.hidden, true);
+    assert.equal(els.recoveryConfirmOverlay.hidden, false);
+    assert.equal(els.recoveryWords.children.length, 0);
+    assert.equal(confirmationInputs(els).length, 3);
+    assert.equal(document.activeElement, confirmationInputs(els)[0]);
+    assert.equal(dialog.isOpen(), true);
+  });
+});
+
+test("confirmation suggests BIP39 words by prefix", async () => {
+  await withDialog(async ({ dialog, els }) => {
+    await dialog.open();
+    await dialog.continueToConfirm();
+
+    const input = confirmationInputs(els)[0];
+    input.value = "ab";
+    input.emit("input");
+
+    const list = els.recoveryConfirmFields.findAll(
+      (child) => child.tagName === "UL",
+    )[0];
+    assert.equal(list.hidden, false);
+    assert.ok(list.children.length > 0);
+    assert.match(list.children[0].textContent, /^ab/);
+
+    const option = list.children[0];
+    option.emit("mousedown", { preventDefault() {} });
+    assert.equal(input.value, option.textContent);
+    assert.equal(list.hidden, true);
+  });
+});
+
 test("confirm refuses to write while a requested word is empty", async () => {
   await withDialog(async ({ dialog, els, invoke }) => {
     await dialog.open();
+    await dialog.continueToConfirm();
     const inputs = confirmationInputs(els);
     inputs[0].value = "abandon";
     inputs[1].value = "";
@@ -112,7 +165,10 @@ test("confirm refuses to write while a requested word is empty", async () => {
 
     await dialog.confirm();
 
-    assert.match(els.recoveryError.textContent, /recovery\.errConfirmMissing/);
+    assert.match(
+      els.recoveryConfirmError.textContent,
+      /recovery\.errConfirmMissing/,
+    );
     assert.equal(invoke.commands().includes("confirm_recovery_phrase"), false);
     assert.equal(dialog.isOpen(), true);
   });
@@ -121,6 +177,7 @@ test("confirm refuses to write while a requested word is empty", async () => {
 test("confirm writes the phrase and closes after the right answers", async () => {
   await withDialog(async ({ dialog, els, invoke, setStatus, onEnabled }) => {
     await dialog.open();
+    await dialog.continueToConfirm();
     const inputs = confirmationInputs(els);
     inputs[0].value = "ABANDON";
     inputs[1].value = "above";
@@ -136,6 +193,7 @@ test("confirm writes the phrase and closes after the right answers", async () =>
     });
     assert.equal(dialog.isOpen(), false);
     assert.equal(els.recoveryOverlay.hidden, true);
+    assert.equal(els.recoveryConfirmOverlay.hidden, true);
     assert.equal(els.recoveryWords.children.length, 0);
     assert.equal(els.recoveryConfirmFields.children.length, 0);
     assert.equal(onEnabled.count(), 1);
@@ -144,10 +202,11 @@ test("confirm writes the phrase and closes after the right answers", async () =>
   });
 });
 
-test("a backend rejection keeps the dialog open and shows the message", async () => {
+test("a backend rejection keeps the confirmation window open and shows the message", async () => {
   await withDialog(
     async ({ dialog, els }) => {
       await dialog.open();
+      await dialog.continueToConfirm();
       const inputs = confirmationInputs(els);
       inputs[0].value = "abandon";
       inputs[1].value = "above";
@@ -162,8 +221,9 @@ test("a backend rejection keeps the dialog open and shows the message", async ()
       }
 
       assert.equal(dialog.isOpen(), true);
-      assert.match(els.recoveryError.textContent, /recovery\.errConfirm/);
-      assert.match(els.recoveryError.textContent, /failed/);
+      assert.equal(els.recoveryConfirmOverlay.hidden, false);
+      assert.match(els.recoveryConfirmError.textContent, /recovery\.errConfirm/);
+      assert.match(els.recoveryConfirmError.textContent, /failed/);
     },
     {
       invokeTable: {
@@ -184,6 +244,7 @@ test("a forced close during confirmation does not report success", async () => {
   await withDialog(
     async ({ dialog, els, onEnabled, setStatus }) => {
       await dialog.open();
+      await dialog.continueToConfirm();
       const inputs = confirmationInputs(els);
       inputs[0].value = "abandon";
       inputs[1].value = "above";
@@ -194,6 +255,7 @@ test("a forced close during confirmation does not report success", async () => {
 
       assert.equal(dialog.isOpen(), false);
       assert.equal(els.recoveryWords.children.length, 0);
+      assert.equal(els.recoveryConfirmFields.children.length, 0);
 
       release(RECOVERY_ID);
       await confirming;
@@ -209,14 +271,17 @@ test("a forced close during confirmation does not report success", async () => {
   );
 });
 
-test("close wipes the words from the DOM", async () => {
+test("close wipes the words and both windows", async () => {
   await withDialog(async ({ dialog, els }) => {
     await dialog.open();
-    assert.equal(els.recoveryWords.children.length, 12);
+    await dialog.continueToConfirm();
+    assert.equal(confirmationInputs(els).length, 3);
 
     dialog.close();
 
     assert.equal(dialog.isOpen(), false);
+    assert.equal(els.recoveryOverlay.hidden, true);
+    assert.equal(els.recoveryConfirmOverlay.hidden, true);
     assert.equal(els.recoveryWords.children.length, 0);
     assert.equal(els.recoveryConfirmFields.children.length, 0);
     assert.equal(els.recoveryId.textContent, "");

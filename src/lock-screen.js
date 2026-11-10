@@ -48,6 +48,8 @@
 // entry is the hand-off into the editor, which `main.js` owns. This module only
 // calls it once the backend has accepted the passphrase.
 
+import { createWordFields, loadBip39Words } from "./word-input.js";
+
 /**
  * Create the lock screen controller.
  *
@@ -75,6 +77,9 @@ export function createLockScreen(deps) {
   let recoveryMode = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
+  /** Tile inputs for the twelve-word recovery form. */
+  let recoveryFields = [];
+  let recoveryWordsRequest = null;
 
   function isConfigured() {
     return configured;
@@ -112,13 +117,41 @@ export function createLockScreen(deps) {
     recoveryAvailable = value;
   }
 
+  function ensureRecoveryFields() {
+    if (!els.recoveryPhraseFields) return;
+    if (recoveryFields.length === 0) {
+      const entries = Array.from({ length: 12 }, (_, index) => ({
+        index,
+        label: deps.t("recovery.confirmWord", { n: index + 1 }),
+      }));
+      const focusNext = (field) => {
+        if (!recoveryMode) return;
+        const position = recoveryFields.indexOf(field);
+        const next = recoveryFields[position + 1];
+        if (next) next.focus();
+        else els.recoveryNewPass?.focus?.();
+      };
+      recoveryFields = createWordFields(els.recoveryPhraseFields, entries, {
+        words: [],
+        t: deps.t,
+        idPrefix: "recovery-word",
+        onSelect: focusNext,
+        onAdvance: focusNext,
+      });
+      if (!recoveryWordsRequest) {
+        recoveryWordsRequest = loadBip39Words(deps.invoke).then((words) => {
+          for (const field of recoveryFields) field.setWords(words);
+        });
+      }
+    }
+  }
+
   /** Clear the recovery form's secret fields. */
   function clearRecoveryFields() {
-    if (!els.recoveryPhrase) return;
-    els.recoveryPhrase.value = "";
-    els.recoveryNewPass.value = "";
-    els.recoveryNewPassConfirm.value = "";
-    els.recoveryUnlockError.textContent = "";
+    for (const field of recoveryFields) field.clear();
+    if (els.recoveryNewPass) els.recoveryNewPass.value = "";
+    if (els.recoveryNewPassConfirm) els.recoveryNewPassConfirm.value = "";
+    if (els.recoveryUnlockError) els.recoveryUnlockError.textContent = "";
   }
 
   function showLockScreen(message = "") {
@@ -143,8 +176,9 @@ export function createLockScreen(deps) {
     if (!vaultInitialized || !recoveryAvailable || pickingWorkspace) return;
     recoveryMode = true;
     clearRecoveryFields();
+    ensureRecoveryFields();
     renderLockScreen();
-    els.recoveryPhrase.focus();
+    recoveryFields[0]?.focus();
   }
 
   /** Return from the recovery form to the normal passphrase form. */
@@ -168,12 +202,15 @@ export function createLockScreen(deps) {
     event.preventDefault();
     els.recoveryUnlockError.textContent = "";
 
-    const phrase = els.recoveryPhrase.value.trim();
-    if (!phrase) {
+    ensureRecoveryFields();
+    const words = recoveryFields.map((field) => field.input.value.trim());
+    if (words.length !== 12 || words.some((word) => !word)) {
       els.recoveryUnlockError.textContent = deps.t("recovery.errPhrase");
-      els.recoveryPhrase.focus();
+      const empty = recoveryFields.find((field) => !field.input.value.trim());
+      (empty || recoveryFields[0])?.focus();
       return;
     }
+    const phrase = words.join(" ");
 
     const next = els.recoveryNewPass.value;
     const confirm = els.recoveryNewPassConfirm.value;
@@ -218,7 +255,7 @@ export function createLockScreen(deps) {
       console.error("recover_vault failed:", err);
       els.recoveryUnlockError.textContent =
         typeof err === "string" ? err : err?.message || deps.t("recovery.errRecover");
-      els.recoveryPhrase.select?.();
+      recoveryFields[0]?.input.select?.();
     } finally {
       els.recoverySubmit.disabled = false;
     }

@@ -41,7 +41,7 @@ const LOCK_IDS = [
   "diaryPath",
   "recoveryOpen",
   "recoveryForm",
-  "recoveryPhrase",
+  "recoveryPhraseFields",
   "recoveryNewPass",
   "recoveryNewPassConfirm",
   "recoveryUnlockError",
@@ -78,6 +78,20 @@ function harness(overrides = {}) {
     },
     vault_exists: true,
     recovery_exists: false,
+    get_bip39_words: [
+      "abandon",
+      "ability",
+      "able",
+      "about",
+      "above",
+      "absent",
+      "absorb",
+      "abstract",
+      "absurd",
+      "abuse",
+      "access",
+      "accident",
+    ],
     diary_path: "/home/u/diary",
     today: "2026-10-23",
     set_diary_dir: null,
@@ -1016,6 +1030,25 @@ test("lockNow does not close the calendar twice", async () => {
 // ---------------------------------------------------------------------------
 
 /** Put the controller in the "vault exists, recovery form open" state. */
+function recoveryInputs(els) {
+  return els.recoveryPhraseFields.findAll((child) => child.tagName === "INPUT");
+}
+
+function setRecoveryPhrase(els, phrase) {
+  const words = phrase.split(/\s+/).filter(Boolean);
+  const inputs = recoveryInputs(els);
+  inputs.forEach((input, index) => {
+    input.value = words[index] || "";
+  });
+}
+
+function recoveryPhraseValue(els) {
+  return recoveryInputs(els)
+    .map((input) => input.value)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function openRecovery(lock, els) {
   lock.setConfigured(true);
   lock.setVaultInitialized(true);
@@ -1044,7 +1077,7 @@ test("showRecoveryForm only replaces the passphrase form for an existing vault",
     assert.equal(els.lockForm.hidden, true);
     assert.equal(els.recoveryForm.hidden, false);
     assert.equal(els.recoveryOpen.hidden, false);
-    assert.equal(document.activeElement, els.recoveryPhrase);
+    assert.equal(document.activeElement, recoveryInputs(els)[0]);
   });
 });
 
@@ -1075,7 +1108,7 @@ test("the recovery button follows whether the vault has a sidecar", async () => 
 test("hideRecoveryForm returns to the passphrase form and clears the secrets", async () => {
   await withLock(async ({ lock, els }) => {
     openRecovery(lock, els);
-    els.recoveryPhrase.value = "abandon";
+    setRecoveryPhrase(els, "abandon");
     els.recoveryNewPass.value = "secret123";
     els.recoveryNewPassConfirm.value = "secret123";
 
@@ -1084,7 +1117,7 @@ test("hideRecoveryForm returns to the passphrase form and clears the secrets", a
     assert.equal(lock.isRecoveryMode(), false);
     assert.equal(els.lockForm.hidden, false);
     assert.equal(els.recoveryForm.hidden, true);
-    assert.equal(els.recoveryPhrase.value, "");
+    assert.equal(recoveryPhraseValue(els), "");
     assert.equal(els.recoveryNewPass.value, "");
     assert.equal(els.recoveryNewPassConfirm.value, "");
     assert.equal(document.activeElement, els.passphrase);
@@ -1099,7 +1132,7 @@ test("showLockScreen leaves recovery mode behind", async () => {
 
     assert.equal(lock.isRecoveryMode(), false);
     assert.equal(els.recoveryForm.hidden, true);
-    assert.equal(els.recoveryPhrase.value, "");
+    assert.equal(recoveryPhraseValue(els), "");
   });
 });
 
@@ -1120,7 +1153,10 @@ test("recovery submit validates the phrase and the new passphrase", async () => 
     assert.equal(event.prevented, true);
     assert.equal(els.recoveryUnlockError.textContent, "recovery.errPhrase");
 
-    els.recoveryPhrase.value = "abandon abandon abandon";
+    setRecoveryPhrase(
+      els,
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    );
     els.recoveryNewPass.value = "123";
     els.recoveryNewPassConfirm.value = "123";
     await lock.handleRecoverySubmit(submitEvent());
@@ -1143,7 +1179,10 @@ test("recovery persists the folder when it is reached before setup finishes", as
     lock.renderLockScreen();
     lock.showRecoveryForm();
     els.diaryDir.value = "/home/u/diary";
-    els.recoveryPhrase.value = "abandon";
+    setRecoveryPhrase(
+      els,
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    );
     els.recoveryNewPass.value = "new-pass";
     els.recoveryNewPassConfirm.value = "new-pass";
 
@@ -1157,8 +1196,10 @@ test("recovery persists the folder when it is reached before setup finishes", as
 test("a successful recovery invokes the backend and enters the app", async () => {
   await withLock(async ({ lock, els, invoke, deps }) => {
     openRecovery(lock, els);
-    els.recoveryPhrase.value =
-      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    setRecoveryPhrase(
+      els,
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+    );
     els.recoveryNewPass.value = "new-pass";
     els.recoveryNewPassConfirm.value = "new-pass";
 
@@ -1170,7 +1211,7 @@ test("a successful recovery invokes the backend and enters the app", async () =>
       newPassphrase: "new-pass",
     });
     assert.equal(lock.isRecoveryMode(), false);
-    assert.equal(els.recoveryPhrase.value, "");
+    assert.equal(recoveryPhraseValue(els), "");
     assert.equal(els.recoveryNewPass.value, "");
     assert.equal(deps.enterApp.count(), 1);
   });
@@ -1180,7 +1221,10 @@ test("a rejected recovery keeps the form open and shows the backend message", as
   await withLock(
     async ({ lock, els }) => {
       openRecovery(lock, els);
-      els.recoveryPhrase.value = "abandon";
+      setRecoveryPhrase(
+        els,
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      );
       els.recoveryNewPass.value = "new-pass";
       els.recoveryNewPassConfirm.value = "new-pass";
 

@@ -45,6 +45,11 @@ fn wordlist() -> &'static [&'static str] {
     WORDS.get_or_init(|| WORDLIST.lines().collect())
 }
 
+/// The official BIP39 English wordlist, in alphabetical order.
+pub fn words() -> &'static [&'static str] {
+    wordlist()
+}
+
 /// Generate a fresh 128-bit value from the operating system RNG.
 pub fn generate_entropy() -> Zeroizing<[u8; ENTROPY_BYTES]> {
     let mut entropy = Zeroizing::new([0u8; ENTROPY_BYTES]);

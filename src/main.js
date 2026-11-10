@@ -1809,6 +1809,7 @@ function wireEvents() {
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,
     closeRecovery: recoveryDialog.close,
+    continueRecovery: recoveryDialog.continueToConfirm,
     confirmRecovery: recoveryDialog.confirm,
     isRecoveryOpen: recoveryDialog.isOpen,
     // The vault-wide actions hosted by the settings dialog.

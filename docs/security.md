@@ -86,13 +86,13 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 短語包裝存在 `recovery.xml`，而不是 `vault.xml`。這是刻意的：舊版 App 在改密碼或改 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的 recovery 欄位會被靜默刪掉。獨立檔案對舊版而言不存在，所以不會被覆寫；而 diary key 在改密碼時不變，短語也就持續有效。
 
-`recovery.xml` 的格式是 `id`、`iv`、`wrapped-key`；AAD 是 `"fly-diary/recovery" || 0x00 || id || 0x00 || version`。`id` 是隨機 16 bytes，會印在短語旁，讓使用者辨識短語屬於哪個日記本；把 recovery blob 換到另一個 vault 或改寫 id 都會讓 GCM 驗證失敗。
+`recovery.xml` 的格式是 `id`、`iv`、`wrapped-key`；AAD 是 `"fly-diary/recovery" || 0x00 || id || 0x00 || version`。`id` 是隨機 16 bytes，會以 **12 個 BIP39 英文單字**顯示在短語旁，讓使用者辨識短語屬於哪個日記本；檔案內仍以 base64 儲存同樣的 16 bytes，以維持舊版 sidecar 相容。把 recovery blob 換到另一個 vault 或改寫 id 都會讓 GCM 驗證失敗。
 
 **顯示與確認**：
 
 - 短語只在產生時顯示一次，之後無法再次查看。
 - 顯示畫面用 `user-select: none`，並攔截 `copy` / `cut` / `contextmenu` / `dragstart` / `selectstart`，且沒有複製或列印按鈕。這是**UI 層面的抄寫引導，不是安全邊界**：webview 仍可被檢視，真正的要求是使用者把短語寫在紙上。
-- 確認時要求重新輸入三個隨機位置的單字；後端會再驗證一次 BIP39 checksum 與這三個答案，通過後才寫入 `recovery.xml`。取消或中途關閉不會留下任何檔案。
+- 按下「我已抄寫，繼續」後，短語會從畫面移除，並開啟獨立的確認視窗；使用者必須重新輸入三個隨機位置的單字。輸入框提供 BIP39 前綴建議（例如 `ap` 列出 `apple` 等），但後端仍會再驗證一次 BIP39 checksum 與這三個答案，通過後才寫入 `recovery.xml`。取消或中途關閉不會留下任何檔案。
 
 **風險**：短語等於完整的讀取權。取得短語與日記資料夾的人不需要密碼、也沒有速率限制就能解密全部內容。短語必須與日記分開保存；不要截圖、不要放進同一個同步資料夾或雲端相簿。備份日記資料夾時要一併複製 `recovery.xml`，否則短語無法使用；刪除 `recovery.xml` 等於停用短語。
 

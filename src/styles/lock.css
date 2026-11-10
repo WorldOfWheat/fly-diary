@@ -68,15 +68,6 @@
   display: none !important;
 }
 
-/* Recovery phrases are entered as one whitespace-separated string. */
-.lock-recovery-input {
-  min-height: 4.5rem;
-  font-family: var(--mono);
-  font-size: 0.75rem;
-  line-height: 1.6;
-  resize: vertical;
-}
-
 /* Title and the two switches share a row. The switches are pinned to the right
    so the title stays optically centred in the card. */
 .lock-head {

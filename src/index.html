@@ -112,13 +112,11 @@
                 <h2 class="lock-title" data-i18n="recovery.unlockTitle">使用回復短語</h2>
             </div>
             <p class="lock-hint" data-i18n="recovery.unlockHint">
-                輸入 12 個 BIP39 英文單字，並設定一組新密碼。恢復後原本的密碼會失效，但日記內容不會重新加密。
+                輸入 12 個 BIP39 英文單字，並設定一組新密碼。輸入前幾個字母會顯示單字建議；
+                恢復後原本的密碼會失效，但日記內容不會重新加密。
             </p>
-            <label class="sr-only" for="recovery-phrase" data-i18n="recovery.phraseLabel">回復短語</label>
-            <textarea id="recovery-phrase" class="lock-input lock-recovery-input" rows="3"
-                data-i18n-placeholder="recovery.phrasePlaceholder" placeholder="abandon ability able …"
-                autocomplete="off" autocapitalize="off" spellcheck="false"
-                aria-describedby="recovery-unlock-error"></textarea>
+            <div id="recovery-phrase-fields" class="word-grid recovery-unlock-fields" role="group"
+                data-i18n-aria-label="recovery.phraseLabel" aria-label="回復短語"></div>
             <label class="sr-only" for="recovery-new-pass" data-i18n="recovery.newPassLabel">新密碼</label>
             <input id="recovery-new-pass" class="lock-input" type="password" autocomplete="new-password"
                 data-i18n-placeholder="recovery.newPass" placeholder="新密碼（至少 6 個字元）"
@@ -622,21 +620,48 @@
                     這個畫面不允許選取或複製，請確實抄寫。若單字外流，搭配日記檔案就能解密全部內容。
                 </p>
 
-                <div class="recovery-confirm">
-                    <p class="settings-hint" data-i18n="recovery.confirmHint">
-                        請輸入下面指定位置的單字，確認你已經抄好。
-                    </p>
-                    <div id="recovery-confirm-fields" class="recovery-confirm-fields"></div>
-                </div>
-
                 <p id="recovery-error" class="import-error" role="alert"></p>
             </div>
 
             <footer class="modal-foot">
                 <span class="recovery-foot-hint" data-i18n="recovery.onceHint">確認後才會寫入回復資料</span>
                 <button id="recovery-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
-                <button id="recovery-confirm-btn" class="btn-primary" type="button"
-                    data-i18n="recovery.confirm">我已抄寫，確認</button>
+                <button id="recovery-continue-btn" class="btn-primary" type="button"
+                    data-i18n="recovery.continue">我已抄寫，繼續</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Separate confirmation window. The one-time phrase window is closed
+         before this opens, so the requested words have to come from the paper
+         copy rather than the screen. -->
+    <div id="recovery-confirm-overlay" class="modal-overlay recovery-overlay" hidden>
+        <div class="modal recovery-modal" role="dialog" aria-modal="true"
+            aria-labelledby="recovery-confirm-title">
+            <header class="modal-head">
+                <h2 id="recovery-confirm-title" class="modal-title" data-i18n="recovery.confirmTitle">
+                    確認回復短語
+                </h2>
+                <button id="recovery-confirm-close" class="modal-close" type="button"
+                    data-i18n-title="common.close" data-i18n-aria-label="common.close" title="關閉"
+                    aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <p class="settings-hint" data-i18n="recovery.confirmHint">
+                    請輸入下面指定位置的單字，確認你已經抄好。輸入前幾個字母會顯示 BIP39 單字建議。
+                </p>
+                <div id="recovery-confirm-fields" class="word-grid recovery-confirm-fields" role="group"
+                    data-i18n-aria-label="recovery.confirmTitle" aria-label="確認回復短語"></div>
+                <p id="recovery-confirm-error" class="import-error" role="alert"></p>
+            </div>
+
+            <footer class="modal-foot">
+                <span class="recovery-foot-hint" data-i18n="recovery.onceHint">確認後才會寫入回復資料</span>
+                <button id="recovery-confirm-cancel" class="btn-browse" type="button"
+                    data-i18n="common.cancel">取消</button>
+                <button id="recovery-confirm-submit" class="btn-primary" type="button"
+                    data-i18n="recovery.confirm">確認</button>
             </footer>
         </div>
     </div>

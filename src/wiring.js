@@ -460,7 +460,7 @@ export function initEventWiring(deps) {
   if (els.recoveryOverlay) {
     on(els.recoveryClose, "click", deps.closeRecovery);
     on(els.recoveryCancel, "click", deps.closeRecovery);
-    on(els.recoveryConfirmBtn, "click", deps.confirmRecovery);
+    on(els.recoveryContinueBtn, "click", deps.continueRecovery);
     on(els.recoveryOverlay, "mousedown", (e) => {
       if (e.target === els.recoveryOverlay) deps.closeRecovery();
     });
@@ -478,6 +478,15 @@ export function initEventWiring(deps) {
         }
       });
     }
+  }
+
+  if (els.recoveryConfirmOverlay) {
+    on(els.recoveryConfirmClose, "click", deps.closeRecovery);
+    on(els.recoveryConfirmCancel, "click", deps.closeRecovery);
+    on(els.recoveryConfirmSubmit, "click", deps.confirmRecovery);
+    on(els.recoveryConfirmOverlay, "mousedown", (e) => {
+      if (e.target === els.recoveryConfirmOverlay) deps.closeRecovery();
+    });
   }
 
   // The vault-wide actions hosted by the settings dialog. Each one closes the

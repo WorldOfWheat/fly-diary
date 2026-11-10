@@ -535,6 +535,7 @@ async fn change_passphrase(
 struct RecoveryPhraseView {
     words: Vec<String>,
     indices: Vec<usize>,
+    /// Twelve BIP39 words encoding the random 16-byte recovery identifier.
     recovery_id: String,
 }
 
@@ -547,11 +548,21 @@ struct RecoveryPhraseView {
 #[tauri::command]
 fn generate_recovery_phrase() -> Result<RecoveryPhraseView, String> {
     let entropy = bip39::generate_entropy();
+    let id_entropy = bip39::generate_entropy();
     Ok(RecoveryPhraseView {
         words: bip39::entropy_to_words(&entropy)?,
         indices: bip39::confirmation_indices(),
-        recovery_id: crypto::random_bytes_b64(storage::RECOVERY_ID_BYTES),
+        recovery_id: bip39::entropy_to_words(&id_entropy)?.join(" "),
     })
+}
+
+/// The BIP39 English wordlist, used by the word-tile autocomplete.
+#[tauri::command]
+fn get_bip39_words() -> Vec<String> {
+    bip39::words()
+        .iter()
+        .map(|word| (*word).to_string())
+        .collect()
 }
 
 /// Persist a recovery phrase after the user has confirmed it.
@@ -1216,6 +1227,7 @@ pub fn run() {
             calibrate_kdf,
             change_passphrase,
             generate_recovery_phrase,
+            get_bip39_words,
             confirm_recovery_phrase,
             get_recovery_status,
             remove_recovery,

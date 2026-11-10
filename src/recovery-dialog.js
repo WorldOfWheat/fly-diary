@@ -2,15 +2,19 @@
 // Recovery phrase dialog
 // ---------------------------------------------------------------------------
 //
-// Two jobs:
+// Three jobs:
 //
 // 1. Show a freshly generated BIP39 phrase exactly once, as unselectable
 //    tiles. There is deliberately no copy button: the user is meant to write
 //    the words down, and the CSS/event guard in `wiring.js` blocks selection
 //    and the clipboard.
-// 2. Ask for three specific positions from the phrase before the backend is
-//    allowed to persist `recovery.xml`. The backend repeats that check, so a
-//    frontend bug cannot silently enable a phrase the user never confirmed.
+// 2. Move to a separate confirmation window. The phrase is removed from the DOM
+//    first, so the user has to use the paper copy instead of reading the words
+//    while typing them.
+// 3. Ask for three specific positions, with prefix suggestions from the same
+//    BIP39 wordlist the backend validates against. The backend repeats the
+//    answer check, so a frontend bug cannot silently enable a phrase the user
+//    never confirmed.
 //
 // The phrase is held only in this module and in the DOM while the dialog is
 // open. `close()` wipes both; the immutable JS strings themselves are subject to
@@ -18,6 +22,10 @@
 // webview.
 
 import { createFocusTrap } from "./focus-trap.js";
+import {
+  createWordFields,
+  loadBip39Words,
+} from "./word-input.js";
 
 /**
  * Create the recovery dialog controller.
@@ -32,27 +40,45 @@ import { createFocusTrap } from "./focus-trap.js";
  */
 export function createRecoveryDialog(deps) {
   const { els } = deps;
-  const focusTrap = createFocusTrap(els.recoveryOverlay);
+  const phraseTrap = createFocusTrap(els.recoveryOverlay);
+  const confirmTrap = createFocusTrap(els.recoveryConfirmOverlay);
 
   /** The phrase currently on screen, or null when the dialog is closed. */
   let pending = null;
-
+  /** `"phrase"`, `"confirm"`, or null when closed. */
+  let stage = null;
   /** True while the backend is generating or writing; closing is blocked. */
   let busy = false;
 
   function isOpen() {
-    return !els.recoveryOverlay.hidden;
+    return stage !== null;
   }
 
-  function showError(message) {
-    els.recoveryError.textContent = message;
+  function showPhraseError(message) {
+    if (els.recoveryError) els.recoveryError.textContent = message;
+  }
+
+  function showConfirmError(message) {
+    if (els.recoveryConfirmError) {
+      els.recoveryConfirmError.textContent = message;
+    }
   }
 
   function setBusy(value) {
     busy = value;
-    els.recoveryConfirmBtn.disabled = value;
-    if (els.recoveryCancel) els.recoveryCancel.disabled = value;
-    if (els.recoveryClose) els.recoveryClose.disabled = value;
+    for (const button of [
+      els.recoveryContinueBtn,
+      els.recoveryCancel,
+      els.recoveryClose,
+      els.recoveryConfirmSubmit,
+      els.recoveryConfirmCancel,
+      els.recoveryConfirmClose,
+    ]) {
+      if (button) button.disabled = value;
+    }
+    for (const field of pending?.fields ?? []) {
+      field.input.disabled = value;
+    }
   }
 
   /** Remove the words from the DOM and drop the in-memory copy. */
@@ -62,12 +88,16 @@ export function createRecoveryDialog(deps) {
       pending.words = [];
       pending.indices = [];
       pending.recoveryId = "";
+      pending.fields = [];
     }
     pending = null;
     if (els.recoveryWords) els.recoveryWords.replaceChildren();
-    if (els.recoveryConfirmFields) els.recoveryConfirmFields.replaceChildren();
+    if (els.recoveryConfirmFields) {
+      els.recoveryConfirmFields.replaceChildren();
+    }
     if (els.recoveryId) els.recoveryId.textContent = "";
-    if (els.recoveryError) els.recoveryError.textContent = "";
+    showPhraseError("");
+    showConfirmError("");
   }
 
   /** Render the numbered word tiles. */
@@ -95,38 +125,8 @@ export function createRecoveryDialog(deps) {
     });
   }
 
-  /** Render one input per position the user must re-type. */
-  function renderConfirmation(indices) {
-    els.recoveryConfirmFields.replaceChildren();
-    const inputs = [];
-    for (const index of indices) {
-      const label = document.createElement("label");
-      label.className = "recovery-confirm-field";
-      label.setAttribute("for", `recovery-word-${index}`);
-
-      const caption = document.createElement("span");
-      caption.className = "recovery-confirm-label";
-      caption.textContent = deps.t("recovery.confirmWord", { n: index + 1 });
-
-      const input = document.createElement("input");
-      input.id = `recovery-word-${index}`;
-      input.className = "settings-input";
-      input.type = "text";
-      input.autocomplete = "off";
-      input.autocapitalize = "off";
-      input.spellcheck = false;
-      input.dataset.index = String(index);
-      input.setAttribute("aria-label", caption.textContent);
-
-      label.append(caption, input);
-      els.recoveryConfirmFields.append(label);
-      inputs.push(input);
-    }
-    return inputs;
-  }
-
   /**
-   * Generate a phrase and open the dialog.
+   * Generate a phrase and open the one-time display window.
    *
    * Nothing is persisted here. If the user cancels or the app dies before the
    * confirmation step, no recovery file is written and the next attempt
@@ -134,30 +134,32 @@ export function createRecoveryDialog(deps) {
    */
   async function open() {
     if (isOpen()) return;
-    els.recoveryError.textContent = "";
+    stage = "phrase";
+    showPhraseError("");
+    showConfirmError("");
     els.recoveryOverlay.hidden = false;
-    focusTrap.activate();
+    els.recoveryConfirmOverlay.hidden = true;
+    phraseTrap.activate();
     setBusy(true);
 
     try {
       const data = await deps.invoke("generate_recovery_phrase");
-      if (!isOpen()) return;
+      if (stage !== "phrase") return;
 
       pending = {
         words: data.words,
         indices: data.indices,
         recoveryId: data.recoveryId,
-        inputs: [],
+        fields: [],
       };
       els.recoveryId.textContent = deps.t("recovery.idLabel", {
         id: data.recoveryId,
       });
       renderWords(data.words);
-      pending.inputs = renderConfirmation(data.indices);
-      pending.inputs[0]?.focus();
+      els.recoveryContinueBtn?.focus?.();
     } catch (err) {
       console.error("generate_recovery_phrase failed:", err);
-      showError(
+      showPhraseError(
         deps.t("recovery.errGenerate", {
           message: typeof err === "string" ? err : String(err),
         })
@@ -167,15 +169,60 @@ export function createRecoveryDialog(deps) {
     }
   }
 
+  /**
+   * Leave the phrase display and open the separate confirmation window.
+   *
+   * Clearing `recoveryWords` is intentional: the confirmation is meant to prove
+   * the words were written down, not read off the screen.
+   */
+  async function continueToConfirm() {
+    if (stage !== "phrase" || !pending || busy) return;
+
+    stage = "confirm";
+    els.recoveryOverlay.hidden = true;
+    phraseTrap.deactivate({ restore: false });
+    if (els.recoveryWords) els.recoveryWords.replaceChildren();
+    els.recoveryConfirmOverlay.hidden = false;
+    confirmTrap.activate();
+    showConfirmError("");
+    setBusy(true);
+
+    try {
+      const words = await loadBip39Words(deps.invoke);
+      if (stage !== "confirm" || !pending) return;
+
+      const entries = pending.indices.map((index) => ({
+        index,
+        label: deps.t("recovery.confirmWord", { n: index + 1 }),
+      }));
+      const focusNext = (field) => {
+        const position = pending.fields.indexOf(field);
+        const next = pending.fields[position + 1];
+        if (next) next.focus();
+        else els.recoveryConfirmSubmit?.focus?.();
+      };
+      pending.fields = createWordFields(els.recoveryConfirmFields, entries, {
+        words,
+        t: deps.t,
+        idPrefix: "recovery-confirm-word",
+        onSelect: focusNext,
+        onAdvance: focusNext,
+      });
+      pending.fields[0]?.focus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Verify the requested words and persist the recovery wrapping. */
   async function confirm() {
-    if (!pending) return;
-    showError("");
+    if (stage !== "confirm" || !pending) return;
+    showConfirmError("");
 
-    const answers = pending.inputs.map((input) => input.value.trim());
+    const answers = pending.fields.map((field) => field.input.value.trim());
     if (answers.some((answer) => answer === "")) {
-      showError(deps.t("recovery.errConfirmMissing"));
-      pending.inputs.find((input) => input.value.trim() === "")?.focus();
+      showConfirmError(deps.t("recovery.errConfirmMissing"));
+      pending.fields.find((field) => field.input.value.trim() === "")?.focus();
       return;
     }
 
@@ -202,7 +249,7 @@ export function createRecoveryDialog(deps) {
       deps.setStatus(deps.t("recovery.enabled"), true);
     } catch (err) {
       console.error("confirm_recovery_phrase failed:", err);
-      showError(
+      showConfirmError(
         deps.t("recovery.errConfirm", {
           message: typeof err === "string" ? err : String(err),
         })
@@ -221,14 +268,18 @@ export function createRecoveryDialog(deps) {
   function close({ force = false } = {}) {
     if (!isOpen()) return;
     if (busy && !force) return;
+    stage = null;
     els.recoveryOverlay.hidden = true;
-    focusTrap.deactivate();
+    els.recoveryConfirmOverlay.hidden = true;
+    phraseTrap.deactivate({ restore: false });
+    confirmTrap.deactivate();
     clearPhrase();
   }
 
   return {
     isOpen,
     open,
+    continueToConfirm,
     confirm,
     close,
   };

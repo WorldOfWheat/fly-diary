@@ -17,7 +17,8 @@ fly-diary/
 │   ├── import-dialog.js    # 匯入對話框：掃描、進度、報告（createImportDialog）
 │   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
 │   ├── settings-dialog.js  # 設定對話框：日記本、自動鎖定、KDF、改密碼（createSettingsDialog）
-│   ├── recovery-dialog.js  # 一次性 BIP39 短語顯示、指定單字確認（createRecoveryDialog）
+│   ├── recovery-dialog.js  # 一次性 BIP39 短語、獨立確認視窗（createRecoveryDialog）
+│   ├── word-input.js       # BIP39 單字磁磚與前綴建議（共用於確認／解鎖）
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準、短語解鎖（createLockScreen）
 │   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
@@ -52,7 +53,7 @@ fly-diary/
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
-│   ├── recovery-dialog.test.js # BIP39 短語顯示、指定單字確認、取消/失敗不留資料
+│   ├── recovery-dialog.test.js # BIP39 短語、獨立確認視窗、前綴建議、取消/失敗不留資料
 │   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
 │   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
@@ -76,7 +77,7 @@ fly-diary/
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
 │       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM、recovery key 展開
-│       ├── bip39.rs        # BIP39 英文單字編碼／解碼、checksum、確認位置
+│       ├── bip39.rs        # BIP39 英文單字編碼／解碼、checksum、確認位置、wordlist 查詢
 │       ├── bip39_english.txt # 官方 BIP39 英文 wordlist（2048 字，編譯時嵌入）
 │       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── secure_memory.rs # 鎖定頁存放 diary key（mlock／VirtualLock、防 dump/fork）

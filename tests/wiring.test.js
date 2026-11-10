@@ -86,8 +86,12 @@ const ELEMENT_IDS = [
   "recoveryOverlay",
   "recoveryClose",
   "recoveryCancel",
-  "recoveryConfirmBtn",
+  "recoveryContinueBtn",
   "recoveryWords",
+  "recoveryConfirmOverlay",
+  "recoveryConfirmClose",
+  "recoveryConfirmCancel",
+  "recoveryConfirmSubmit",
   "diaryDir",
   "editor",
   "title",
@@ -194,6 +198,7 @@ function harness(overrides = {}) {
     openRecovery: spy("openRecovery"),
     removeRecovery: spy("removeRecovery"),
     closeRecovery: spy("closeRecovery"),
+    continueRecovery: spy("continueRecovery"),
     confirmRecovery: spy("confirmRecovery"),
     isRecoveryOpen: () => false,
     scheduleSave: spy("scheduleSave"),
@@ -1320,7 +1325,10 @@ test("recovery form and dialog controls call their handlers", () => {
     h.els.recoveryRemoveBtn.dispatch("click");
     h.els.recoveryClose.dispatch("click");
     h.els.recoveryCancel.dispatch("click");
-    h.els.recoveryConfirmBtn.dispatch("click");
+    h.els.recoveryContinueBtn.dispatch("click");
+    h.els.recoveryConfirmClose.dispatch("click");
+    h.els.recoveryConfirmCancel.dispatch("click");
+    h.els.recoveryConfirmSubmit.dispatch("click");
 
     assert.deepEqual(h.names(), [
       "showRecoveryForm",
@@ -1328,6 +1336,9 @@ test("recovery form and dialog controls call their handlers", () => {
       "handleRecoverySubmit",
       "openRecovery",
       "removeRecovery",
+      "closeRecovery",
+      "closeRecovery",
+      "continueRecovery",
       "closeRecovery",
       "closeRecovery",
       "confirmRecovery",
@@ -1342,6 +1353,19 @@ test("the recovery dialog backdrop closes it, but a click inside does not", () =
     });
     h.els.recoveryOverlay.dispatch("mousedown", {
       target: h.els.recoveryWords,
+    });
+
+    assert.equal(h.names().filter((name) => name === "closeRecovery").length, 1);
+  });
+});
+
+test("the recovery confirmation backdrop closes it", () => {
+  withHarness((h) => {
+    h.els.recoveryConfirmOverlay.dispatch("mousedown", {
+      target: h.els.recoveryConfirmOverlay,
+    });
+    h.els.recoveryConfirmOverlay.dispatch("mousedown", {
+      target: h.els.recoveryConfirmSubmit,
     });
 
     assert.equal(h.names().filter((name) => name === "closeRecovery").length, 1);

@@ -627,7 +627,8 @@ struct Recovery {
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryStatus {
     pub enabled: bool,
-    /// The identifier printed next to the phrase. `None` when disabled.
+    /// The identifier printed next to the phrase, rendered as twelve BIP39
+    /// words. `None` when disabled.
     pub recovery_id: Option<String>,
 }
 
@@ -768,12 +769,22 @@ pub fn recovery_exists(dir: &Path) -> bool {
 }
 
 /// Report whether a recovery phrase is configured.
+///
+/// The identifier is stored as 16 raw bytes (base64 inside `recovery.xml`) so
+/// existing sidecars stay readable, but it is exposed to the UI as twelve BIP39
+/// words. The words are just a human-friendly rendering of the same AAD bytes.
 pub fn recovery_status(dir: &Path) -> Result<RecoveryStatus, String> {
     match read_recovery(dir)? {
-        Some(recovery) => Ok(RecoveryStatus {
-            enabled: true,
-            recovery_id: Some(recovery.id_b64),
-        }),
+        Some(recovery) => {
+            let id = crypto::b64_decode(&recovery.id_b64)?;
+            let id: [u8; RECOVERY_ID_BYTES] = id
+                .try_into()
+                .map_err(|_| "Recovery identifier has the wrong length".to_string())?;
+            Ok(RecoveryStatus {
+                enabled: true,
+                recovery_id: Some(bip39::entropy_to_words(&id)?.join(" ")),
+            })
+        }
         None => Ok(RecoveryStatus {
             enabled: false,
             recovery_id: None,
@@ -792,7 +803,7 @@ pub fn confirm_recovery_phrase(
     dir: &Path,
     diary_key: &[u8; 32],
     phrase: &str,
-    recovery_id_b64: &str,
+    recovery_id: &str,
     indices: &[usize],
     answers: &[String],
 ) -> Result<String, String> {
@@ -803,10 +814,11 @@ pub fn confirm_recovery_phrase(
     let entropy = bip39::words_to_entropy(&words)?;
     bip39::verify_answers(&words, indices, answers)?;
 
-    let id = crypto::b64_decode(recovery_id_b64)?;
-    if id.len() != RECOVERY_ID_BYTES {
-        return Err("Recovery identifier has the wrong length".to_string());
-    }
+    // The public ID is a twelve-word BIP39 rendering; AAD binds the decoded
+    // 16 bytes, and the sidecar keeps the canonical base64 form for backwards
+    // compatibility with older builds.
+    let id_entropy = bip39::parse_phrase(recovery_id)?;
+    let id: [u8; RECOVERY_ID_BYTES] = *id_entropy;
 
     let recovery_key = crypto::derive_recovery_key(&entropy);
     let aad = recovery_aad(&id);
@@ -819,7 +831,7 @@ pub fn confirm_recovery_phrase(
     };
     write_recovery(dir, &recovery)?;
 
-    Ok(recovery.id_b64)
+    Ok(bip39::entropy_to_words(&id)?.join(" "))
 }
 
 /// Whether `key` can actually open the diary data in `dir`.
@@ -2410,7 +2422,7 @@ mod tests {
     fn recovery_fixture() -> (String, String, Vec<usize>, Vec<String>) {
         let words = bip39::entropy_to_words(&[0u8; 16]).unwrap();
         let phrase = words.join(" ");
-        let id = crypto::b64_encode(&[7u8; 16]);
+        let id = bip39::entropy_to_words(&[7u8; 16]).unwrap().join(" ");
         let indices = vec![0, 5, 11];
         let answers = indices.iter().map(|index| words[*index].clone()).collect();
         (phrase, id, indices, answers)
@@ -2527,8 +2539,10 @@ mod tests {
 
         let path = dir.join("recovery.xml");
         let raw = fs::read_to_string(&path).unwrap();
+        let id_bytes = bip39::parse_phrase(&id).unwrap();
+        let id_b64 = crypto::b64_encode(&id_bytes[..]);
         let other_id = crypto::b64_encode(&[8u8; 16]);
-        fs::write(&path, raw.replace(&id, &other_id)).unwrap();
+        fs::write(&path, raw.replace(&id_b64, &other_id)).unwrap();
 
         assert!(recover_diary_key(&dir, &phrase).is_err());
     }
