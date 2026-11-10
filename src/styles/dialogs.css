@@ -1,0 +1,560 @@
+/* ---------- Import dialog ---------- */
+
+/* Same `hidden` trap as `.calendar-overlay`: layout is gated on `:not([hidden])`
+   so a hidden dialog can never sit invisibly over the app and eat clicks. */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: var(--overlay);
+}
+
+.modal-overlay:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(1.5rem, env(safe-area-inset-top))
+    max(1.5rem, env(safe-area-inset-right))
+    max(1.5rem, env(safe-area-inset-bottom))
+    max(1.5rem, env(safe-area-inset-left));
+  animation: overlay-in 0.12s ease-out;
+}
+
+.modal-overlay[hidden] {
+  display: none !important;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: 35rem;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.875rem 1.125rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.modal-close {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: 1.125rem;
+  line-height: 1;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.modal-close:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  min-height: 0;
+  padding: 0.875rem 1.125rem;
+  overflow-y: auto;
+}
+
+.modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.125rem;
+  border-top: 1px solid var(--border);
+}
+
+.modal-foot .btn-browse,
+.modal-foot .btn-primary {
+  padding: 0.375rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: var(--radius);
+}
+
+.import-dir {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
+.import-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.875rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.import-stat {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.import-stat b {
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.import-stat.ready b {
+  color: var(--accent);
+}
+
+.import-stat.conflict b {
+  color: var(--warn);
+}
+
+.import-stat.failed b {
+  color: var(--danger);
+}
+
+.import-overwrite {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+
+.import-overwrite[hidden] {
+  display: none;
+}
+
+.import-overwrite input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  /* Scales with the window instead of a fixed 320px. */
+  max-height: min(20rem, 45vh);
+  padding: 0.25rem;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.import-row {
+  display: grid;
+  grid-template-columns: 5.75rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 0.375rem;
+}
+
+.import-row:hover {
+  background: var(--hover-faint);
+}
+
+.import-row .row-date {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-row .row-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-row .row-title.empty {
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.import-row .row-badge {
+  flex: none;
+  padding: 0.0625rem 0.4375rem;
+  font-size: 0.625rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border-radius: 999px;
+}
+
+.import-row.ready .row-badge {
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.import-row.conflict .row-badge {
+  color: var(--warn-text);
+  background: var(--warn-wash);
+}
+
+.import-row.failed .row-badge {
+  color: var(--danger);
+  background: var(--danger-wash);
+}
+
+.import-row.failed .row-title {
+  color: var(--danger);
+}
+
+.import-row .row-reason {
+  grid-column: 2 / -1;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.import-row.failed .row-reason {
+  color: var(--danger);
+}
+
+/* ---------- Import progress ---------- */
+
+.import-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+}
+
+.import-progress[hidden] {
+  display: none;
+}
+
+.import-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.import-progress-count {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.import-progress-track {
+  height: 0.375rem;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.import-progress-bar {
+  width: 0;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 0.15s linear;
+}
+
+.import-result {
+  padding: 0.5rem 0.625rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  background: var(--bg);
+  border-radius: var(--radius);
+}
+
+.import-result[hidden] {
+  display: none;
+}
+
+.import-result .result-line {
+  color: var(--text);
+}
+
+.import-result .result-fail {
+  color: var(--danger);
+}
+
+.import-error {
+  flex: 1;
+  font-size: 0.75rem;
+  color: var(--danger);
+}
+
+/* ---------- Settings dialog ---------- */
+
+/* Each block of related controls. A hairline between sections keeps the
+   dialog readable without needing a second level of cards. */
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-section:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.settings-heading {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.settings-hint {
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Label on the left, control on the right. The label column is fixed so the
+   inputs line up down the dialog. */
+.settings-row {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.settings-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.settings-input,
+.settings-select {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  font-family: inherit;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-input:focus,
+.settings-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.settings-input[type="number"] {
+  font-family: var(--mono);
+}
+
+/* The diary folder, shown read-only. Same truncation trick as the footer path:
+   the tail (the folder name) is the part worth reading, so it stays visible. */
+.settings-path {
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  text-align: left;
+}
+
+/* Buttons that act on the whole vault, sitting under the path. */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+/* Read-only summary of the parameters currently stored in the vault. */
+.settings-kdf {
+  padding: 0.5rem 0.625rem;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-kdf:empty {
+  display: none;
+}
+
+.settings-advanced {
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-summary {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.settings-summary:hover {
+  color: var(--accent);
+}
+
+.settings-kdf-grid {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  align-items: center;
+  gap: 0.375rem 0.625rem;
+  margin: 0.5rem 0;
+}
+
+.settings-advanced .btn-browse {
+  font-size: 0.6875rem;
+}
+
+/* Calibration result line; empty until the user runs it. */
+#settings-calibrate-note:empty {
+  display: none;
+}
+
+/* ---------- Statistics dialog ---------- */
+
+/* Four headline numbers. `auto-fit` keeps them on one row on a wide dialog and
+   wraps to two rows on a narrow one without a media query. */
+.stats-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr));
+  gap: 0.5rem;
+}
+
+.stats-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.5rem 0.625rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stats-value {
+  font-size: 1.125rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  color: var(--text);
+}
+
+.stats-label {
+  font-size: 0.625rem;
+  color: var(--text-muted);
+}
+
+/* First / latest date line. Hidden while there are no entries, because the
+   empty-state message below already says everything. */
+.stats-range {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.stats-range:empty {
+  display: none;
+}
+
+.stats-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+/* Bar charts are pure CSS: each column is a flex child whose height is a
+   percentage of the tallest bucket, so no chart library is needed. */
+.stats-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.1875rem;
+  height: 5rem;
+  padding: 0.25rem 0.375rem 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.stats-bar {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.125rem;
+  min-width: 0;
+  height: 100%;
+}
+
+/* The painted column. `--v` is 0–1 and set inline by `renderStats()`. */
+.stats-bar-fill {
+  width: 100%;
+  min-height: 0.125rem;
+  height: calc(var(--v, 0) * 100%);
+  background: var(--accent);
+  border-radius: 0.125rem 0.125rem 0 0;
+  opacity: 0.85;
+  transition: height 0.15s ease;
+}
+
+/* A bucket with no entries still gets a faint stub so the axis reads as a
+   series rather than a gap. */
+.stats-bar-fill.empty {
+  background: var(--border);
+  opacity: 1;
+}
+
+.stats-bar-label {
+  flex: none;
+  font-size: 0.5625rem;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* Weekday labels are single characters in Chinese but three letters in
+   English, so they need a little more room to stay legible. */
+.stats-chart.weekdays .stats-bar-label {
+  font-size: 0.5625rem;
+}
+
+.stats-empty {
+  padding: 1.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+

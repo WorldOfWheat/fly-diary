@@ -71,7 +71,8 @@ key 必須一致、`index.html`、`main.js` 與 `attachments.js` 用到的 key �
 `installDom`、`fakeEls`、`fakeT`、`spy`、`fakeInvoke`），不需要 jsdom 之類的額外套件；
 遇到 stub 不支援的 selector 會直接丟錯，避免測試默默通過。
 
-`tests/styles.test.js` 補上 DOM stub 看不到的一層：它直接讀 `styles.css` 的文字，驗證
+`tests/styles.test.js` 補上 DOM stub 看不到的一層：它讀入口 `styles.css` 及其 `@import` 的
+`styles/*.css`，驗證
 `[hidden]` 疊層不會被 `display` 蓋掉、月曆與 lightbox 的 `z-index` 順序，以及手機版的
 `.app[data-layer]` 顯隱規則與返回鈕的顯示條件。這類規則若寫錯，其他測試不會失敗，但使用者會看到
 一個透明卻吃掉所有點擊的浮層（或永遠離不開編輯器）。

@@ -112,8 +112,8 @@
 
 實作上有幾個重點：
 
-- **`data-theme` 屬性而非單純 media query**：`main.js` 把解析後的結果寫到 `<html data-theme="light|dark">`，`styles.css` 用 `:root[data-theme="dark"]` 覆寫整組變數。這樣使用者選的「淺色」才能蓋過系統的深色偏好 —— 單靠 `@media (prefers-color-scheme)` 做不到。
-- **顏色全部走變數**：`styles.css` 裡沒有任何硬編碼色值（除了變數定義本身），29 處原本寫死的 `rgba()` / `#fff` 都改成語意變數，例如 `--hover`（「疊在底層上的淡色」）、`--on-accent`（「畫在強調色上的文字」）、`--overlay`（模態遮罩）。語意命名是關鍵：`--hover` 在淺色是 4% 黑、在深色是 6% 白，同一個名字在兩套主題都成立。
+- **`data-theme` 屬性而非單純 media query**：`main.js` 把解析後的結果寫到 `<html data-theme="light|dark">`，`styles/tokens.css` 用 `:root[data-theme="dark"]` 覆寫整組變數。這樣使用者選的「淺色」才能蓋過系統的深色偏好 —— 單靠 `@media (prefers-color-scheme)` 做不到。
+- **顏色全部走變數**：`styles/` 裡沒有任何硬編碼色值（除了變數定義本身），29 處原本寫死的 `rgba()` / `#fff` 都改成語意變數，例如 `--hover`（「疊在底層上的淡色」）、`--on-accent`（「畫在強調色上的文字」）、`--overlay`（模態遮罩）。語意命名是關鍵：`--hover` 在淺色是 4% 黑、在深色是 6% 白，同一個名字在兩套主題都成立。
 - **`color-scheme`**：兩套主題各自宣告 `color-scheme: light` / `dark`，讓 WebView 的原生元件（捲軸、輸入框、`<details>` 箭頭）跟著換色，不會出現深色背景配淺色捲軸。
 - **深色主題的強調色調亮**：淺色的 `#4a7c59` 在深色背景上對比只有約 3:1，不足以當內文，因此深色改用 `#74b287`，並把 `--on-accent` 改成深色，讓主要按鈕上的文字仍然清楚。
 - **收藏高亮在深色下重新設計**：淺色的螢光黃在深色背景上會過亮、蓋過文字，深色版改成低飽和的暖褐底（`#453a1c`）配亮邊條，仍然一眼可辨但不搶戲。

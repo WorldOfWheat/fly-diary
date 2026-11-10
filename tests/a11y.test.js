@@ -13,9 +13,11 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { loadStylesheet } from "./helpers/css.js";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const html = readFileSync(join(root, "src/index.html"), "utf8");
-const css = readFileSync(join(root, "src/styles.css"), "utf8");
+const css = loadStylesheet(join(root, "src/styles.css"));
 
 function cssBlock(selector) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

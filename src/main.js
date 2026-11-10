@@ -429,7 +429,7 @@ function initLocaleSwitch() {
 //   "dark"   — always dark
 //
 // The resolved theme is written to `<html data-theme="...">`, which is what the
-// `:root[data-theme="dark"]` block in `styles.css` keys off. The attribute is
+// `:root[data-theme="dark"]` block in `styles/tokens.css` keys off. The attribute is
 // used rather than a bare media query so an explicit choice can override the
 // system setting.
 

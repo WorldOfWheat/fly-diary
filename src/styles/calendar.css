@@ -1,0 +1,305 @@
+/* ---------- Calendar overlay ----------
+   The date selector takes over the whole window instead of hanging off the
+   date pill. A month at full size is readable at a glance, which is the point:
+   the dots marking days that already have an entry become a visible pattern
+   rather than a detail you have to hunt for. */
+
+/* `display` is deliberately *not* set on the base rule. The `hidden` attribute
+   only maps to the UA rule `[hidden] { display: none }`, which has the same
+   specificity as a class selector and loses to author styles. Setting
+   `display: flex` here would therefore keep the overlay laid out — and, being
+   `position: fixed; inset: 0`, silently swallowing every click in the app.
+   Gating the layout on `:not([hidden])` keeps the two states mutually
+   exclusive no matter what else is added later. */
+.calendar-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.calendar-overlay:not([hidden]) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: clamp(0.75rem, 3vw, 2.5rem);
+}
+
+.calendar-overlay[hidden] {
+  display: none !important;
+}
+
+/* The scrim is a sibling of the panel so a click on it can be told apart from
+   a click inside the panel, and so the panel can animate independently. */
+.calendar-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  animation: overlay-in 0.12s ease-out;
+}
+
+.calendar-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(46rem, 100%);
+  max-height: 100%;
+  padding: clamp(1rem, 2.5vw, 1.75rem);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  animation: calendar-in 0.14s ease-out;
+  /* On a short window (480px tall) the month grid cannot shrink below a usable
+     cell size, so the panel scrolls instead of squashing the days. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+@keyframes calendar-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* The editor behind the overlay must not scroll while it is open. */
+body.calendar-open {
+  overflow: hidden;
+}
+
+.calendar-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.calendar-heading {
+  min-width: 0;
+}
+
+.cal-title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.cal-summary {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-close {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.cal-close svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.cal-close:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+/* Month stepper: the label in the middle doubles as "back to the selected
+   month", which is why it is a button rather than a heading. */
+.calendar-month {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.cal-step {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.cal-step svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cal-step:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+/* The year stepper sits outside the month stepper and is deliberately quieter:
+   it is the coarse control, used far less often than the month arrows. */
+.cal-step-year {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.cal-step-year:hover {
+  opacity: 1;
+}
+
+.cal-month {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  border-radius: 0.375rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-month:hover {
+  background: var(--hover);
+}
+
+.cal-weekdays,
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+
+.cal-weekdays span {
+  padding: 0.125rem 0;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* The grid takes the leftover height, so the cells grow with the window
+   instead of staying a fixed 2rem tall in the middle of a large screen. */
+.cal-grid {
+  flex: 1;
+  min-height: 0;
+  grid-auto-rows: minmax(2.25rem, 1fr);
+}
+
+.cal-day {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--text);
+  border-radius: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cal-day:hover {
+  background: var(--hover-strong);
+}
+
+.cal-day:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Days outside the displayed month stay clickable but recede. The muted token
+   already meets 4.5:1, so do not dim the text further. */
+.cal-day.outside {
+  color: var(--text-muted);
+}
+
+.cal-day.today {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.cal-day.selected {
+  font-weight: 600;
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.cal-day.selected:hover {
+  background: var(--accent-hover);
+}
+
+/* Dot marking a day that already has a diary entry. At full-screen size it is
+   the primary signal, so it is a little larger than the old popup version. */
+.cal-day.has-entry::after {
+  content: "";
+  position: absolute;
+  bottom: 0.3125rem;
+  left: 50%;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  margin-left: -0.15625rem;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.cal-day.selected.has-entry::after {
+  background: var(--on-accent);
+}
+
+.calendar-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--border);
+}
+
+.cal-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+}
+
+.cal-legend-dot {
+  width: 0.3125rem;
+  height: 0.3125rem;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+.cal-today {
+  padding: 0.3125rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--accent);
+  border-radius: 999px;
+}
+
+.cal-today:hover {
+  background: var(--accent-wash-strong);
+}
+

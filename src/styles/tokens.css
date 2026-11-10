@@ -1,0 +1,168 @@
+/* ===========================================================================
+   Fly Diary — stylesheet
+
+   Scaling model
+   -------------
+   Every size in this file is expressed in `rem`, and `html` carries a
+   `font-size` that is derived from the viewport. That gives us three things at
+   once:
+
+   1. The whole UI scales with the window, so a maximised 2560px display does
+      not show a 900px-sized app marooned in the middle of the screen.
+   2. The user's OS/browser font-size preference is respected, because `rem`
+      is relative to the root font size and we only ever *clamp* it.
+   3. Accessibility zoom still works: the `clamp()` bounds stop the layout from
+      collapsing on tiny windows or ballooning on huge ones.
+
+   On top of the fluid base there is a user-controlled multiplier,
+   `--font-scale`, driven by the A−/A+ buttons in the editor footer. Because
+   every size is in `rem`, bumping the root font size scales the entire UI —
+   text, padding, icons, the calendar — in one step, and the virtual-scroll row
+   height follows automatically.
+
+   The one place that cannot use `rem` is the virtual-scroll row height, which
+   JavaScript needs as a number. It is published as `--row-h` and read back with
+   `getComputedStyle`, so CSS stays the single source of truth.
+   =========================================================================== */
+
+:root {
+  /* ---------- Palette ----------
+     Every colour in this file goes through a variable so the whole app can be
+     re-themed by swapping this block. The tokens are semantic rather than
+     literal: `--hover` is "a faint wash over whatever is behind it", not
+     "4% black", which is what lets the dark theme invert it. */
+  --bg: #f7f7f5;
+  --panel: #ffffff;
+  --sidebar-bg: #f0efec;
+  --border: #e2e0db;
+  /* A stronger outline for form controls and icon-only buttons: the decorative
+     `--border` is below the 3:1 non-text contrast requirement on the light
+     surfaces. */
+  --border-strong: #8a8780;
+  --text: #2b2a27;
+  --text-muted: #6f6c66;
+  --accent: #4a7c59;
+  --accent-hover: #3d6849;
+  --danger: #b4544a;
+  --warn: #b8860b;
+  --warn-text: #8a6508;
+
+  /* Text and marks drawn on top of `--accent`. */
+  --on-accent: #ffffff;
+
+  /* Interaction washes. These are translucent so they tint whatever surface
+     they sit on, which is why they work unchanged in both themes. */
+  --hover: rgba(0, 0, 0, 0.04);
+  --hover-strong: rgba(0, 0, 0, 0.06);
+  --pressed: rgba(0, 0, 0, 0.09);
+  --hover-faint: rgba(0, 0, 0, 0.03);
+
+  /* Tinted washes for the accent / warn / danger badges. */
+  --accent-wash: rgba(74, 124, 89, 0.12);
+  --accent-wash-strong: rgba(74, 124, 89, 0.1);
+  --warn-wash: rgba(184, 134, 11, 0.14);
+  --danger-wash: rgba(180, 84, 74, 0.12);
+
+  /* Elevation. Dark themes need heavier shadows to read as depth. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.08);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.06);
+  --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.2);
+
+  /* Scrim behind modal dialogs. */
+  --overlay: rgba(30, 29, 27, 0.32);
+
+  /* Scrollbar thumb. */
+  --scrollbar: rgba(0, 0, 0, 0.15);
+  --scrollbar-hover: rgba(0, 0, 0, 0.25);
+
+  /* Favourite highlight: a bright, high-visibility wash used on bookmarked
+     rows in the sidebar. */
+  --favourite-bg: #fff3a8;
+  --favourite-bg-hover: #ffe97a;
+  --favourite-edge: #f0c419;
+
+  /* ---------- Typography ---------- */
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC",
+    "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --mono: "SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* ---------- Metrics (all rem, so they follow the root size) ---------- */
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  /* Sidebar width: grows with the window but never eats the editor. */
+  --sidebar-w: clamp(15rem, 22vw, 21rem);
+
+  /* Virtual-scroll row pitch. Read by main.js via getComputedStyle: rows are
+     absolutely positioned at `index * --row-h`, so this is the distance from
+     one row's top to the next, not the painted height. */
+  --row-h: 3.25rem;
+
+  /* Breathing room between rows. The painted box is `--row-h - --row-gap`, so
+     the gap lives inside the pitch and the scroll math stays exact. */
+  --row-gap: 0.25rem;
+
+  /* Editor measure: long lines are hard to read, so cap the text column and
+     centre it once the window gets wide. */
+  --measure: 46rem;
+
+  /* Lets the webview draw native widgets (scrollbars, form controls, the
+     `<details>` marker) in the matching scheme. */
+  color-scheme: light;
+}
+
+/* ---------- Dark theme ----------
+   Applied by `main.js` as `data-theme="dark"` on `<html>`. The attribute is
+   used instead of a bare `prefers-color-scheme` query because the user can
+   override the system setting from the lock screen.
+
+   The accent is lightened from #4a7c59: the light-theme green only reaches
+   about 3:1 against a dark background, which is too low for body text. */
+:root[data-theme="dark"] {
+  --bg: #1b1a18;
+  --panel: #262523;
+  --sidebar-bg: #201f1d;
+  --border: #3a3835;
+  --border-strong: #76726b;
+  --text: #e9e7e2;
+  --text-muted: #9c988f;
+  --accent: #74b287;
+  --accent-hover: #8cc49c;
+  --danger: #d97b70;
+  --warn: #d9a520;
+  --warn-text: #e0b545;
+
+  /* Dark text on the lightened accent keeps the primary button readable. */
+  --on-accent: #14201a;
+
+  --hover: rgba(255, 255, 255, 0.06);
+  --hover-strong: rgba(255, 255, 255, 0.09);
+  --pressed: rgba(255, 255, 255, 0.13);
+  --hover-faint: rgba(255, 255, 255, 0.04);
+
+  --accent-wash: rgba(116, 178, 135, 0.16);
+  --accent-wash-strong: rgba(116, 178, 135, 0.14);
+  --warn-wash: rgba(217, 165, 32, 0.18);
+  --danger-wash: rgba(217, 123, 112, 0.16);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 0.5rem 2rem rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 0.75rem 2rem rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-modal: 0 1.25rem 3rem rgba(0, 0, 0, 0.65);
+
+  --overlay: rgba(0, 0, 0, 0.55);
+
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --scrollbar-hover: rgba(255, 255, 255, 0.28);
+
+  /* The light-theme neon yellow glows unpleasantly on a dark surface, so the
+     dark variant is a muted warm brown with a brighter edge bar. The bookmark
+     is still obvious, but it no longer outshines the text. */
+  --favourite-bg: #453a1c;
+  --favourite-bg-hover: #54461f;
+  --favourite-edge: #d9a520;
+
+  color-scheme: dark;
+}
