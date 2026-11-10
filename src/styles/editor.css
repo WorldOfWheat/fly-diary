@@ -1,0 +1,176 @@
+/* ---------- Editor ---------- */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+}
+
+/* Shown while a file is dragged anywhere over the editor. The class is only
+   added for real file drags, not for the gallery's internal reorder drag. */
+.editor.is-dragover {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}
+
+.editor.is-dragover #content {
+  background: var(--accent-wash);
+}
+
+/* The header holds the date navigator and the status cluster. Both are
+   intrinsically wide (a nowrap date pill plus four buttons), and neither can
+   shrink without losing content, so the row is allowed to wrap instead of
+   letting the two halves overlap. `.editor` is a column flex container whose
+   body is `flex: 1`, so a taller header simply takes height from the textarea. */
+.editor-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  row-gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  padding-left: max(1.25rem, env(safe-area-inset-left));
+  padding-right: max(1.25rem, env(safe-area-inset-right));
+  border-bottom: 1px solid var(--border);
+}
+
+/* Phone-only "back to list" button. It is hidden by default and only shown by
+   the phone breakpoint below, where the app is split into two layers. */
+.btn-back {
+  display: none;
+  flex: none;
+  align-items: center;
+  min-height: 1.75rem;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem 0.25rem 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.btn-back:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+html[data-input-modality="keyboard"] .btn-back:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn-back svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ---------- Date navigator ---------- */
+
+/* `flex: none` keeps the navigator at its natural width. Without it the
+   `min-width: 0` below lets flexbox compress the box narrower than its
+   contents, and because the step buttons and the nowrap date pill cannot
+   shrink, they spill out of the box and paint over the status cluster.
+   `overflow: hidden` is the backstop: if the navigator ever does run out of
+   room, it clips rather than overlapping its neighbour. */
+.date-nav {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Round step buttons with an inline chevron. */
+.date-step {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.875rem;
+  height: 1.875rem;
+  padding: 0;
+  color: var(--text-muted);
+  border-radius: 50%;
+}
+
+.date-step svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.date-step:hover {
+  color: var(--text);
+  background: var(--hover-strong);
+}
+
+.date-step:active {
+  background: var(--pressed);
+}
+
+/* The visible pill. Clicking it opens our own calendar; the native input is
+   only a hidden value holder because its popup is drawn by the OS. */
+.date-display {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.date-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3125rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.date-label:hover {
+  background: var(--hover);
+  border-color: var(--border);
+}
+
+.date-main {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.date-sub {
+  font-size: 0.75rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+/* The native input is never shown; it only carries the value so the rest of
+   the app can keep reading `els.datePicker.value`. */
+.date-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+  border: none;
+  pointer-events: none;
+}
+

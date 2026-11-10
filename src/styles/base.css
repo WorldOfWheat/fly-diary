@@ -1,0 +1,177 @@
+
+/* Fluid root size. 0.9375rem (15px) at 900px wide, growing to 1.0625rem
+   (17px) at 1600px, never below 0.875rem (14px) or above 1.125rem (18px).
+   `--font-scale` (0.8–1.6) is the user's own multiplier, set from the footer
+   control and persisted in localStorage. */
+html {
+  --font-scale: 1;
+  font-size: calc(
+    clamp(0.875rem, 0.78rem + 0.28vw, 1.125rem) * var(--font-scale)
+  );
+  height: 100%;
+}
+
+/* On a phone-sized viewport the fluid base already sits at its 0.875rem floor,
+   so the only thing that can still overflow the layout is the user multiplier.
+   Capping it at 1.2 keeps the A+ control useful without letting a 320px window
+   push the header and footer past the edges. */
+@media (max-width: 400px) {
+  html {
+    --font-scale: min(var(--font-scale), 1.2);
+  }
+}
+
+/* Browser defaults and the box model live in reset.css. This file only adds
+   the app's own primitives: the button chrome below removes the UA padding,
+   and component classes set the spacing they need. */
+
+/* Touch behaviour, applied once for the whole app.
+   - `manipulation` removes the ~300ms double-tap delay and stops a double tap
+     from zooming the webview, without disabling pinch-zoom.
+   - The tap highlight is the webview's blue flash on touch; every control here
+     already has its own `:active` / `:hover` feedback, so the flash only adds
+     noise.
+   - `overscroll-behavior` stops a scroll that reaches the end of an inner pane
+     from chaining to the page behind it (the classic "pull to refresh" jolt). */
+button,
+input,
+select,
+textarea,
+summary,
+.entry-item,
+.cal-day,
+.view-tab,
+.date-label {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.entry-scroll,
+.modal-body,
+.import-list,
+.lock-screen {
+  overscroll-behavior: contain;
+}
+
+body {
+  height: 100%;
+  font-family: var(--font);
+  font-size: 1rem;
+  color: var(--text);
+  background: var(--bg);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The app spaces these blocks with flex/grid `gap`, so the UA's heading and
+   paragraph margins would add to the gap. This is deliberately scoped to the
+   app's own copy instead of zeroing every element in the reset. Rules later in
+   the cascade (for example `.lock-subtitle`) can still add one side back. */
+.lock-title,
+.lock-subtitle,
+.lock-hint,
+.lock-error,
+.modal-title,
+.settings-heading,
+.settings-hint,
+.import-dir,
+.import-error,
+.stats-range,
+.stats-empty,
+.cal-title,
+.cal-summary,
+.attachments-title,
+.attachment-empty,
+.attachment-status {
+  margin: 0;
+}
+
+/* ---------- Shared primitives ---------- */
+
+/* Label text that is available to assistive tech but does not change the
+   visual design. Do not use `display: none`: that would remove the label from
+   the accessibility tree as well. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Every text input in the app shares this look. */
+.lock-input,
+#search,
+.title-input,
+#content {
+  font-family: inherit;
+  color: var(--text);
+  background: transparent;
+  border: none;
+  outline: none;
+}
+
+button {
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  background: transparent;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+/* Focus rings are keyboard-only. `input-modality.js` records whether the last
+   input was a pointer or the keyboard; WebKitGTK can otherwise match
+   `:focus-visible` after a mouse click. Using `:focus` here (rather than
+   `:focus-visible`) also works in webviews without `:focus-visible` support;
+   the attribute does the filtering. */
+html[data-input-modality="keyboard"] button:focus,
+html[data-input-modality="keyboard"] input:focus,
+html[data-input-modality="keyboard"] textarea:focus,
+html[data-input-modality="keyboard"] select:focus,
+html[data-input-modality="keyboard"] a:focus,
+html[data-input-modality="keyboard"] summary:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* `#content` sets `outline: none` in the shared input reset; restore a visible
+   keyboard focus ring inside the text area. */
+html[data-input-modality="keyboard"] #content:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Pointer focus must not fall back to the UA ring either. Component focus
+   rules are gated the same way, so this only has to beat the browser default. */
+html[data-input-modality="pointer"] :focus {
+  outline: none;
+}
+
+/* Placeholders are text too: they need the same 4.5:1 contrast as labels.
+   Keep them solid rather than the browser's faded default. */
+::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+/* ---------- App shell ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+}
+
+.app[hidden] {
+  display: none;
+}
+

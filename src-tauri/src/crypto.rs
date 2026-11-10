@@ -43,6 +43,13 @@ pub const KEY_LEN: usize = 32;
 /// Domain separator for the legacy SHA-256 derivation.
 const LEGACY_DOMAIN: &[u8] = b"fly-diary/v1";
 
+/// Domain separator for the optional recovery-phrase key.
+///
+/// The recovery phrase encodes 128 random bits. This hash expands them to the
+/// 32-byte AES key that wraps the diary key. The domain string keeps that
+/// expansion from ever colliding with another use of the same input.
+const RECOVERY_DOMAIN: &[u8] = b"fly-diary/recovery-key";
+
 // ---------------------------------------------------------------------------
 // KDF parameters
 // ---------------------------------------------------------------------------
@@ -158,6 +165,24 @@ pub fn derive_legacy_key(passphrase: &str, salt: &[u8]) -> Zeroizing<[u8; KEY_LE
     hasher.update(LEGACY_DOMAIN);
     hasher.update(salt);
     hasher.update(passphrase.as_bytes());
+    let digest = hasher.finalize();
+
+    let mut key = Zeroizing::new([0u8; KEY_LEN]);
+    key.copy_from_slice(&digest);
+    key
+}
+
+/// Expand the 128-bit recovery entropy into the 32-byte key that wraps the
+/// diary key.
+///
+/// No password KDF is needed here: the input is uniformly random and has 128
+/// bits of entropy, so the only job left is a domain-separated expansion to the
+/// AES-256 key size. The effective strength is the phrase's 128 bits, which is
+/// well beyond an offline search.
+pub fn derive_recovery_key(entropy: &[u8; 16]) -> Zeroizing<[u8; KEY_LEN]> {
+    let mut hasher = Sha256::new();
+    hasher.update(RECOVERY_DOMAIN);
+    hasher.update(entropy);
     let digest = hasher.finalize();
 
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
@@ -330,11 +355,16 @@ pub fn decrypt(
 // Encoding helpers
 // ---------------------------------------------------------------------------
 
-/// Generate a random 16-byte salt, base64 encoded (stored in the vault file).
-pub fn new_salt_b64() -> String {
-    let mut bytes = [0u8; 16];
+/// Generate `len` random bytes, base64 encoded.
+pub fn random_bytes_b64(len: usize) -> String {
+    let mut bytes = vec![0u8; len];
     rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
     B64.encode(bytes)
+}
+
+/// Generate a random 16-byte salt, base64 encoded (stored in the vault file).
+pub fn new_salt_b64() -> String {
+    random_bytes_b64(16)
 }
 
 /// Encode bytes as standard base64.
@@ -463,6 +493,33 @@ mod tests {
         let b = new_diary_key();
         assert_eq!(a.len(), KEY_LEN);
         assert_ne!(*a, *b);
+    }
+
+    #[test]
+    fn recovery_key_is_deterministic_and_32_bytes() {
+        let entropy = [0x42u8; 16];
+        let a = derive_recovery_key(&entropy);
+        let b = derive_recovery_key(&entropy);
+        assert_eq!(a.len(), KEY_LEN);
+        assert_eq!(*a, *b);
+    }
+
+    #[test]
+    fn recovery_key_depends_on_every_entropy_byte() {
+        let base = derive_recovery_key(&[0u8; 16]);
+        for position in 0..16 {
+            let mut entropy = [0u8; 16];
+            entropy[position] = 1;
+            assert_ne!(*base, *derive_recovery_key(&entropy));
+        }
+    }
+
+    #[test]
+    fn recovery_key_is_domain_separated_from_the_legacy_derivation() {
+        let entropy = [7u8; 16];
+        let recovery = derive_recovery_key(&entropy);
+        let legacy = derive_legacy_key(&String::from_utf8_lossy(&entropy), &[0u8; 16]);
+        assert_ne!(*recovery, *legacy);
     }
 
     #[test]

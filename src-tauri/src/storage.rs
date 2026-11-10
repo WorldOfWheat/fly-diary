@@ -5,6 +5,7 @@
 //! ```text
 //! diary/
 //! ├── vault.xml              # KDF params + wrapped diary key (no key material)
+//! ├── recovery.xml           # optional second wrapping of the diary key
 //! ├── index.xml              # encrypted {date, title} index for the sidebar
 //! ├── 2026-10-23.xml         # one encrypted entry per day
 //! └── 2026-10-22.xml
@@ -33,12 +34,29 @@ use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::bip39;
 use crate::crypto;
 use crate::fsutil;
 use crate::xml::{self, EncryptedEntry};
 
 /// Name of the vault metadata file (salt + verifier).
 const VAULT_FILE: &str = "vault.xml";
+
+/// Sidecar holding the optional recovery wrapping.
+///
+/// Deliberately a separate file rather than another element in `vault.xml`.
+/// Older builds of the app rewrite `vault.xml` from a fixed set of fields when
+/// the passphrase or KDF parameters change, so a recovery field living there
+/// would be silently dropped by an older binary. A sidecar is invisible to the
+/// old code, and the diary key is stable across password changes, so the
+/// recovery wrapping stays valid.
+const RECOVERY_FILE: &str = "recovery.xml";
+
+/// Version of the recovery sidecar format.
+const RECOVERY_VERSION: u8 = 1;
+
+/// Domain separation for the associated data of the recovery wrapping.
+const RECOVERY_AAD_LABEL: &[u8] = b"fly-diary/recovery";
 
 /// Name of the encrypted sidebar index.
 const INDEX_FILE: &str = "index.xml";
@@ -502,6 +520,11 @@ pub fn create_vault(
     }
     params.validate()?;
 
+    // A sidecar without a vault cannot belong to anything; the new random diary
+    // key would make it undecryptable anyway. Best effort: a stale file must
+    // not block creating a fresh diary.
+    let _ = remove_recovery(dir);
+
     let salt_b64 = crypto::new_salt_b64();
     let salt = crypto::b64_decode(&salt_b64)?;
     let master = crypto::derive_master_key(passphrase, &salt, params)?;
@@ -570,6 +593,318 @@ fn unwrap_diary_key(plain: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
     Ok(Zeroizing::new(bytes))
 }
 
+// ---------------------------------------------------------------------------
+// Optional recovery phrase
+// ---------------------------------------------------------------------------
+//
+// The recovery phrase is a second, independent way to reach the diary key. It
+// is encoded as BIP39 words, expanded to an AES-256 key and used to wrap the
+// same diary key that the passphrase wraps. Because it wraps rather than
+// replaces the diary key:
+//
+// * enabling or regenerating a phrase never re-encrypts an entry;
+// * changing the passphrase (or the KDF parameters) leaves it valid;
+// * recovering sets a new passphrase without touching the entries.
+//
+// The wrapping lives in `recovery.xml`, not `vault.xml`, so an older build that
+// rewrites `vault.xml` cannot silently drop it. The AAD binds the domain label
+// and format version, so a recovery blob cannot be reused as any other ciphertext.
+
+/// Contents of `recovery.xml`.
+#[derive(Debug, Clone)]
+struct Recovery {
+    iv_b64: String,
+    wrapped_key_b64: String,
+}
+
+/// Whether a recovery phrase is configured, as reported to the settings UI.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryStatus {
+    pub enabled: bool,
+}
+
+fn recovery_path(dir: &Path) -> PathBuf {
+    dir.join(RECOVERY_FILE)
+}
+
+/// Serialise a recovery record.
+fn recovery_to_xml(recovery: &Recovery) -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <recovery version=\"{RECOVERY_VERSION}\">\n\
+         \x20 <iv>{}</iv>\n\
+         \x20 <wrapped-key>{}</wrapped-key>\n\
+         </recovery>\n",
+        recovery.iv_b64, recovery.wrapped_key_b64
+    )
+}
+
+/// Parse a recovery record.
+fn parse_recovery(text: &str) -> Result<Recovery, String> {
+    let mut version = String::new();
+    let mut iv = None;
+    let mut wrapped_key = None;
+    let mut current = String::new();
+
+    let mut reader = quick_xml::Reader::from_str(text);
+    reader.config_mut().trim_text(false);
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Start(e)) => {
+                let name = e.name().as_ref().to_string();
+                if name == "recovery" {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == "version" {
+                            version = attr
+                                .normalized_value(quick_xml::XmlVersion::Explicit1_0)
+                                .map_err(|err| {
+                                    format!("Invalid recovery version attribute: {err}")
+                                })?
+                                .into_owned();
+                        }
+                    }
+                }
+                current = name;
+            }
+            Ok(quick_xml::events::Event::Text(e)) => {
+                let value = quick_xml::escape::unescape(e.as_ref())
+                    .map_err(|err| format!("Invalid recovery XML: {err}"))?;
+                match current.as_str() {
+                    "iv" => append(&mut iv, &value),
+                    "wrapped-key" => append(&mut wrapped_key, &value),
+                    _ => {}
+                }
+            }
+            Ok(quick_xml::events::Event::GeneralRef(e)) => {
+                let raw = format!("&{};", e.as_ref());
+                let value = quick_xml::escape::unescape(&raw)
+                    .map_err(|err| format!("Invalid recovery XML entity: {err}"))?;
+                match current.as_str() {
+                    "iv" => append(&mut iv, &value),
+                    "wrapped-key" => append(&mut wrapped_key, &value),
+                    _ => {}
+                }
+            }
+            Ok(quick_xml::events::Event::End(_)) => current.clear(),
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(e) => return Err(format!("Failed to parse recovery file: {e}")),
+            _ => {}
+        }
+    }
+
+    let version = version.trim();
+    if version != RECOVERY_VERSION.to_string() {
+        return Err(format!(
+            "Unsupported recovery file version: {}",
+            if version.is_empty() {
+                "missing"
+            } else {
+                version
+            }
+        ));
+    }
+
+    let trim = |value: Option<String>| value.map(|value| value.trim().to_string());
+
+    Ok(Recovery {
+        iv_b64: trim(iv).ok_or_else(|| "Recovery file is missing <iv>".to_string())?,
+        wrapped_key_b64: trim(wrapped_key)
+            .ok_or_else(|| "Recovery file is missing <wrapped-key>".to_string())?,
+    })
+}
+
+fn write_recovery(dir: &Path, recovery: &Recovery) -> Result<(), String> {
+    ensure_dir(dir)?;
+    fsutil::write_private(&recovery_path(dir), recovery_to_xml(recovery))
+        .map_err(|e| format!("Failed to write recovery file: {e}"))
+}
+
+fn read_recovery(dir: &Path) -> Result<Option<Recovery>, String> {
+    let path = recovery_path(dir);
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("Failed to read recovery file: {e}")),
+    };
+    parse_recovery(&text).map(Some)
+}
+
+/// Associated data that binds a recovery wrapping to this format version.
+fn recovery_aad() -> Vec<u8> {
+    let mut aad = Vec::with_capacity(RECOVERY_AAD_LABEL.len() + 2);
+    aad.extend_from_slice(RECOVERY_AAD_LABEL);
+    aad.push(0);
+    aad.push(RECOVERY_VERSION);
+    aad
+}
+
+/// Whether a recovery sidecar is present, without parsing it.
+///
+/// The unlock screen only needs to decide whether to offer the entry point; a
+/// malformed sidecar should still surface a real error when the user tries to
+/// use it, rather than silently hiding the button.
+pub fn recovery_exists(dir: &Path) -> bool {
+    recovery_path(dir).is_file()
+}
+
+/// Report whether a recovery phrase is configured.
+pub fn recovery_status(dir: &Path) -> Result<RecoveryStatus, String> {
+    Ok(RecoveryStatus {
+        enabled: read_recovery(dir)?.is_some(),
+    })
+}
+
+/// Write the recovery wrapping after the user has confirmed the phrase.
+///
+/// `phrase` must be the exact phrase that was shown; `indices`/`answers` are
+/// the words the user re-typed. The function refuses to write anything unless
+/// the phrase has a valid BIP39 checksum and those answers match.
+pub fn confirm_recovery_phrase(
+    dir: &Path,
+    diary_key: &[u8; 32],
+    phrase: &str,
+    indices: &[usize],
+    answers: &[String],
+) -> Result<(), String> {
+    if !vault_exists(dir)? {
+        return Err("No vault found".to_string());
+    }
+    let words = bip39::normalize_phrase(phrase)?;
+    let entropy = bip39::words_to_entropy(&words)?;
+    bip39::verify_answers(&words, indices, answers)?;
+
+    let recovery_key = crypto::derive_recovery_key(&entropy);
+    let aad = recovery_aad();
+    let (iv, wrapped_key) = crypto::encrypt_with_aad(&recovery_key, &aad, diary_key)?;
+
+    let recovery = Recovery {
+        iv_b64: crypto::b64_encode(&iv),
+        wrapped_key_b64: crypto::b64_encode(&wrapped_key),
+    };
+    write_recovery(dir, &recovery)
+}
+
+/// Whether `key` can actually open the diary data in `dir`.
+///
+/// Recovery wraps a diary key without proving that it belongs to *this* vault.
+/// A recovery sidecar copied from another diary would otherwise unwrap a valid
+/// key, `reset_passphrase` would write it into `vault.xml`, and every existing
+/// entry would become unreadable. The index is the cheapest proof; if it is
+/// missing or corrupt, the first decryptable entry is enough. An empty vault has
+/// nothing to verify and is accepted.
+///
+/// If the index and every entry file are unreadable, the diary is already in a
+/// broken state; refusing recovery is safer than overwriting the wrapped key
+/// with a key that may not belong to it.
+fn diary_key_matches(dir: &Path, key: &[u8; 32]) -> Result<bool, String> {
+    if index_path(dir).is_file() && read_index(dir, key).is_some() {
+        return Ok(true);
+    }
+
+    let mut entries = 0usize;
+    let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
+    for item in read_dir {
+        let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
+        let path = item.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("xml") {
+            continue;
+        }
+        let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        if validate_date(date).is_err() {
+            continue;
+        }
+
+        entries += 1;
+        if matches!(read_entry(dir, key, date), Ok(Some(_))) {
+            return Ok(true);
+        }
+    }
+
+    Ok(entries == 0)
+}
+
+/// Unwrap the diary key with a recovery phrase.
+///
+/// The phrase is only accepted for an Argon2id vault. A legacy version 1 vault
+/// has no diary key yet, and its migration will generate one, so a recovery
+/// phrase cannot meaningfully apply to it.
+pub fn recover_diary_key(dir: &Path, phrase: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    let vault = read_vault(dir)?.ok_or_else(|| "No vault found".to_string())?;
+    if vault.kdf != Kdf::Argon2id {
+        return Err(
+            "This diary uses the legacy format; unlock it once with its passphrase before using a recovery phrase"
+                .to_string(),
+        );
+    }
+
+    let recovery = read_recovery(dir)?
+        .ok_or_else(|| "No recovery phrase is configured for this diary".to_string())?;
+    let iv = crypto::b64_decode(&recovery.iv_b64)?;
+    let wrapped_key = crypto::b64_decode(&recovery.wrapped_key_b64)?;
+
+    let entropy = bip39::parse_phrase(phrase)?;
+    let recovery_key = crypto::derive_recovery_key(&entropy);
+    let aad = recovery_aad();
+    let plain = crypto::decrypt_with_aad(&recovery_key, &aad, &iv, &wrapped_key)
+        .map_err(|_| "Recovery phrase does not match this diary".to_string())?;
+    let diary_key = unwrap_diary_key(&plain)?;
+
+    if !diary_key_matches(dir, &*diary_key)? {
+        return Err(
+            "Recovery phrase does not match this diary's data; the vault was left unchanged"
+                .to_string(),
+        );
+    }
+
+    Ok(diary_key)
+}
+
+/// Re-wrap a known diary key under a new passphrase.
+///
+/// This is the write half of recovery: the caller has already proved possession
+/// of the recovery phrase and the diary key, so there is no old passphrase to
+/// verify. A fresh salt is generated, exactly like [`rewrap_vault`].
+pub fn reset_passphrase(
+    dir: &Path,
+    diary_key: &[u8; 32],
+    new_passphrase: &str,
+    params: crypto::KdfParams,
+) -> Result<(), String> {
+    if new_passphrase.is_empty() {
+        return Err("Passphrase must not be empty".to_string());
+    }
+    params.validate()?;
+    if !vault_exists(dir)? {
+        return Err("No vault found".to_string());
+    }
+
+    let salt_b64 = crypto::new_salt_b64();
+    let salt = crypto::b64_decode(&salt_b64)?;
+    let master = crypto::derive_master_key(new_passphrase, &salt, params)?;
+    let (iv, ct) = crypto::encrypt(&master, diary_key)?;
+
+    let vault = Vault {
+        kdf: Kdf::Argon2id,
+        params,
+        salt_b64,
+        wrapped_key_iv_b64: crypto::b64_encode(&iv),
+        wrapped_key_b64: crypto::b64_encode(&ct),
+    };
+    write_vault(dir, &vault)
+}
+
+/// Remove the recovery wrapping, if one exists.
+pub fn remove_recovery(dir: &Path) -> Result<(), String> {
+    match fs::remove_file(recovery_path(dir)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("Failed to remove recovery file: {e}")),
+    }
+}
+
 /// Name of the migration journal.
 ///
 /// A version 1 vault stores a single legacy key that decrypts every entry. The
@@ -617,6 +952,10 @@ fn migrate_legacy_vault(
     // all under the new key and the journal is no longer needed.
     write_vault(dir, &vault)?;
     clear_migration_journal(dir)?;
+    // A recovery sidecar from before the migration wrapped a diary key that no
+    // longer exists. Version 1 vaults never wrote one, so this only removes a
+    // stale copy and keeps `recovery_status` honest.
+    let _ = remove_recovery(dir);
 
     Ok(diary_key)
 }
@@ -652,6 +991,9 @@ fn resume_migration(
 
     write_vault(dir, journal)?;
     clear_migration_journal(dir)?;
+    // The journal's diary key replaced the legacy key; a sidecar from before
+    // the migration cannot wrap it. See `migrate_legacy_vault`.
+    let _ = remove_recovery(dir);
 
     Ok(diary_key)
 }
@@ -2024,6 +2366,183 @@ mod tests {
         let unlocked = unlock_vault(&dir, "hunter2").unwrap();
         assert_eq!(key, unlocked);
         assert!(unlock_vault(&dir, "wrong").is_err());
+    }
+
+    /// A valid BIP39 phrase plus the positions/answers used by the tests.
+    fn recovery_fixture() -> (String, Vec<usize>, Vec<String>) {
+        let words = bip39::entropy_to_words(&[0u8; 16]).unwrap();
+        let phrase = words.join(" ");
+        let indices = vec![0, 5, 11];
+        let answers = indices.iter().map(|index| words[*index].clone()).collect();
+        (phrase, indices, answers)
+    }
+
+    #[test]
+    fn recovery_phrase_roundtrip_reset_and_password_change() {
+        let dir = temp_dir("recovery-roundtrip");
+        let key = create_vault(&dir, "old-pass", fast()).unwrap();
+        let (phrase, indices, answers) = recovery_fixture();
+
+        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+        assert!(dir.join("recovery.xml").exists());
+
+        let status = recovery_status(&dir).unwrap();
+        assert!(status.enabled);
+        assert_eq!(*recover_diary_key(&dir, &phrase).unwrap(), *key);
+
+        // Changing the passphrase re-wraps the same diary key, so the recovery
+        // phrase must stay valid.
+        let rewrapped = rewrap_vault(&dir, "old-pass", "new-pass", fast()).unwrap();
+        assert_eq!(*rewrapped, *key);
+        assert_eq!(*recover_diary_key(&dir, &phrase).unwrap(), *key);
+
+        // Recovery sets a new passphrase without knowing the old one.
+        reset_passphrase(&dir, &*key, "reset-pass", fast()).unwrap();
+        assert_eq!(*unlock_vault(&dir, "reset-pass").unwrap(), *key);
+        assert!(unlock_vault(&dir, "new-pass").is_err());
+        assert_eq!(*recover_diary_key(&dir, &phrase).unwrap(), *key);
+    }
+
+    #[test]
+    fn recovery_file_never_contains_the_plain_diary_key() {
+        let dir = temp_dir("recovery-not-plain");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let (phrase, indices, answers) = recovery_fixture();
+        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+
+        let raw = fs::read_to_string(dir.join("recovery.xml")).unwrap();
+        let plain_key = crypto::b64_encode(&*key);
+        assert!(
+            !raw.contains(&plain_key),
+            "recovery file leaked the diary key"
+        );
+        assert!(!raw.contains(&phrase), "recovery file leaked the phrase");
+    }
+
+    #[test]
+    fn recovery_confirmation_rejects_wrong_answers() {
+        let dir = temp_dir("recovery-wrong-answers");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let (phrase, indices, mut answers) = recovery_fixture();
+        answers[1] = "wrong".to_string();
+
+        assert!(confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).is_err());
+        assert!(!dir.join("recovery.xml").exists());
+    }
+
+    #[test]
+    fn recovery_confirmation_rejects_a_bad_checksum() {
+        let dir = temp_dir("recovery-bad-checksum");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let (phrase, indices, answers) = recovery_fixture();
+        let bad = phrase.replace("about", "abandon");
+
+        assert!(confirm_recovery_phrase(&dir, &*key, &bad, &indices, &answers).is_err());
+        assert!(!dir.join("recovery.xml").exists());
+    }
+
+    #[test]
+    fn another_valid_phrase_does_not_unlock_the_vault() {
+        let dir = temp_dir("recovery-other-phrase");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let (phrase, indices, answers) = recovery_fixture();
+        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+
+        let other = bip39::entropy_to_words(&[0x42u8; 16]).unwrap().join(" ");
+        let err = recover_diary_key(&dir, &other).unwrap_err();
+        assert!(err.contains("does not match"), "got: {err}");
+    }
+
+    #[test]
+    fn a_recovery_file_copied_from_another_vault_is_rejected() {
+        let dir_a = temp_dir("recovery-copy-a");
+        let dir_b = temp_dir("recovery-copy-b");
+        let key_a = create_vault(&dir_a, "a", fast()).unwrap();
+        let key_b = create_vault(&dir_b, "b", fast()).unwrap();
+        let (phrase, indices, answers) = recovery_fixture();
+
+        confirm_recovery_phrase(&dir_a, &*key_a, &phrase, &indices, &answers).unwrap();
+        write_entry(&dir_b, &*key_b, "2026-10-23", "b", "b").unwrap();
+        fs::copy(dir_a.join("recovery.xml"), dir_b.join("recovery.xml")).unwrap();
+
+        let err = recover_diary_key(&dir_b, &phrase).unwrap_err();
+        assert!(
+            err.contains("does not match this diary's data"),
+            "got: {err}"
+        );
+
+        // The failed attempt must not have touched B's vault.
+        assert_eq!(*unlock_vault(&dir_b, "b").unwrap(), *key_b);
+        assert!(unlock_vault(&dir_a, "a").is_ok());
+    }
+
+    #[test]
+    fn recovery_can_be_removed_and_status_reflects_it() {
+        let dir = temp_dir("recovery-remove");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let (phrase, indices, answers) = recovery_fixture();
+        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+        assert!(recovery_exists(&dir));
+
+        remove_recovery(&dir).unwrap();
+        assert!(!recovery_exists(&dir));
+        let status = recovery_status(&dir).unwrap();
+        assert!(!status.enabled);
+        assert!(recover_diary_key(&dir, &phrase).is_err());
+    }
+
+    #[test]
+    fn recovery_status_is_disabled_without_a_sidecar() {
+        let dir = temp_dir("recovery-absent");
+        let status = recovery_status(&dir).unwrap();
+        assert!(!status.enabled);
+        assert!(!recovery_exists(&dir));
+
+        create_vault(&dir, "pw", fast()).unwrap();
+        assert!(!recovery_status(&dir).unwrap().enabled);
+        assert!(!recovery_exists(&dir));
+    }
+
+    #[test]
+    fn creating_a_vault_clears_a_stale_recovery_sidecar() {
+        let dir = temp_dir("recovery-stale");
+        let (phrase, indices, answers) = recovery_fixture();
+        let old_key = create_vault(&dir, "old", fast()).unwrap();
+        confirm_recovery_phrase(&dir, &*old_key, &phrase, &indices, &answers).unwrap();
+        assert!(dir.join("recovery.xml").exists());
+
+        // Simulate `vault.xml` being deleted while the sidecar survives.
+        fs::remove_file(dir.join("vault.xml")).unwrap();
+        create_vault(&dir, "pw", fast()).unwrap();
+        assert!(!dir.join("recovery.xml").exists());
+        assert!(!recovery_status(&dir).unwrap().enabled);
+    }
+
+    #[test]
+    fn recovery_requires_an_argon2id_vault() {
+        let dir = temp_dir("recovery-legacy");
+        let (phrase, indices, answers) = recovery_fixture();
+        let stray_key = [4u8; 32];
+
+        // A version 1 vault has no diary key to recover.
+        let salt = crypto::new_salt_b64();
+        let legacy = crypto::derive_legacy_key("pw", &crypto::b64_decode(&salt).unwrap());
+        let (iv, ct) = crypto::encrypt(&legacy, b"legacy-verifier").unwrap();
+        let xml = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <vault version=\"1\">\n\
+             \x20 <salt>{salt}</salt>\n\
+             \x20 <verifier-iv>{}</verifier-iv>\n\
+             \x20 <verifier>{}</verifier>\n\
+             </vault>\n",
+            crypto::b64_encode(&iv),
+            crypto::b64_encode(&ct)
+        );
+        fs::write(dir.join("vault.xml"), xml).unwrap();
+        confirm_recovery_phrase(&dir, &stray_key, &phrase, &indices, &answers).unwrap();
+
+        let err = recover_diary_key(&dir, &phrase).unwrap_err();
+        assert!(err.contains("legacy"), "got: {err}");
     }
 
     #[test]

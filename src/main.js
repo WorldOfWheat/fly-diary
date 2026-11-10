@@ -25,9 +25,11 @@ import { createCalendar } from "./calendar.js";
 import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
+import { createRecoveryDialog } from "./recovery-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
 import { createAttachmentGallery } from "./attachments.js";
 import { createNativeFileDrop } from "./native-drop.js";
+import { initInputModality } from "./input-modality.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -163,6 +165,8 @@ let importDialog;
 let statsDialog;
 /** @type {ReturnType<typeof createSettingsDialog>} */
 let settingsDialog;
+/** @type {ReturnType<typeof createRecoveryDialog>} */
+let recoveryDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
 /** @type {ReturnType<typeof createAttachmentGallery>} */
@@ -198,7 +202,7 @@ function updateWordCount() {
 /**
  * Height of one row in CSS pixels.
  *
- * The stylesheet is the source of truth: `.entry-item` is `height: var(--row-h)`
+ * The stylesheet is the source of truth: `.entry-row` is `height: var(--row-h)`
  * and the root font size is fluid, so the row height changes with the window.
  * We read the resolved value once at startup and again whenever the root size
  * changes (see `watchRowHeight`), instead of hard-coding a number that would
@@ -429,7 +433,7 @@ function initLocaleSwitch() {
 //   "dark"   — always dark
 //
 // The resolved theme is written to `<html data-theme="...">`, which is what the
-// `:root[data-theme="dark"]` block in `styles.css` keys off. The attribute is
+// `:root[data-theme="dark"]` block in `styles/tokens.css` keys off. The attribute is
 // used rather than a bare media query so an explicit choice can override the
 // system setting.
 
@@ -563,12 +567,19 @@ function formatBytes(bytes) {
 /** Build the DOM node for one entry row. */
 function createRow(entry, index) {
   const li = document.createElement("li");
-  li.className =
+  li.className = "entry-row";
+  li.style.top = `${index * ROW_HEIGHT}px`;
+
+  // The row itself is the interactive element: a real button gives keyboard
+  // users Enter/Space and screen readers an unambiguous "button" role.
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className =
     "entry-item" +
     (entry.favourite ? " favourite" : "") +
     (entry.date === currentDate ? " active" : "");
-  li.dataset.date = entry.date;
-  li.style.top = `${index * ROW_HEIGHT}px`;
+  button.dataset.date = entry.date;
+  if (entry.date === currentDate) button.setAttribute("aria-current", "date");
 
   const dateRow = document.createElement("div");
   dateRow.className = "entry-date";
@@ -583,8 +594,9 @@ function createRow(entry, index) {
   preview.className = "entry-preview" + (entry.title ? "" : " empty");
   preview.textContent = entry.title || t("common.untitled");
 
-  li.append(dateRow, preview);
-  li.addEventListener("click", () => selectDate(entry.date));
+  button.append(dateRow, preview);
+  button.addEventListener("click", () => selectDate(entry.date));
+  li.appendChild(button);
   return li;
 }
 
@@ -637,10 +649,13 @@ function renderBrokenList() {
   const frag = document.createDocumentFragment();
   for (const broken of rows) {
     const li = document.createElement("li");
-    li.className = "entry-item broken-item";
-    li.dataset.date = broken.date;
-    li.style.position = "static";
-    li.style.height = "auto";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "entry-item broken-item";
+    button.dataset.date = broken.date;
+    if (broken.date === currentDate) {
+      button.setAttribute("aria-current", "date");
+    }
 
     const dateRow = document.createElement("div");
     dateRow.className = "entry-date";
@@ -657,8 +672,9 @@ function renderBrokenList() {
       broken.size
     )}`;
 
-    li.append(dateRow, preview);
-    li.addEventListener("click", () => selectDate(broken.date));
+    button.append(dateRow, preview);
+    button.addEventListener("click", () => selectDate(broken.date));
+    li.appendChild(button);
     frag.appendChild(li);
   }
   els.list.replaceChildren(frag);
@@ -715,8 +731,11 @@ function resetList() {
 
 /** Update the active highlight without rebuilding the list. */
 function highlightActive() {
-  for (const li of els.list.querySelectorAll(".entry-item")) {
-    li.classList.toggle("active", li.dataset.date === currentDate);
+  for (const item of els.list.querySelectorAll(".entry-item")) {
+    const active = item.dataset.date === currentDate;
+    item.classList.toggle("active", active);
+    if (active) item.setAttribute("aria-current", "date");
+    else item.removeAttribute("aria-current");
   }
 }
 
@@ -884,7 +903,7 @@ function renderFavouriteButton() {
 /**
  * Paint the active state on the three sidebar tabs.
  *
- * `aria-selected` is the source of truth for assistive tech; the `is-active`
+ * `aria-pressed` is the source of truth for assistive tech; the `is-active`
  * class is what the stylesheet keys off. Both have to move together, which is
  * why this lives in one place instead of being repeated at each call site.
  */
@@ -897,7 +916,7 @@ function syncViewTabs(view) {
     if (!btn) continue;
     const active = name === view;
     btn.classList.toggle("is-active", active);
-    btn.setAttribute("aria-selected", active ? "true" : "false");
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
   }
 }
 
@@ -1594,10 +1613,20 @@ function createControllers() {
     setAutoLockMinutes,
     setAutosaveDelay,
     // The vault-wide actions live in the settings dialog now. They are passed
-    // as thunks because `importDialog` and `lockScreen` are built below.
+    // as thunks because `importDialog`, `recoveryDialog` and `lockScreen` are
+    // built below.
     openImport: () => importDialog.startImport(),
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
+    openRecovery: () => recoveryDialog.open(),
+  });
+
+  recoveryDialog = createRecoveryDialog({
+    els,
+    invoke,
+    t,
+    setStatus,
+    onEnabled: () => settingsDialog.refreshRecoveryStatus(),
   });
 
   attachmentGallery = createAttachmentGallery({
@@ -1634,6 +1663,7 @@ function createControllers() {
     closeCalendar: () => calendar.closeCalendar(),
     closeImport: () => importDialog.closeImport(),
     closeSettings: () => settingsDialog.closeSettings(),
+    closeRecovery: (options) => recoveryDialog.close(options),
     renderDateLabel,
     lockAndFlush,
     setScreenshotProtection,
@@ -1719,6 +1749,9 @@ function wireEvents() {
     resetKdfFields: lockScreen.resetKdfFields,
     updateKdfEstimate: lockScreen.updateKdfEstimate,
     refreshSetupVaultState: lockScreen.refreshSetupVaultState,
+    showRecoveryForm: lockScreen.showRecoveryForm,
+    hideRecoveryForm: lockScreen.hideRecoveryForm,
+    handleRecoverySubmit: lockScreen.handleRecoverySubmit,
     lockNow: lockScreen.lockNow,
     // Editor
     scheduleSave,
@@ -1773,6 +1806,13 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
+    // Recovery phrase: create/show-once dialog and removal.
+    openRecovery: settingsDialog.openRecovery,
+    removeRecovery: settingsDialog.removeRecovery,
+    closeRecovery: recoveryDialog.close,
+    continueRecovery: recoveryDialog.continueToConfirm,
+    confirmRecovery: recoveryDialog.confirm,
+    isRecoveryOpen: recoveryDialog.isOpen,
     // The vault-wide actions hosted by the settings dialog.
     openImportFromSettings: settingsDialog.openImport,
     openStatsFromSettings: settingsDialog.openStats,
@@ -1806,6 +1846,10 @@ function wireEvents() {
 // ---------------------------------------------------------------------------
 
 async function init() {
+  // Focus rings follow the last input method. Do this before any controller
+  // can move focus, so the lock screen's initial focus is not ringed.
+  initInputModality();
+
   // Controllers first: the wiring below hands out their methods, so they have
   // to exist before any listener is attached.
   createControllers();

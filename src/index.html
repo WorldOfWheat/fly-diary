@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8" />
     <!-- `viewport-fit=cover` lets the app paint under the notch / gesture bar;
-         the safe-area insets are then re-applied as padding in styles.css. -->
+         the safe-area insets are then re-applied as padding in styles/. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Fly Diary</title>
     <link rel="stylesheet" href="styles.css" />
@@ -13,6 +13,7 @@
 <body>
     <!-- Lock screen: shown until the vault is unlocked. -->
     <div id="lock-screen" class="lock-screen">
+        <div class="lock-stack">
         <form id="lock-form" class="lock-card" autocomplete="off">
             <div class="lock-head">
                 <h1 class="lock-title">Fly Diary</h1>
@@ -67,11 +68,13 @@
                     data-i18n="common.cancel">取消</button>
             </div>
 
+            <label class="sr-only" for="passphrase" data-i18n="lock.passphraseLabel">密碼</label>
             <input id="passphrase" class="lock-input" type="password" data-i18n-placeholder="lock.passphrase"
-                placeholder="密碼" autocomplete="current-password" />
+                placeholder="密碼" autocomplete="current-password" aria-describedby="lock-error" />
+            <label class="sr-only" for="passphrase-confirm" data-i18n="lock.passphraseConfirmLabel">再次輸入密碼</label>
             <input id="passphrase-confirm" class="lock-input" type="password"
                 data-i18n-placeholder="lock.passphraseConfirm" placeholder="再次輸入密碼" autocomplete="new-password"
-                hidden />
+                aria-describedby="lock-error" hidden />
 
             <!-- First run only: Argon2id cost parameters. -->
             <details id="advanced-field" class="lock-advanced" hidden>
@@ -92,11 +95,46 @@
                 <button id="kdf-reset" class="btn-browse" type="button" data-i18n="lock.kdfReset">恢復預設值</button>
             </details>
 
-            <p id="lock-error" class="lock-error"></p>
+            <p id="lock-error" class="lock-error" role="alert"></p>
 
             <button id="lock-submit" class="btn-primary lock-submit" type="submit"
                 data-i18n="lock.submitUnlock">解鎖</button>
+
+            <!-- Optional second way in. Hidden unless the current vault has a
+                 recovery phrase; the panel replaces this form rather than
+                 stacking another one on top of it. -->
+            <button id="recovery-open" class="btn-browse lock-recovery-open" type="button"
+                data-i18n="recovery.open" hidden>使用回復短語</button>
         </form>
+
+        <form id="recovery-form" class="lock-card" autocomplete="off" hidden>
+            <div class="lock-head">
+                <h2 class="lock-title" data-i18n="recovery.unlockTitle">使用回復短語</h2>
+            </div>
+            <p class="lock-hint" data-i18n="recovery.unlockHint">
+                輸入 12 個 BIP39 英文單字，並設定一組新密碼。輸入前幾個字母會顯示單字建議；
+                恢復後原本的密碼會失效，但日記內容不會重新加密。
+            </p>
+            <div id="recovery-phrase-fields" class="word-grid recovery-unlock-fields" role="group"
+                data-i18n-aria-label="recovery.phraseLabel" aria-label="回復短語"></div>
+            <label class="sr-only" for="recovery-new-pass" data-i18n="recovery.newPassLabel">新密碼</label>
+            <input id="recovery-new-pass" class="lock-input" type="password" autocomplete="new-password"
+                data-i18n-placeholder="recovery.newPass" placeholder="新密碼（至少 6 個字元）"
+                aria-describedby="recovery-unlock-error" />
+            <label class="sr-only" for="recovery-new-pass-confirm"
+                data-i18n="recovery.newPassConfirmLabel">再次輸入新密碼</label>
+            <input id="recovery-new-pass-confirm" class="lock-input" type="password"
+                autocomplete="new-password" data-i18n-placeholder="recovery.newPassConfirm"
+                placeholder="再次輸入新密碼" aria-describedby="recovery-unlock-error" />
+
+            <p id="recovery-unlock-error" class="lock-error" role="alert"></p>
+
+            <button id="recovery-submit" class="btn-primary lock-submit" type="submit"
+                data-i18n="recovery.recover">解鎖並設定新密碼</button>
+            <button id="recovery-back" class="btn-browse lock-recovery-open" type="button"
+                data-i18n="recovery.back">返回密碼解鎖</button>
+        </form>
+        </div>
     </div>
 
     <div class="app" id="app" hidden>
@@ -113,17 +151,18 @@
                  re-filter rather than a second list to keep in sync. The broken
                  tab is different: it is hidden until a file fails to decrypt,
                  and it renders its own (non-virtualised) list. -->
-            <div class="view-switch" role="tablist" data-i18n-aria-label="sidebar.viewFavouritesTitle" aria-label="收藏">
-                <button id="view-all" class="view-tab is-active" type="button" role="tab" aria-selected="true"
+            <div class="view-switch" role="group" data-i18n-aria-label="sidebar.viewLabel" aria-label="日記檢視">
+                <button id="view-all" class="view-tab is-active" type="button" aria-pressed="true"
                     data-i18n="sidebar.viewAll" data-i18n-title="sidebar.viewAllTitle" title="顯示所有日記">全部</button>
-                <button id="view-favourites" class="view-tab" type="button" role="tab" aria-selected="false"
+                <button id="view-favourites" class="view-tab" type="button" aria-pressed="false"
                     data-i18n="sidebar.viewFavourites" data-i18n-title="sidebar.viewFavouritesTitle"
                     title="只顯示收藏的日記">收藏</button>
-                <button id="view-broken" class="view-tab view-tab-broken" type="button" role="tab" aria-selected="false"
+                <button id="view-broken" class="view-tab view-tab-broken" type="button" aria-pressed="false"
                     data-i18n="sidebar.viewBroken" data-i18n-title="sidebar.viewBrokenTitle" title="無法解密的日記檔"
                     hidden>損壞<span id="broken-count" class="view-badge"></span></button>
             </div>
             <div class="search-wrap">
+                <label class="sr-only" for="search" data-i18n="sidebar.searchLabel">搜尋日期或標題</label>
                 <input id="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期或標題…"
                     autocomplete="off" />
             </div>
@@ -180,7 +219,7 @@
                 <div class="status">
                     <!-- `aria-live` so the save / load messages are still
                          announced when the text is visually hidden on a narrow
-                         window (see the max-width: 400px block in styles.css). -->
+                         window (see the max-width: 400px block in styles/responsive.css). -->
                     <span id="status" class="status-text" role="status" aria-live="polite"></span>
                     <!-- An entry that already has content opens read-only, so a
                          stray keystroke cannot rewrite a finished page. Clicking
@@ -220,11 +259,13 @@
             </div>
 
             <div class="title-wrap">
+                <label class="sr-only" for="title" data-i18n="editor.titleLabel">日記標題</label>
                 <input id="title" class="title-input" type="text" data-i18n-placeholder="editor.titlePlaceholder"
                     placeholder="標題" maxlength="200" />
             </div>
 
             <div class="editor-body">
+                <label class="sr-only" for="content" data-i18n="editor.contentLabel">日記內容</label>
                 <textarea id="content" data-i18n-placeholder="editor.contentPlaceholder" placeholder="今天過得如何？"
                     spellcheck="false"></textarea>
             </div>
@@ -408,7 +449,7 @@
             </div>
 
             <footer class="modal-foot">
-                <span id="import-error" class="import-error"></span>
+                <span id="import-error" class="import-error" role="alert"></span>
                 <button id="import-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
                 <button id="import-confirm" class="btn-primary" type="button" data-i18n="sidebar.import">匯入</button>
             </footer>
@@ -527,12 +568,99 @@
                         <p id="settings-calibrate-note" class="settings-hint"></p>
                     </details>
                 </section>
+
+                <!-- Recovery phrase: a second, optional way to reach the diary
+                     key. It is off by default and can be regenerated or removed
+                     at any time; the phrase itself is only ever shown once. -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
+                    <p class="settings-hint" data-i18n="recovery.settingsHint">
+                        啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
+                        忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
+                    </p>
+                    <p id="recovery-status" class="settings-hint settings-recovery-status"></p>
+                    <div class="settings-actions">
+                        <button id="recovery-generate-btn" class="btn-browse" type="button"
+                            data-i18n="recovery.generate">產生回復短語</button>
+                        <button id="recovery-remove-btn" class="btn-danger" type="button"
+                            data-i18n="recovery.remove" hidden>停用回復短語</button>
+                    </div>
+                </section>
             </div>
 
             <footer class="modal-foot">
-                <span id="settings-error" class="import-error"></span>
+                <span id="settings-error" class="import-error" role="alert"></span>
                 <button id="settings-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
                 <button id="settings-save" class="btn-primary" type="button" data-i18n="settings.save">儲存</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Recovery phrase creation. The words are rendered as unselectable tiles:
+         the point is that the user writes them down, so the UI deliberately
+         offers no copy button and blocks selection/copy. This is a usability
+         barrier, not a security boundary (the webview can still be inspected). -->
+    <div id="recovery-overlay" class="modal-overlay recovery-overlay" hidden>
+        <div class="modal recovery-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-title">
+            <header class="modal-head">
+                <h2 id="recovery-title" class="modal-title" data-i18n="recovery.createTitle">備份回復短語</h2>
+                <button id="recovery-close" class="modal-close" type="button" data-i18n-title="common.close"
+                    data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <p class="settings-hint" data-i18n="recovery.createHint">
+                    以下 12 個單字只會顯示這一次。請用紙筆依序抄寫，不要截圖、不要存到裝置或雲端硬碟，
+                    也不要和日記放在同一個資料夾。
+                </p>
+                <ol id="recovery-words" class="recovery-words" data-i18n-aria-label="recovery.wordsLabel"
+                    aria-label="回復短語單字"></ol>
+                <p class="settings-hint" data-i18n="recovery.copyHint">
+                    這個畫面不允許選取或複製，請確實抄寫。若單字外流，搭配日記檔案就能解密全部內容。
+                </p>
+
+                <p id="recovery-error" class="import-error" role="alert"></p>
+            </div>
+
+            <footer class="modal-foot">
+                <span class="recovery-foot-hint" data-i18n="recovery.onceHint">確認後才會寫入回復資料</span>
+                <button id="recovery-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
+                <button id="recovery-continue-btn" class="btn-primary" type="button"
+                    data-i18n="recovery.continue">我已抄寫，繼續</button>
+            </footer>
+        </div>
+    </div>
+
+    <!-- Separate confirmation window. The one-time phrase window is closed
+         before this opens, so the requested words have to come from the paper
+         copy rather than the screen. -->
+    <div id="recovery-confirm-overlay" class="modal-overlay recovery-overlay" hidden>
+        <div class="modal recovery-modal" role="dialog" aria-modal="true"
+            aria-labelledby="recovery-confirm-title">
+            <header class="modal-head">
+                <h2 id="recovery-confirm-title" class="modal-title" data-i18n="recovery.confirmTitle">
+                    確認回復短語
+                </h2>
+                <button id="recovery-confirm-close" class="modal-close" type="button"
+                    data-i18n-title="common.close" data-i18n-aria-label="common.close" title="關閉"
+                    aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <p class="settings-hint" data-i18n="recovery.confirmHint">
+                    請輸入下面指定位置的單字，確認你已經抄好。輸入前幾個字母會顯示 BIP39 單字建議。
+                </p>
+                <div id="recovery-confirm-fields" class="word-grid recovery-confirm-fields" role="group"
+                    data-i18n-aria-label="recovery.confirmTitle" aria-label="確認回復短語"></div>
+                <p id="recovery-confirm-error" class="import-error" role="alert"></p>
+            </div>
+
+            <footer class="modal-foot">
+                <span class="recovery-foot-hint" data-i18n="recovery.onceHint">確認後才會寫入回復資料</span>
+                <button id="recovery-confirm-cancel" class="btn-browse" type="button"
+                    data-i18n="common.cancel">取消</button>
+                <button id="recovery-confirm-submit" class="btn-primary" type="button"
+                    data-i18n="recovery.confirm">確認</button>
             </footer>
         </div>
     </div>

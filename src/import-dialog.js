@@ -1,3 +1,5 @@
+import { createFocusTrap } from "./focus-trap.js";
+
 // ---------------------------------------------------------------------------
 // Import dialog
 // ---------------------------------------------------------------------------
@@ -33,6 +35,7 @@ const IMPORT_BADGE_KEYS = {
  */
 export function createImportDialog(deps) {
   const { els } = deps;
+  const focusTrap = createFocusTrap(els.importOverlay);
 
   /** Result of the last scan, or `null` when the dialog is closed. */
   let importScan = null;
@@ -129,6 +132,8 @@ export function createImportDialog(deps) {
     els.importList.replaceChildren(loading);
 
     els.importOverlay.hidden = false;
+    focusTrap.activate();
+    els.importClose?.focus?.();
   }
 
   /**
@@ -166,6 +171,7 @@ export function createImportDialog(deps) {
 
   function closeImport() {
     els.importOverlay.hidden = true;
+    focusTrap.deactivate();
     importScan = null;
     importDone = false;
   }

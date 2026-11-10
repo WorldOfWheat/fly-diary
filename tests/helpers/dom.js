@@ -37,6 +37,7 @@ function matches(el, selector) {
 export function fakeElement(tagName = "div") {
   const classes = new Set();
   const attributes = new Map();
+  const listeners = new Map();
 
   const el = {
     tagName: tagName.toUpperCase(),
@@ -146,6 +147,21 @@ export function fakeElement(tagName = "div") {
       return (
         el.textContent + el.children.map((child) => child.text ?? "").join("")
       );
+    },
+    addEventListener(type, listener) {
+      if (!listeners.has(type)) listeners.set(type, []);
+      listeners.get(type).push(listener);
+    },
+    removeEventListener(type, listener) {
+      const list = listeners.get(type) ?? [];
+      listeners.set(
+        type,
+        list.filter((candidate) => candidate !== listener)
+      );
+    },
+    emit(type, event = {}) {
+      for (const listener of listeners.get(type) ?? []) listener(event);
+      return event;
     },
     focus() {
       document.activeElement = el;

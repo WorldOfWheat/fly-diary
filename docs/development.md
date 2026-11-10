@@ -71,13 +71,18 @@ key 必須一致、`index.html`、`main.js` 與 `attachments.js` 用到的 key �
 `installDom`、`fakeEls`、`fakeT`、`spy`、`fakeInvoke`），不需要 jsdom 之類的額外套件；
 遇到 stub 不支援的 selector 會直接丟錯，避免測試默默通過。
 
-`tests/styles.test.js` 補上 DOM stub 看不到的一層：它直接讀 `styles.css` 的文字，驗證
+`tests/styles.test.js` 補上 DOM stub 看不到的一層：它讀入口 `styles.css` 及其 `@import` 的
+`styles/*.css`，驗證
 `[hidden]` 疊層不會被 `display` 蓋掉、月曆與 lightbox 的 `z-index` 順序，以及手機版的
 `.app[data-layer]` 顯隱規則與返回鈕的顯示條件。這類規則若寫錯，其他測試不會失敗，但使用者會看到
 一個透明卻吃掉所有點擊的浮層（或永遠離不開編輯器）。
 
 `tests/docs-links.test.js` 檢查 README 與 `docs/*.md` 的相對連結都指向存在的檔案，
 並確認每份文件都有被索引連到，避免拆檔後出現連不到的孤島。
+
+`tests/a11y.test.js` 與 `tests/focus-trap.test.js` 是無障礙回歸護欄：表單標籤、live region、
+`aria-pressed`、muted／border 對比、placeholder、24px target size，以及 modal 的 Tab 循環與
+焦點還原。它們不能取代螢幕閱讀器實測，完整清單見 [accessibility.md](accessibility.md)。
 
 Rust 測試分三層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
 的日記生命週期整合測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試

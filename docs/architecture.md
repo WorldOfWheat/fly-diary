@@ -17,17 +17,36 @@ fly-diary/
 │   ├── import-dialog.js    # 匯入對話框：掃描、進度、報告（createImportDialog）
 │   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
 │   ├── settings-dialog.js  # 設定對話框：日記本、自動鎖定、KDF、改密碼（createSettingsDialog）
-│   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準（createLockScreen）
+│   ├── recovery-dialog.js  # 一次性 BIP39 短語、獨立確認視窗（createRecoveryDialog）
+│   ├── word-input.js       # BIP39 單字磁磚與前綴建議（共用於確認／解鎖）
+│   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準、短語解鎖（createLockScreen）
 │   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
+│   ├── input-modality.js   # 記錄指標／鍵盤輸入，讓焦點環只在鍵盤操作時出現
+│   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
-│   └── styles.css
+│   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
+│   └── styles/
+│       ├── reset.css       # 瀏覽器預設：盒模型、媒體、表單、hidden
+│       ├── tokens.css      # 色彩、字體、間距、dark theme
+│       ├── base.css        # 焦點、共用 primitive、app shell、scoped 間距
+│       ├── lock.css        # 解鎖／建立 vault 畫面
+│       ├── sidebar.css     # 搜尋、篩選、虛擬滾動列
+│       ├── editor.css      # 編輯器標頭與日期導覽
+│       ├── calendar.css    # 全螢幕月曆
+│       ├── editor-body.css # 標題、內容、唯讀狀態
+│       ├── attachments.css # 圖片相簿與 lightbox
+│       ├── controls.css    # footer、字級控制、按鈕
+│       ├── dialogs.css     # 匯入、設定、回復短語、統計
+│       ├── scrollbar.css   # 自訂捲軸
+│       └── responsive.css  # 斷點、觸控、hover、reduced motion
 ├── tests/                  # 前端測試（node --test）
 │   ├── helpers/
-│   │   └── dom.js          # 極簡 DOM stub（fakeElement / installDom / fakeInvoke）
+│   │   ├── dom.js          # 極簡 DOM stub（fakeElement / installDom / fakeInvoke）
+│   │   └── css.js          # 展開 styles.css 的 @import，供 CSS invariant 測試
 │   ├── dates.test.js
 │   ├── stats.test.js
 │   ├── i18n.test.js
@@ -36,10 +55,13 @@ fly-diary/
 │   ├── import-dialog.test.js   # 掃描結果、覆蓋、進度、報告
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
+│   ├── recovery-dialog.test.js # BIP39 短語、獨立確認視窗、前綴建議、取消/失敗不留資料
 │   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
 │   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   ├── docs-links.test.js      # README 與 docs/ 的相對連結、文件索引可達性
+│   ├── a11y.test.js            # 表單標籤、live region、對比、target size
+│   ├── focus-trap.test.js      # modal Tab 循環與焦點還原
 │   └── lock-screen.test.js     # 解鎖/建立 vault、路徑切換、上鎖
 ├── src-tauri/              # Rust 後端
 │   ├── Cargo.toml
@@ -56,14 +78,16 @@ fly-diary/
 │       ├── main.rs         # 進入點；關閉 core dump 與同使用者記憶體存取
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
 │       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
-│       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM 加解密
+│       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM、recovery key 展開
+│       ├── bip39.rs        # BIP39 英文單字編碼／解碼、checksum、確認位置、wordlist 查詢
+│       ├── bip39_english.txt # 官方 BIP39 英文 wordlist（2048 字，編譯時嵌入）
 │       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── secure_memory.rs # 鎖定頁存放 diary key（mlock／VirtualLock、防 dump/fork）
 │       ├── xml.rs          # XML 序列化 / 解析
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
-│       └── storage.rs      # vault 與加密日記的檔案儲存層
-├── docs/                   # 文件（security / file-format / ui / architecture / development / reference）
+│       └── storage.rs      # vault、recovery.xml 與加密日記的檔案儲存層
+├── docs/                   # 文件（security / file-format / ui / accessibility / architecture / development / reference）
 ├── .github/
 │   ├── dependabot.yml      # npm / Cargo / Actions 每週更新
 │   └── workflows/
@@ -94,6 +118,7 @@ fly-diary/
 - **附件刪除方向固定**：新增是「圖片 → manifest」，刪除是「圖片 → manifest 移除」；crash 只會留下未引用圖片（會被補回）或遺失佔位，不會讓已刪除的圖片復活。刪除日記則是 index → XML → 附件資料夾。
 - **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan），捲動時以 `index * 列高` 絕對定位。列高由 CSS 的 `--row-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高會跟著變，不會出現捲動錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
+- **CSS 用原生 `@import` 拆分**：入口 `src/styles.css` 只負責載入 `src/styles/*.css`，順序就是 cascade 順序；沒有 PostCSS／Sass／打包步驟，Tauri 與測試都直接讀同一組檔案。`tests/helpers/css.js` 會展開 `@import`，讓 CSS invariant 測試仍然看到完整規則。
 - **手機版只換版面、不改資料流**：`data-layer` 只決定哪一層可見；選日期、存檔、鎖定、壞檔處理都走與桌面版相同的函式。返回鈕只是 `showListLayer()`，不會卸載編輯器，也不會丟棄尚未儲存的內容。
 - **翻譯與程式分離**：靜態文字用 `data-i18n` 屬性標在 HTML 上，動態文字走 `t()`，字典集中在 `i18n.js`。`main.js` 裡不再有硬編碼的中文字串，新增語言不必碰 UI 邏輯。
 - **日期不靠字串拼接**：`formatDate` / `formatMonth` / `formatWeekday` 各自負責一種格式，中文用「年月日」、英文用 `MM/DD/YYYY`，避免把 `年`、`月` 寫死在程式裡。

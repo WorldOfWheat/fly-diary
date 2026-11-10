@@ -1,0 +1,281 @@
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 1rem 1rem 0.75rem;
+}
+
+.sidebar-header h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Segmented control that switches the sidebar between "all" and "favourites".
+   Both tabs drive the same virtual scroller, so this is purely a filter. */
+.view-switch {
+  display: flex;
+  gap: 0.125rem;
+  margin: 0 0.75rem 0.5rem;
+  padding: 0.125rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.view-tab {
+  flex: 1;
+  min-height: 1.75rem;
+  padding: 0.3125rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  border-radius: calc(var(--radius) - 0.125rem);
+}
+
+.view-tab:hover {
+  color: var(--text);
+}
+
+.view-tab.is-active {
+  color: var(--text);
+  background: var(--sidebar-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* The broken-files tab only exists while something is broken, so it is styled
+   as a warning rather than a peer of the other two. */
+.view-tab-broken {
+  color: var(--danger);
+}
+
+.view-tab-broken.is-active {
+  color: var(--danger);
+}
+
+.view-badge {
+  display: inline-block;
+  min-width: 1.125rem;
+  margin-left: 0.25rem;
+  padding: 0 0.25rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  line-height: 1.125rem;
+  color: #fff;
+  text-align: center;
+  background: var(--danger);
+  border-radius: 0.5625rem;
+}
+
+.view-badge:empty {
+  display: none;
+}
+
+.search-wrap {
+  padding: 0 0.75rem 0.5rem;
+}
+
+#search {
+  width: 100%;
+  padding: 0.4375rem 0.625rem;
+  font-size: 0.8125rem;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+html[data-input-modality="keyboard"] #search:focus {
+  border-color: var(--accent);
+}
+
+/* Virtual scrolling viewport. `entry-spacer` is sized to the full list height
+   so the native scrollbar behaves normally, while `entry-list` only holds the
+   handful of rows currently visible. */
+.entry-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.entry-spacer {
+  position: relative;
+  width: 100%;
+}
+
+.entry-list {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  margin: 0;
+  padding: 0.25rem 0.5rem 0.5rem;
+  list-style: none;
+}
+
+/* Rows are absolutely positioned by `renderList()` at `index * --row-h`. The
+   painted box is one gap shorter than that pitch, which is what separates the
+   rows visually without breaking the scroll math. The `<li>` wrapper carries
+   the position; the inner button is the keyboard-accessible target. */
+.entry-row {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  height: calc(var(--row-h) - var(--row-gap));
+}
+
+.entry-item {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0.4375rem 0.625rem;
+  overflow: hidden;
+  border-radius: var(--radius);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+html[data-input-modality="keyboard"] .entry-item:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Broken rows flow normally and size to their content. */
+.broken-item {
+  position: static;
+  height: auto;
+}
+
+.entry-item:hover {
+  background: var(--hover);
+}
+
+.entry-item.active {
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+
+.entry-item .entry-date {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.entry-item .entry-weekday {
+  flex: none;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.entry-item .entry-preview {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Favourited rows get a bright highlight instead of an icon, so the bookmark
+   is readable at a glance while scanning the list. The inset bar on the left
+   keeps the state visible even when the row is also the active one. */
+.entry-item.favourite {
+  background: var(--favourite-bg);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge);
+}
+
+.entry-item.favourite:hover {
+  background: var(--favourite-bg-hover);
+}
+
+/* The active row keeps its panel colour but retains the left bar, so the
+   current entry is still distinguishable from the other favourites. */
+.entry-item.favourite.active {
+  background: var(--panel);
+  box-shadow: inset 0.1875rem 0 0 var(--favourite-edge), var(--shadow-sm);
+}
+
+.entry-item .entry-preview.empty {
+  font-style: italic;
+}
+
+/* The dark favourite background is too close to the muted text token; use the
+   normal text colour on highlighted rows so secondary text stays above 4.5:1. */
+.entry-item.favourite .entry-weekday,
+.entry-item.favourite .entry-preview {
+  color: var(--text);
+}
+
+/* The empty-state row lives inside the absolutely positioned `entry-list`, so
+   it needs `position: static` to flow normally. */
+.list-empty {
+  position: static;
+  padding: 1.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.btn-lock {
+  flex: none;
+  min-height: 1.75rem;
+  padding: 0.1875rem 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.btn-lock:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+/* The sidebar actions, now living in the editor footer. They keep their own
+   row so the path can shrink between them and the word count. */
+.footer-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* Storage path in the editor footer. It is the only flexible item there, so it
+   takes the slack between the word count and the actions and truncates first.
+   `direction: rtl` keeps the tail of a long path visible (the folder name
+   matters more than the root), while `unicode-bidi: plaintext` stops short
+   paths from being reordered. */
+.path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  text-align: left;
+}
+

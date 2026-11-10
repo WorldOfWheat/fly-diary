@@ -39,6 +39,7 @@
 //   closeCalendar      — () => void
 //   closeImport        — () => void
 //   closeSettings      — () => void
+//   closeRecovery      — (options?: { force?: boolean }) => void
 //   renderDateLabel    — () => void
 //   lockAndFlush       — () => Promise<void>
 //   setScreenshotProtection — (protected: boolean) => Promise<void>
@@ -46,6 +47,8 @@
 // `enterApp` is *not* implemented here: revealing the app and picking today's
 // entry is the hand-off into the editor, which `main.js` owns. This module only
 // calls it once the backend has accepted the passphrase.
+
+import { createWordFields, loadBip39Words } from "./word-input.js";
 
 /**
  * Create the lock screen controller.
@@ -70,6 +73,13 @@ export function createLockScreen(deps) {
   let pickingWorkspace = false;
   /** Bounds and defaults reported by the backend. */
   let kdfDefaults = null;
+  /** Whether the recovery-phrase form has replaced the passphrase form. */
+  let recoveryMode = false;
+  /** Whether the current vault has a recovery sidecar to unlock with. */
+  let recoveryAvailable = false;
+  /** Tile inputs for the twelve-word recovery form. */
+  let recoveryFields = [];
+  let recoveryWordsRequest = null;
 
   function isConfigured() {
     return configured;
@@ -95,13 +105,160 @@ export function createLockScreen(deps) {
     pickingWorkspace = value;
   }
 
+  function isRecoveryMode() {
+    return recoveryMode;
+  }
+
+  function isRecoveryAvailable() {
+    return recoveryAvailable;
+  }
+
+  function setRecoveryAvailable(value) {
+    recoveryAvailable = value;
+  }
+
+  function ensureRecoveryFields() {
+    if (!els.recoveryPhraseFields) return;
+    if (recoveryFields.length === 0) {
+      const entries = Array.from({ length: 12 }, (_, index) => ({
+        index,
+        label: deps.t("recovery.confirmWord", { n: index + 1 }),
+      }));
+      const focusNext = (field) => {
+        if (!recoveryMode) return;
+        const position = recoveryFields.indexOf(field);
+        const next = recoveryFields[position + 1];
+        if (next) next.focus();
+        else els.recoveryNewPass?.focus?.();
+      };
+      recoveryFields = createWordFields(els.recoveryPhraseFields, entries, {
+        words: [],
+        t: deps.t,
+        idPrefix: "recovery-word",
+        onSelect: focusNext,
+        onAdvance: focusNext,
+      });
+      if (!recoveryWordsRequest) {
+        recoveryWordsRequest = loadBip39Words(deps.invoke).then((words) => {
+          for (const field of recoveryFields) field.setWords(words);
+        });
+      }
+    }
+  }
+
+  /** Clear the recovery form's secret fields. */
+  function clearRecoveryFields() {
+    for (const field of recoveryFields) field.clear();
+    if (els.recoveryNewPass) els.recoveryNewPass.value = "";
+    if (els.recoveryNewPassConfirm) els.recoveryNewPassConfirm.value = "";
+    if (els.recoveryUnlockError) els.recoveryUnlockError.textContent = "";
+  }
+
   function showLockScreen(message = "") {
+    // Whatever triggered the lock, the one-time phrase dialog must not survive
+    // it: an auto-lock or Ctrl+L can fire while it is open. `force` also wins
+    // over an in-flight generate/confirm call.
+    deps.closeRecovery?.({ force: true });
+
     els.app.hidden = true;
     els.lockScreen.hidden = false;
     els.lockError.textContent = message;
     els.passphrase.value = "";
     els.passphraseConfirm.value = "";
+    recoveryMode = false;
+    clearRecoveryFields();
+    renderLockScreen();
     els.passphrase.focus();
+  }
+
+  /** Replace the passphrase form with the recovery form. */
+  function showRecoveryForm() {
+    if (!vaultInitialized || !recoveryAvailable || pickingWorkspace) return;
+    recoveryMode = true;
+    clearRecoveryFields();
+    ensureRecoveryFields();
+    renderLockScreen();
+    recoveryFields[0]?.focus();
+  }
+
+  /** Return from the recovery form to the normal passphrase form. */
+  function hideRecoveryForm() {
+    if (!recoveryMode) return;
+    recoveryMode = false;
+    clearRecoveryFields();
+    renderLockScreen();
+    els.passphrase.focus();
+  }
+
+  /**
+   * Unlock with a recovery phrase and set a new passphrase.
+   *
+   * The backend verifies the phrase against `recovery.xml`; the UI only checks
+   * that the fields are present and that the two new passphrases match, so a
+   * wrong phrase produces the backend's "does not match" message instead of a
+   * client-side guess.
+   */
+  async function handleRecoverySubmit(event) {
+    event.preventDefault();
+    els.recoveryUnlockError.textContent = "";
+
+    ensureRecoveryFields();
+    const words = recoveryFields.map((field) => field.input.value.trim());
+    if (words.length !== 12 || words.some((word) => !word)) {
+      els.recoveryUnlockError.textContent = deps.t("recovery.errPhrase");
+      const empty = recoveryFields.find((field) => !field.input.value.trim());
+      (empty || recoveryFields[0])?.focus();
+      return;
+    }
+    const phrase = words.join(" ");
+
+    const next = els.recoveryNewPass.value;
+    const confirm = els.recoveryNewPassConfirm.value;
+    if (next.length < 6) {
+      els.recoveryUnlockError.textContent = deps.t("lock.errTooShort");
+      els.recoveryNewPass.focus();
+      return;
+    }
+    if (next !== confirm) {
+      els.recoveryUnlockError.textContent = deps.t("lock.errMismatch");
+      els.recoveryNewPassConfirm.focus();
+      return;
+    }
+
+    els.recoverySubmit.disabled = true;
+    try {
+      // The recovery form can be reached on first run when the chosen folder
+      // already holds a vault. Persist that folder before the backend reads it,
+      // exactly like the normal unlock path does.
+      if (!configured || pickingWorkspace) {
+        const dir = els.diaryDir.value.trim();
+        if (!dir) {
+          els.recoveryUnlockError.textContent = deps.t("lock.errNoDir");
+          return;
+        }
+        await deps.invoke("set_diary_dir", { path: dir });
+        configured = true;
+        pickingWorkspace = false;
+        renderWorkspacePath();
+      }
+
+      await deps.invoke("recover_vault", {
+        phrase,
+        newPassphrase: next,
+      });
+      configured = true;
+      vaultInitialized = true;
+      recoveryMode = false;
+      clearRecoveryFields();
+      await deps.enterApp();
+    } catch (err) {
+      console.error("recover_vault failed:", err);
+      els.recoveryUnlockError.textContent =
+        typeof err === "string" ? err : err?.message || deps.t("recovery.errRecover");
+      recoveryFields[0]?.input.select?.();
+    } finally {
+      els.recoverySubmit.disabled = false;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -163,6 +320,23 @@ export function createLockScreen(deps) {
 
   /** Apply the lock screen layout for the current setup state. */
   function renderLockScreen() {
+    // The recovery form only exists for a vault that is already set up. If the
+    // user switched to an empty workspace while it was open, fall back rather
+    // than leaving a form that cannot work.
+    if (recoveryMode && (!vaultInitialized || !recoveryAvailable)) {
+      recoveryMode = false;
+    }
+    if (els.recoveryOpen) {
+      // Hidden while the workspace picker is open: the path may still be
+      // changing, and a recovery attempt would target the wrong folder.
+      els.recoveryOpen.hidden =
+        !vaultInitialized || !recoveryAvailable || pickingWorkspace;
+    }
+    if (els.lockForm && els.recoveryForm) {
+      els.lockForm.hidden = recoveryMode;
+      els.recoveryForm.hidden = !recoveryMode;
+    }
+
     // The path field is shown on first run, and whenever the user opens the
     // workspace picker. It is *not* tied to `configured` any more: a returning
     // user must be able to point the app at another diary folder before they
@@ -233,9 +407,21 @@ export function createLockScreen(deps) {
    */
   async function detectVault(path) {
     try {
-      return await deps.invoke("vault_exists", path ? { path } : {});
+      const exists = await deps.invoke("vault_exists", path ? { path } : {});
+      // Only ask for the recovery sidecar when there is a vault to inspect.
+      // A failure here must not make the vault look absent.
+      recoveryAvailable = exists
+        ? await deps
+            .invoke("recovery_exists", path ? { path } : {})
+            .catch((err) => {
+              console.error("recovery_exists failed:", err);
+              return false;
+            })
+        : false;
+      return exists;
     } catch (err) {
       console.error("vault_exists failed:", err);
+      recoveryAvailable = false;
       return false;
     }
   }
@@ -347,6 +533,9 @@ export function createLockScreen(deps) {
         configured = true;
         pickingWorkspace = false;
         renderWorkspacePath();
+        // `detectVault` also refreshed `recoveryAvailable`; repaint so the
+        // "Use recovery phrase" button matches the folder just committed.
+        renderLockScreen();
       }
 
       if (vaultInitialized) {
@@ -439,7 +628,13 @@ export function createLockScreen(deps) {
     setVaultInitialized,
     isPickingWorkspace,
     setPickingWorkspace,
+    isRecoveryMode,
+    isRecoveryAvailable,
+    setRecoveryAvailable,
     showLockScreen,
+    showRecoveryForm,
+    hideRecoveryForm,
+    handleRecoverySubmit,
     loadKdfDefaults,
     resetKdfFields,
     readKdfParams,
