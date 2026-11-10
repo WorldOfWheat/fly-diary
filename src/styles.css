@@ -6,6 +6,7 @@
    files must be added in the place that matches their intended priority.
    =========================================================================== */
 
+@import url("./styles/reset.css");
 @import url("./styles/tokens.css");
 @import url("./styles/base.css");
 @import url("./styles/lock.css");

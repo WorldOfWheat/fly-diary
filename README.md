@@ -51,6 +51,7 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 | [security.md](docs/security.md) | 金鑰階層、KDF、AAD 與版本、記憶體保護、供應鏈安全、已知限制 |
 | [file-format.md](docs/file-format.md) | 日記／vault／索引／附件的檔案格式、設定檔與儲存位置 |
 | [ui.md](docs/ui.md) | 唯讀、月曆、縮放、手機版、多語系、設定頁、主題 |
+| [css-reset.md](docs/css-reset.md) | 瀏覽器 reset 的規則目的、載入順序與覆寫方式 |
 | [accessibility.md](docs/accessibility.md) | WCAG 2.2 AA 目標、已完成項目、手動驗證與剩餘缺口 |
 | [architecture.md](docs/architecture.md) | 專案結構與設計取捨 |
 | [development.md](docs/development.md) | 系統依賴、開發指令、測試、打包、Android |

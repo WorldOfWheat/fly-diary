@@ -21,11 +21,9 @@ html {
   }
 }
 
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* Browser defaults and the box model live in reset.css. This file only adds
+   the app's own primitives: the button chrome below removes the UA padding,
+   and component classes set the spacing they need. */
 
 /* Touch behaviour, applied once for the whole app.
    - `manipulation` removes the ~300ms double-tap delay and stops a double tap
@@ -65,6 +63,29 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* The app spaces these blocks with flex/grid `gap`, so the UA's heading and
+   paragraph margins would add to the gap. This is deliberately scoped to the
+   app's own copy instead of zeroing every element in the reset. Rules later in
+   the cascade (for example `.lock-subtitle`) can still add one side back. */
+.lock-title,
+.lock-subtitle,
+.lock-hint,
+.lock-error,
+.modal-title,
+.settings-heading,
+.settings-hint,
+.import-dir,
+.import-error,
+.stats-range,
+.stats-empty,
+.cal-title,
+.cal-summary,
+.attachments-title,
+.attachment-empty,
+.attachment-status {
+  margin: 0;
+}
+
 /* ---------- Shared primitives ---------- */
 
 /* Label text that is available to assistive tech but does not change the
@@ -95,6 +116,7 @@ body {
 }
 
 button {
+  padding: 0;
   font-family: inherit;
   font-size: inherit;
   color: inherit;

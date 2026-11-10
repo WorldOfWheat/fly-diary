@@ -1,0 +1,96 @@
+/* ===========================================================================
+   Fly Diary — browser reset
+
+   Goals:
+   - Remove only the browser defaults that fight a full-window app shell:
+     the box model, the body margin, inline media gaps, and form-control
+     margins.
+   - Keep the defaults that carry meaning: heading and paragraph margins, list
+     markers and indentation, native control borders/padding/backgrounds,
+     focus rings, and the OS date picker.
+   - Stay at zero specificity with `:where()` so component rules win without
+     `!important`.
+
+   This file deliberately does NOT contain `* { margin: 0; padding: 0 }`.
+   Component spacing belongs to the component stylesheets.
+   =========================================================================== */
+
+/* 1. One box model everywhere.
+   Widths include padding and borders on every element and on generated
+   content, so component sizing does not depend on the CSS reset used by a
+   library or a future browser default. */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+/* 2. Stable root text size.
+   Stop mobile browsers from inflating text in landscape. The unprefixed
+   property is the standard; the WebKit-prefixed one covers older iOS
+   WebViews. This does not change the app's fluid `font-size`, which is set in
+   base.css. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* 3. Remove the UA page margin.
+   Browsers give `body` an 8px margin. The app owns the viewport and paints its
+   own shell edge to edge, so this is the only margin removed globally. */
+body {
+  margin: 0;
+}
+
+/* 4. Replaced media.
+   Block layout removes the inline baseline gap below images; max-width keeps
+   wide media inside its container; height:auto preserves the intrinsic aspect
+   ratio. Inline SVG is intentionally excluded so icon baselines stay intact. */
+img,
+picture,
+video,
+canvas {
+  display: block;
+  max-width: 100%;
+}
+
+img,
+video {
+  height: auto;
+}
+
+/* 5. Form controls inherit the page's typography and colour.
+   Without this, buttons and inputs fall back to the UA's small system font
+   instead of the surrounding text. Borders, padding, backgrounds and native
+   appearance are deliberately left alone, so an unstyled control still looks
+   like a native control. `:where()` keeps the rule at zero specificity. */
+:where(button, input, select, textarea) {
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  margin: 0;
+}
+
+/* 6. Textareas grow vertically.
+   A textarea that can only be dragged sideways breaks column layouts. The app
+   sets `resize: none` where it manages the height itself. */
+textarea {
+  resize: vertical;
+}
+
+/* 7. Predictable tables.
+   Collapse adjacent borders and drop the UA's border spacing. Cell padding,
+   borders and alignment are not touched. */
+table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+/* 8. `hidden` always wins.
+   The app toggles dialogs and panels with the `hidden` attribute. A component
+   `display` rule has higher specificity than the UA rule, so without this a
+   hidden overlay could stay laid out and swallow clicks. This is behavioural,
+   not a spacing reset. */
+[hidden] {
+  display: none !important;
+}
