@@ -12,8 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
-use fly_diary_lib::storage;
 use fly_diary_lib::crypto;
+use fly_diary_lib::storage;
 
 /// A unique scratch directory, removed when the guard is dropped.
 struct TempDir(PathBuf);
@@ -91,7 +91,7 @@ fn create_write_lock_unlock_read_roundtrip() {
 #[test]
 fn the_wrong_passphrase_cannot_unlock() {
     let dir = TempDir::new("wrong-pass");
-    storage::create_vault(dir.path(), "right", fast()).unwrap();
+    storage::create_vault(dir.path(), "right-passphrase", fast()).unwrap();
 
     let err = storage::unlock_vault(dir.path(), "wrong").unwrap_err();
     assert!(
@@ -103,8 +103,15 @@ fn the_wrong_passphrase_cannot_unlock() {
 #[test]
 fn entries_are_unreadable_without_the_key() {
     let dir = TempDir::new("encrypted");
-    let key = storage::create_vault(dir.path(), "pass", fast()).unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-23", "Secret title", "Secret body").unwrap();
+    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
+    storage::write_entry(
+        dir.path(),
+        &key,
+        "2026-10-23",
+        "Secret title",
+        "Secret body",
+    )
+    .unwrap();
 
     // The raw file must not leak the plaintext.
     let raw = std::fs::read_to_string(dir.path().join("2026-10-23.xml")).unwrap();
@@ -113,24 +120,30 @@ fn entries_are_unreadable_without_the_key() {
 
     // A key from a different vault cannot decrypt it either.
     let other = TempDir::new("other-vault");
-    let other_key = storage::create_vault(other.path(), "pass", fast()).unwrap();
+    let other_key = storage::create_vault(other.path(), "passphrase-123", fast()).unwrap();
     assert!(storage::read_entry(dir.path(), &other_key, "2026-10-23").is_err());
 }
 
 #[test]
 fn changing_the_passphrase_keeps_the_entries_and_invalidates_the_old_one() {
     let dir = TempDir::new("rewrap");
-    let key = storage::create_vault(dir.path(), "old-pass", fast()).unwrap();
+    let key = storage::create_vault(dir.path(), "old-passphrase-123", fast()).unwrap();
     storage::write_entry(dir.path(), &key, "2026-10-23", "Kept", "Still here").unwrap();
 
     // Re-wrap under a new passphrase. The diary key is unchanged.
-    let same_key = storage::rewrap_vault(dir.path(), "old-pass", "new-pass", fast()).unwrap();
+    let same_key = storage::rewrap_vault(
+        dir.path(),
+        "old-passphrase-123",
+        "new-passphrase-123",
+        fast(),
+    )
+    .unwrap();
     assert_eq!(same_key, key, "rewrap must not regenerate the diary key");
 
     // The old passphrase no longer works...
-    assert!(storage::unlock_vault(dir.path(), "old-pass").is_err());
+    assert!(storage::unlock_vault(dir.path(), "old-passphrase-123").is_err());
     // ...and the new one does, with the entry intact.
-    let reopened = storage::unlock_vault(dir.path(), "new-pass").unwrap();
+    let reopened = storage::unlock_vault(dir.path(), "new-passphrase-123").unwrap();
     let entry = storage::read_entry(dir.path(), &reopened, "2026-10-23")
         .unwrap()
         .expect("entry survives the rewrap");
@@ -140,8 +153,8 @@ fn changing_the_passphrase_keeps_the_entries_and_invalidates_the_old_one() {
 #[test]
 fn a_second_create_on_the_same_directory_is_refused() {
     let dir = TempDir::new("duplicate");
-    storage::create_vault(dir.path(), "pass", fast()).unwrap();
-    let err = storage::create_vault(dir.path(), "pass", fast()).unwrap_err();
+    storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
+    let err = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap_err();
     assert!(err.contains("already exists"), "unexpected error: {err}");
 }
 
@@ -153,9 +166,17 @@ fn an_empty_passphrase_is_refused_at_creation() {
 }
 
 #[test]
+fn a_short_passphrase_is_refused_at_creation() {
+    let dir = TempDir::new("short-pass");
+    let error = storage::create_vault(dir.path(), "too-short", fast()).unwrap_err();
+    assert!(error.contains("12"), "got: {error}");
+    assert!(!storage::vault_exists(dir.path()).unwrap());
+}
+
+#[test]
 fn deleting_an_entry_removes_it_from_the_list() {
     let dir = TempDir::new("delete");
-    let key = storage::create_vault(dir.path(), "pass", fast()).unwrap();
+    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
     storage::write_entry(dir.path(), &key, "2026-10-23", "Gone", "bye").unwrap();
     storage::write_entry(dir.path(), &key, "2026-10-22", "Stays", "hi").unwrap();
 
@@ -172,11 +193,11 @@ fn deleting_an_entry_removes_it_from_the_list() {
 #[test]
 fn favourites_survive_a_lock_and_unlock() {
     let dir = TempDir::new("favourite");
-    let key = storage::create_vault(dir.path(), "pass", fast()).unwrap();
+    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
     storage::write_entry(dir.path(), &key, "2026-10-23", "Starred", "body").unwrap();
     storage::set_favourite(dir.path(), &key, "2026-10-23", true).unwrap();
 
-    let reopened = storage::unlock_vault(dir.path(), "pass").unwrap();
+    let reopened = storage::unlock_vault(dir.path(), "passphrase-123").unwrap();
     let favourites = storage::list_favourites(dir.path(), &reopened).unwrap();
     assert_eq!(favourites.len(), 1);
     assert_eq!(favourites[0].date, "2026-10-23");
@@ -185,7 +206,7 @@ fn favourites_survive_a_lock_and_unlock() {
 #[test]
 fn rebuilding_the_index_recovers_from_a_deleted_index_file() {
     let dir = TempDir::new("rebuild");
-    let key = storage::create_vault(dir.path(), "pass", fast()).unwrap();
+    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
     storage::write_entry(dir.path(), &key, "2026-10-23", "One", "a").unwrap();
     storage::write_entry(dir.path(), &key, "2026-10-22", "Two", "b").unwrap();
 
@@ -205,7 +226,7 @@ fn the_vault_records_the_kdf_parameters_it_was_created_with() {
         iterations: 2,
         parallelism: 1,
     };
-    storage::create_vault(dir.path(), "pass", params).unwrap();
+    storage::create_vault(dir.path(), "passphrase-123", params).unwrap();
 
     let stored = storage::vault_kdf_params(dir.path()).unwrap().unwrap();
     assert_eq!(stored.memory_kib, params.memory_kib);
@@ -217,7 +238,7 @@ fn the_vault_records_the_kdf_parameters_it_was_created_with() {
 fn a_full_import_cycle_lands_in_the_diary() {
     let diary = TempDir::new("import-diary");
     let source = TempDir::new("import-source");
-    let key = storage::create_vault(diary.path(), "pass", fast()).unwrap();
+    let key = storage::create_vault(diary.path(), "passphrase-123", fast()).unwrap();
 
     std::fs::write(source.path().join("2026-10-20.txt"), "older entry").unwrap();
     std::fs::write(source.path().join("2026-10-21.txt"), "newer entry").unwrap();

@@ -85,9 +85,9 @@
                 </p>
                 <div class="lock-advanced-grid">
                     <label class="lock-label" for="kdf-memory" data-i18n="lock.kdfMemory">記憶體 (MiB)</label>
-                    <input id="kdf-memory" class="lock-input" type="number" step="1" min="8" max="1024" />
+                    <input id="kdf-memory" class="lock-input" type="number" step="1" min="64" max="1024" />
                     <label class="lock-label" for="kdf-iterations" data-i18n="lock.kdfIterations">迭代次數</label>
-                    <input id="kdf-iterations" class="lock-input" type="number" step="1" min="1" max="16" />
+                    <input id="kdf-iterations" class="lock-input" type="number" step="1" min="2" max="16" />
                     <label class="lock-label" for="kdf-parallelism" data-i18n="lock.kdfParallelism">平行度</label>
                     <input id="kdf-parallelism" class="lock-input" type="number" step="1" min="1" max="16" />
                 </div>
@@ -552,11 +552,11 @@
                         <div class="settings-kdf-grid">
                             <label class="settings-label" for="settings-kdf-memory" data-i18n="lock.kdfMemory">記憶體
                                 (MiB)</label>
-                            <input id="settings-kdf-memory" class="settings-input" type="number" step="1" min="8"
+                            <input id="settings-kdf-memory" class="settings-input" type="number" step="1" min="64"
                                 max="1024" />
                             <label class="settings-label" for="settings-kdf-iterations"
                                 data-i18n="lock.kdfIterations">迭代次數</label>
-                            <input id="settings-kdf-iterations" class="settings-input" type="number" step="1" min="1"
+                            <input id="settings-kdf-iterations" class="settings-input" type="number" step="1" min="2"
                                 max="16" />
                             <label class="settings-label" for="settings-kdf-parallelism"
                                 data-i18n="lock.kdfParallelism">平行度</label>
@@ -567,6 +567,28 @@
                             data-i18n="settings.calibrate">自動量測（約 1 秒）</button>
                         <p id="settings-calibrate-note" class="settings-hint"></p>
                     </details>
+                </section>
+
+                <!-- About: build metadata. The commit hash is embedded at
+                     compile time so a running binary can be traced back to an
+                     exact source revision. -->
+                <section class="settings-section">
+                    <h3 class="settings-heading" data-i18n="settings.about">關於</h3>
+                    <p class="settings-hint" data-i18n="settings.aboutHint">
+                        Fly Diary 是離線、零知識的加密日記。這個區塊可協助你回報問題時確認建置版本。
+                    </p>
+                    <div class="settings-row">
+                        <span class="settings-label" data-i18n="settings.version">版本</span>
+                        <span id="settings-app-version" class="settings-path"></span>
+                    </div>
+                    <div class="settings-row">
+                        <span class="settings-label" data-i18n="settings.commit">Commit</span>
+                        <span id="settings-app-commit" class="settings-path"></span>
+                    </div>
+                    <div class="settings-row">
+                        <span class="settings-label" data-i18n="settings.author">作者</span>
+                        <span id="settings-app-author" class="settings-path"></span>
+                    </div>
                 </section>
 
                 <!-- Recovery phrase: a second, optional way to reach the diary

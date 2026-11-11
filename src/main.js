@@ -1394,23 +1394,6 @@ function resetEditorState() {
 }
 
 /**
- * Turn screenshot / screen-recording protection on or off.
- *
- * The window starts protected (`contentProtected: true` in `tauri.conf.json`),
- * so this only ever needs to *relax* it — while the workspace picker is open,
- * where the user may legitimately want to share their screen — and then restore
- * it. Failures are logged, never surfaced: on Linux the backend call is a no-op
- * and the app must keep working.
- */
-async function setScreenshotProtection(protected_) {
-  try {
-    await invoke("set_screenshot_protection", { protected: protected_ });
-  } catch (err) {
-    console.error("set_screenshot_protection failed:", err);
-  }
-}
-
-/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
@@ -1480,6 +1463,25 @@ function stopAutoLockTimer() {
 function setAutoLockMinutes(minutes) {
   autoLockMinutes = Number(minutes) || 0;
   resetAutoLockTimer();
+}
+
+/**
+ * Lock on OS suspend, app backgrounding, or resume.
+ *
+ * Tauri emits `tauri://suspended` / `tauri://resumed` on platforms that support
+ * it; `visibilitychange` covers webview backgrounding, including Android. Going
+ * through `lockNow()` saves first, so a pending keystroke is not lost.
+ */
+function initSuspendLock() {
+  const lockIfUnlocked = () => {
+    if (!els.app.hidden) lockScreen.lockNow();
+  };
+  listen("tauri://suspended", lockIfUnlocked);
+  listen("tauri://resumed", lockIfUnlocked);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") lockIfUnlocked();
+  });
+  window.addEventListener("pagehide", lockIfUnlocked);
 }
 
 /** Wire the global activity listeners once, at startup. */
@@ -1666,7 +1668,6 @@ function createControllers() {
     closeRecovery: (options) => recoveryDialog.close(options),
     renderDateLabel,
     lockAndFlush,
-    setScreenshotProtection,
   });
 }
 
@@ -1686,10 +1687,6 @@ async function enterApp() {
   // and only then does the editor take over. On a wide viewport this attribute
   // is ignored and both panes are visible.
   showListLayer();
-
-  // The window is created with `contentProtected: true`, so the lock screen is
-  // covered too. Re-assert it here in case the workspace picker turned it off.
-  setScreenshotProtection(true);
 
   try {
     const path = await invoke("diary_path");
@@ -1883,6 +1880,7 @@ async function init() {
 
   // Idle auto-lock listens globally; the duration arrives with the settings.
   initAutoLock();
+  initSuspendLock();
 
   // The bookmark button starts disabled: no entry is open yet.
   renderFavouriteButton();

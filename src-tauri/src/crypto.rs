@@ -73,8 +73,8 @@ pub struct KdfParams {
 impl Default for KdfParams {
     fn default() -> Self {
         Self {
-            memory_kib: 19 * 1024,
-            iterations: 2,
+            memory_kib: 64 * 1024,
+            iterations: 3,
             parallelism: 1,
         }
     }
@@ -82,7 +82,18 @@ impl Default for KdfParams {
 
 impl KdfParams {
     /// Lower bounds that keep the KDF meaningfully slow.
+    ///
+    /// Production uses 64 MiB, well above the OWASP Argon2id minimum, because
+    /// the vault is offline and an attacker can try passphrases without any
+    /// server-side rate limit. Unit tests use a smaller value so the suite
+    /// stays fast; integration tests exercise the production floor.
+    #[cfg(not(test))]
+    pub const MIN_MEMORY_KIB: u32 = 64 * 1024;
+    #[cfg(test)]
     pub const MIN_MEMORY_KIB: u32 = 8 * 1024;
+    #[cfg(not(test))]
+    pub const MIN_ITERATIONS: u32 = 2;
+    #[cfg(test)]
     pub const MIN_ITERATIONS: u32 = 1;
     pub const MIN_PARALLELISM: u32 = 1;
 
@@ -209,11 +220,11 @@ pub const CALIBRATION_TARGET_MS: u128 = 1000;
 /// Starting high and scaling *down* is deliberate: the first measurement is
 /// then an upper bound, so a slow machine never gets a parameter set that is
 /// already too expensive before we have measured anything.
-const CALIBRATION_START_MEMORY_KIB: u32 = 64 * 1024;
+const CALIBRATION_START_MEMORY_KIB: u32 = 128 * 1024;
 
 /// Memory cost the calibration will not go below, even on very slow hardware.
 /// Below this Argon2id stops being a meaningful barrier.
-const CALIBRATION_FLOOR_MEMORY_KIB: u32 = 19 * 1024;
+const CALIBRATION_FLOOR_MEMORY_KIB: u32 = 64 * 1024;
 
 /// Measure how long one Argon2id derivation takes with `params`.
 ///
@@ -678,7 +689,9 @@ mod tests {
         let k = key("pw", &salt("salt"));
         let (iv, ct) = encrypt_with_aad(&k, b"2026-10-23", b"today I flew").unwrap();
         assert_eq!(
-            decrypt_with_aad(&k, b"2026-10-23", &iv, &ct).unwrap().as_slice(),
+            decrypt_with_aad(&k, b"2026-10-23", &iv, &ct)
+                .unwrap()
+                .as_slice(),
             b"today I flew"
         );
     }

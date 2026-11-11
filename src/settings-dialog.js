@@ -185,6 +185,18 @@ export function createSettingsDialog(deps) {
     return deps.openRecovery?.();
   }
 
+  /** Show the build metadata embedded by the Rust backend. */
+  async function renderAppInfo() {
+    try {
+      const info = await deps.invoke("app_info");
+      if (els.settingsAppVersion) els.settingsAppVersion.textContent = info.version;
+      if (els.settingsAppCommit) els.settingsAppCommit.textContent = info.commit;
+      if (els.settingsAppAuthor) els.settingsAppAuthor.textContent = info.author;
+    } catch (err) {
+      console.error("app_info failed:", err);
+    }
+  }
+
   /** Show the folder the diary is stored in. */
   async function renderDiaryPath() {
     try {
@@ -205,9 +217,9 @@ export function createSettingsDialog(deps) {
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
 
-    // Not awaited: the path is informational, so the dialog should not wait on
-    // a second round trip before it appears.
-    renderDiaryPath();
+    // Not awaited: the path and build info are informational, so the dialog
+    // should not wait on extra round trips before it appears.
+    await Promise.all([renderDiaryPath(), renderAppInfo()]);
 
     try {
       const settings = await deps.invoke("get_settings");
@@ -309,6 +321,10 @@ export function createSettingsDialog(deps) {
         els.settingsError.textContent = deps.t("settings.errMismatch");
         return;
       }
+      if (next !== "" && next.length < 12) {
+        els.settingsError.textContent = deps.t("lock.errTooShort");
+        return;
+      }
     }
 
     els.settingsSave.disabled = true;
@@ -361,6 +377,7 @@ export function createSettingsDialog(deps) {
     fillSettingsKdf,
     readSettingsKdf,
     renderDiaryPath,
+    renderAppInfo,
     openSettings,
     closeSettings,
     calibrateKdf,

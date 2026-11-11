@@ -56,9 +56,11 @@ const MANIFEST_FILE: &str = "manifest.xml";
 /// Magic bytes at the start of an encrypted attachment file.
 const ATTACHMENT_MAGIC: &[u8; 4] = b"FDAT";
 /// On-disk attachment envelope version.
-const ATTACHMENT_VERSION: u8 = 1;
+const ATTACHMENT_VERSION: u8 = 2;
+const ATTACHMENT_VERSION_LEGACY: u8 = 1;
 /// Manifest schema version (inside the encrypted payload).
-const MANIFEST_VERSION: u8 = 1;
+const MANIFEST_VERSION: u8 = 2;
+const MANIFEST_VERSION_LEGACY: u8 = 1;
 /// AAD label for the manifest. Must differ from index and entry labels.
 const MANIFEST_AAD_LABEL: &[u8] = b"fly-diary/attachment-manifest";
 /// AAD label for an image.
@@ -75,6 +77,9 @@ pub const MAX_DROPPED_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Maximum number of files accepted in a single native drop.
 pub const MAX_DROPPED_FILES: usize = 20;
+
+/// Maximum combined bytes accepted in a single native drop.
+pub const MAX_DROPPED_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Maximum number of images per day.
 pub const MAX_ATTACHMENTS_PER_DAY: usize = 200;
@@ -146,6 +151,7 @@ pub fn read_dropped_images(paths: &[String]) -> Result<Vec<DroppedImage>, String
     }
 
     let mut images = Vec::with_capacity(paths.len());
+    let mut total = 0u64;
     for path in paths {
         let path = Path::new(path);
         let metadata =
@@ -160,9 +166,20 @@ pub fn read_dropped_images(paths: &[String]) -> Result<Vec<DroppedImage>, String
                 MAX_DROPPED_FILE_BYTES / (1024 * 1024)
             ));
         }
+        total = total.saturating_add(metadata.len());
+        if total > MAX_DROPPED_TOTAL_BYTES {
+            return Err(format!(
+                "Dropped files are larger than {} MB in total",
+                MAX_DROPPED_TOTAL_BYTES / (1024 * 1024)
+            ));
+        }
 
-        let bytes =
-            fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        let bytes = fsutil::read_limited(path, MAX_DROPPED_FILE_BYTES)
+            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+        // The command only advertises images. Validating the magic here keeps a
+        // crafted path (or a malicious renderer) from turning it into a
+        // general-purpose local file reader.
+        sniff_mime(&bytes)?;
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -253,6 +270,14 @@ fn manifest_aad(date: &str) -> Vec<u8> {
     aad
 }
 
+fn manifest_aad_v5(date: &str, version: u8, context: &xml::VaultContext) -> Vec<u8> {
+    xml::manifest_aad_v5(date, version, context)
+}
+
+fn attachment_aad_v5(date: &str, id: &str, version: u8, context: &xml::VaultContext) -> Vec<u8> {
+    xml::attachment_aad_v5(date, id, version, context)
+}
+
 fn attachment_aad(date: &str, id: &str, version: u8) -> Vec<u8> {
     let mut aad = Vec::with_capacity(ATTACHMENT_AAD_LABEL.len() + date.len() + id.len() + 4);
     aad.extend_from_slice(ATTACHMENT_AAD_LABEL);
@@ -303,8 +328,7 @@ fn attr_value(e: &BytesStart<'_>, name: &str) -> Result<Option<String>, String> 
 }
 
 fn required_attr(e: &BytesStart<'_>, name: &str) -> Result<String, String> {
-    attr_value(e, name)?
-        .ok_or_else(|| format!("Manifest is missing the {name} attribute"))
+    attr_value(e, name)?.ok_or_else(|| format!("Manifest is missing the {name} attribute"))
 }
 
 fn pack_manifest(date: &str, manifest: &Manifest) -> Result<Zeroizing<Vec<u8>>, String> {
@@ -407,7 +431,7 @@ fn unpack_manifest(plain: &[u8], expected_date: &str) -> Result<Manifest, String
     if !root_seen {
         return Err("Manifest has no <manifest> root".to_string());
     }
-    if version != Some(MANIFEST_VERSION) {
+    if version != Some(MANIFEST_VERSION) && version != Some(MANIFEST_VERSION_LEGACY) {
         return Err(format!(
             "Unsupported manifest version: {}",
             version.unwrap_or(0)
@@ -431,43 +455,54 @@ fn write_manifest(
         .map_err(|e| format!("Failed to create attachment directory: {e}"))?;
 
     let plain = pack_manifest(date, manifest)?;
-    let (iv, ciphertext) = crypto::encrypt_with_aad(key, &manifest_aad(date), &plain)?;
-    let document = xml::to_xml(&EncryptedEntry::new(
+    let context = storage::vault_context(dir)?;
+    let (aad, envelope_version) = match context.as_ref() {
+        Some(context) => (
+            manifest_aad_v5(date, MANIFEST_VERSION, context),
+            xml::CURRENT_VERSION,
+        ),
+        None => (manifest_aad(date), 4),
+    };
+    let (iv, ciphertext) = crypto::encrypt_with_aad(key, &aad, &plain)?;
+    let mut envelope = EncryptedEntry::new(
         date,
         crypto::b64_encode(&iv),
         crypto::b64_encode(&ciphertext),
-    ))?;
+    );
+    envelope.version = envelope_version;
+    let document = xml::to_xml(&envelope)?;
     fsutil::write_private(&manifest_path(dir, date)?, document)
         .map_err(|e| format!("Failed to write attachment manifest: {e}"))
 }
 
 fn read_manifest(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Manifest>, String> {
     let path = manifest_path(dir, date)?;
-    match fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > MAX_MANIFEST_BYTES => {
-            return Err("Attachment manifest is too large".to_string())
-        }
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(format!("Failed to read attachment manifest: {e}")),
-    }
-    let text = match fs::read_to_string(&path) {
+    let text = match fsutil::read_string_limited(&path, MAX_MANIFEST_BYTES) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to read attachment manifest: {e}")),
     };
 
     let encrypted = xml::from_xml(&text)?;
-    if encrypted.version != xml::CURRENT_VERSION {
+    if encrypted.version != xml::CURRENT_VERSION && encrypted.version != 4 {
         return Err("Unsupported attachment manifest envelope version".to_string());
     }
     if encrypted.date != date {
         return Err("Attachment manifest date does not match its folder".to_string());
     }
 
+    let context = storage::vault_context(dir)?;
+    let aad = if encrypted.uses_context_aad() {
+        let context = context
+            .as_ref()
+            .ok_or_else(|| "Attachment manifest is missing its vault context".to_string())?;
+        manifest_aad_v5(date, MANIFEST_VERSION, context)
+    } else {
+        manifest_aad(date)
+    };
     let iv = crypto::b64_decode(&encrypted.iv)?;
     let ciphertext = crypto::b64_decode(&encrypted.payload)?;
-    let plain = crypto::decrypt_with_aad(key, &manifest_aad(date), &iv, &ciphertext)?;
+    let plain = crypto::decrypt_with_aad(key, &aad, &iv, &ciphertext)?;
     unpack_manifest(&plain, date).map(Some)
 }
 
@@ -480,13 +515,23 @@ fn encrypt_attachment(
     date: &str,
     id: &str,
     data: &[u8],
+    context: Option<&xml::VaultContext>,
 ) -> Result<Vec<u8>, String> {
-    let aad = attachment_aad(date, id, ATTACHMENT_VERSION);
+    let (aad, version) = match context {
+        Some(context) => (
+            attachment_aad_v5(date, id, ATTACHMENT_VERSION, context),
+            ATTACHMENT_VERSION,
+        ),
+        None => (
+            attachment_aad(date, id, ATTACHMENT_VERSION_LEGACY),
+            ATTACHMENT_VERSION_LEGACY,
+        ),
+    };
     let (iv, ciphertext) = crypto::encrypt_with_aad(key, &aad, data)?;
     let mut out =
         Vec::with_capacity(ATTACHMENT_MAGIC.len() + 1 + crypto::IV_LEN + ciphertext.len());
     out.extend_from_slice(ATTACHMENT_MAGIC);
-    out.push(ATTACHMENT_VERSION);
+    out.push(version);
     out.extend_from_slice(&iv);
     out.extend_from_slice(&ciphertext);
     Ok(out)
@@ -497,6 +542,7 @@ fn decrypt_attachment(
     date: &str,
     id: &str,
     bytes: &[u8],
+    context: Option<&xml::VaultContext>,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     let header_len = ATTACHMENT_MAGIC.len() + 1 + crypto::IV_LEN;
     if bytes.len() < header_len {
@@ -506,13 +552,19 @@ fn decrypt_attachment(
         return Err("Attachment file has an unknown header".to_string());
     }
     let version = bytes[ATTACHMENT_MAGIC.len()];
-    if version != ATTACHMENT_VERSION {
+    if version != ATTACHMENT_VERSION && version != ATTACHMENT_VERSION_LEGACY {
         return Err(format!("Unsupported attachment version: {version}"));
     }
     let iv_start = ATTACHMENT_MAGIC.len() + 1;
     let iv = &bytes[iv_start..iv_start + crypto::IV_LEN];
     let ciphertext = &bytes[header_len..];
-    let aad = attachment_aad(date, id, version);
+    let aad = if version >= ATTACHMENT_VERSION {
+        let context =
+            context.ok_or_else(|| "Attachment is missing its vault context".to_string())?;
+        attachment_aad_v5(date, id, version, context)
+    } else {
+        attachment_aad(date, id, version)
+    };
     crypto::decrypt_with_aad(key, &aad, iv, ciphertext)
 }
 
@@ -524,15 +576,10 @@ fn read_attachment_bytes(
 ) -> Result<Zeroizing<Vec<u8>>, String> {
     let path = attachment_path(dir, date, id)?;
     let max_encrypted = MAX_ATTACHMENT_BYTES as u64 + 1024;
-    match fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > max_encrypted => {
-            return Err(format!("Attachment {id} is too large"))
-        }
-        Ok(_) => {}
-        Err(e) => return Err(format!("Failed to read attachment {id}: {e}")),
-    }
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read attachment {id}: {e}"))?;
-    decrypt_attachment(key, date, id, &bytes)
+    let bytes = fsutil::read_limited(&path, max_encrypted)
+        .map_err(|e| format!("Failed to read attachment {id}: {e}"))?;
+    let context = storage::vault_context(dir)?;
+    decrypt_attachment(key, date, id, &bytes, context.as_ref())
 }
 
 fn read_attachment_mime(dir: &Path, key: &[u8; 32], date: &str, id: &str) -> String {
@@ -730,7 +777,8 @@ pub fn save_attachment(
         return Err("Could not allocate a unique attachment id".to_string());
     };
 
-    let encrypted = encrypt_attachment(key, date, &id, data)?;
+    let context = storage::vault_context(dir)?;
+    let encrypted = encrypt_attachment(key, date, &id, data, context.as_ref())?;
     fsutil::write_private(&path, encrypted)
         .map_err(|e| format!("Failed to write attachment {id}: {e}"))?;
 
@@ -1142,7 +1190,7 @@ mod tests {
         let manifest = fs::read_to_string(manifest_path(&dir, "2026-10-23").unwrap()).unwrap();
         assert!(!manifest.contains(&item.id));
         assert!(!manifest.contains("image/webp"));
-        assert!(manifest.contains("version=\"4\""));
+        assert!(manifest.contains("version=\"5\""));
 
         let _ = fs::remove_dir_all(&dir);
     }

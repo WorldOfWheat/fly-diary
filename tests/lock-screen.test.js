@@ -119,7 +119,6 @@ function harness(overrides = {}) {
     closeRecovery: spy(),
     renderDateLabel: spy(),
     lockAndFlush: spy(async () => {}),
-    setScreenshotProtection: spy(async () => {}),
     ...overrides.deps,
   };
 
@@ -594,7 +593,7 @@ test("handleUnlockSubmit rejects a mismatched confirmation", async () => {
   await withLock(async ({ lock, els, invoke }) => {
     lock.setConfigured(true);
     lock.setVaultInitialized(false);
-    els.passphrase.value = "longenough";
+    els.passphrase.value = "longenough12";
     els.passphraseConfirm.value = "different";
 
     await lock.handleUnlockSubmit(submitEvent());
@@ -624,8 +623,8 @@ test("handleUnlockSubmit creates a vault in a configured empty folder", async ()
   await withLock(async ({ lock, els, invoke, deps }) => {
     lock.setConfigured(true);
     lock.setVaultInitialized(false);
-    els.passphrase.value = "longenough";
-    els.passphraseConfirm.value = "longenough";
+    els.passphrase.value = "longenough12";
+    els.passphraseConfirm.value = "longenough12";
     els.kdfMemory.value = "64";
     els.kdfIterations.value = "3";
     els.kdfParallelism.value = "4";
@@ -633,7 +632,7 @@ test("handleUnlockSubmit creates a vault in a configured empty folder", async ()
     await lock.handleUnlockSubmit(submitEvent());
 
     assert.deepEqual(invoke.argsOf("create_vault"), {
-      passphrase: "longenough",
+      passphrase: "longenough12",
       kdf: { memoryKib: 65536, iterations: 3, parallelism: 4 },
     });
     assert.equal(lock.isVaultInitialized(), true);
@@ -646,8 +645,8 @@ test("handleUnlockSubmit stores the directory on first run", async () => {
     lock.setConfigured(false);
     lock.setVaultInitialized(false);
     els.diaryDir.value = "/new/diary";
-    els.passphrase.value = "longenough";
-    els.passphraseConfirm.value = "longenough";
+    els.passphrase.value = "longenough12";
+    els.passphraseConfirm.value = "longenough12";
 
     await lock.handleUnlockSubmit(submitEvent());
 
@@ -661,8 +660,8 @@ test("handleUnlockSubmit requires a directory on first run", async () => {
     lock.setConfigured(false);
     lock.setVaultInitialized(false);
     els.diaryDir.value = "  ";
-    els.passphrase.value = "longenough";
-    els.passphraseConfirm.value = "longenough";
+    els.passphrase.value = "longenough12";
+    els.passphraseConfirm.value = "longenough12";
 
     await lock.handleUnlockSubmit(submitEvent());
 
@@ -677,14 +676,14 @@ test("handleUnlockSubmit re-detects the vault before creating one", async () => 
       lock.setConfigured(false);
       lock.setVaultInitialized(false);
       els.diaryDir.value = "/existing/diary";
-      els.passphrase.value = "longenough";
-      els.passphraseConfirm.value = "longenough";
+      els.passphrase.value = "longenough12";
+      els.passphraseConfirm.value = "longenough12";
 
       await lock.handleUnlockSubmit(submitEvent());
 
       // The folder turned out to hold a vault, so it unlocks instead.
       assert.equal(invoke.commands().includes("create_vault"), false);
-      assert.deepEqual(invoke.argsOf("unlock"), { passphrase: "longenough" });
+      assert.deepEqual(invoke.argsOf("unlock"), { passphrase: "longenough12" });
     },
     { invokeTable: { vault_exists: true } }
   );
@@ -694,8 +693,8 @@ test("handleUnlockSubmit rejects non-numeric KDF parameters", async () => {
   await withLock(async ({ lock, els, invoke }) => {
     lock.setConfigured(true);
     lock.setVaultInitialized(false);
-    els.passphrase.value = "longenough";
-    els.passphraseConfirm.value = "longenough";
+    els.passphrase.value = "longenough12";
+    els.passphraseConfirm.value = "longenough12";
     els.kdfMemory.value = "abc";
 
     await lock.handleUnlockSubmit(submitEvent());
@@ -1162,8 +1161,8 @@ test("recovery submit validates the phrase and the new passphrase", async () => 
     await lock.handleRecoverySubmit(submitEvent());
     assert.equal(els.recoveryUnlockError.textContent, "lock.errTooShort");
 
-    els.recoveryNewPass.value = "123456";
-    els.recoveryNewPassConfirm.value = "1234567";
+    els.recoveryNewPass.value = "123456789012";
+    els.recoveryNewPassConfirm.value = "123456789013";
     await lock.handleRecoverySubmit(submitEvent());
     assert.equal(els.recoveryUnlockError.textContent, "lock.errMismatch");
 
@@ -1183,8 +1182,8 @@ test("recovery persists the folder when it is reached before setup finishes", as
       els,
       "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
     );
-    els.recoveryNewPass.value = "new-pass";
-    els.recoveryNewPassConfirm.value = "new-pass";
+    els.recoveryNewPass.value = "new-passphrase";
+    els.recoveryNewPassConfirm.value = "new-passphrase";
 
     await lock.handleRecoverySubmit(submitEvent());
 
@@ -1200,15 +1199,15 @@ test("a successful recovery invokes the backend and enters the app", async () =>
       els,
       "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
     );
-    els.recoveryNewPass.value = "new-pass";
-    els.recoveryNewPassConfirm.value = "new-pass";
+    els.recoveryNewPass.value = "new-passphrase";
+    els.recoveryNewPassConfirm.value = "new-passphrase";
 
     await lock.handleRecoverySubmit(submitEvent());
 
     assert.deepEqual(invoke.argsOf("recover_vault"), {
       phrase:
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
-      newPassphrase: "new-pass",
+      newPassphrase: "new-passphrase",
     });
     assert.equal(lock.isRecoveryMode(), false);
     assert.equal(recoveryPhraseValue(els), "");
@@ -1225,8 +1224,8 @@ test("a rejected recovery keeps the form open and shows the backend message", as
         els,
         "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
       );
-      els.recoveryNewPass.value = "new-pass";
-      els.recoveryNewPassConfirm.value = "new-pass";
+      els.recoveryNewPass.value = "new-passphrase";
+      els.recoveryNewPassConfirm.value = "new-passphrase";
 
       const originalError = console.error;
       console.error = () => {};
@@ -1268,6 +1267,5 @@ function lockDeps(els) {
     closeRecovery: spy(),
     renderDateLabel: spy(),
     lockAndFlush: spy(async () => {}),
-    setScreenshotProtection: spy(async () => {}),
   };
 }

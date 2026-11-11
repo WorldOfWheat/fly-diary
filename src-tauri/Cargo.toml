@@ -2,6 +2,8 @@
 name = "fly-diary"
 version = "0.1.7"
 description = "A simple one-entry-per-day diary app"
+authors = ["WorldOfWheat"]
+repository = "https://github.com/WorldOfWheat/fly-diary"
 edition = "2021"
 rust-version = "1.77.2"
 

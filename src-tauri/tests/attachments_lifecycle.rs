@@ -51,7 +51,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\nintegration";
 #[test]
 fn attachments_survive_lock_unlock_and_follow_entry_deletion() {
     let dir = TempDir::new("lifecycle");
-    let key = storage::create_vault(dir.path(), "passphrase", fast()).unwrap();
+    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
 
     let first = attachments::save_attachment(
         dir.path(),
@@ -81,7 +81,7 @@ fn attachments_survive_lock_unlock_and_follow_entry_deletion() {
     .unwrap();
 
     // Locking is just dropping the key; the manifest and images stay on disk.
-    let reopened = storage::unlock_vault(dir.path(), "passphrase").unwrap();
+    let reopened = storage::unlock_vault(dir.path(), "passphrase-123").unwrap();
     let listed = attachments::list_attachments(dir.path(), &reopened, "2026-10-23").unwrap();
     assert_eq!(listed[0].id, second.id);
     assert_eq!(listed[1].id, first.id);

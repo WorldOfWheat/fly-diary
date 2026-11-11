@@ -24,6 +24,9 @@ const SETTINGS_IDS = [
   "settingsSave",
   "settingsCalibrate",
   "settingsDiaryPath",
+  "settingsAppVersion",
+  "settingsAppCommit",
+  "settingsAppAuthor",
   "autoLockSelect",
   "autosaveDelaySelect",
   "vaultKdf",
@@ -53,6 +56,12 @@ function harness(overrides = {}) {
     },
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
+    app_info: {
+      version: "0.1.7",
+      commit: "abc123",
+      author: "WorldOfWheat",
+      repository: "https://github.com/WorldOfWheat/fly-diary",
+    },
     set_auto_lock: null,
     set_autosave_delay: null,
     change_passphrase: null,
@@ -138,14 +147,21 @@ test("openSettings loads the choices, the vault KDF and shows the dialog", async
 test("openSettings shows the diary folder", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
-    // `renderDiaryPath` is deliberately not awaited, so let it settle.
-    await Promise.resolve();
-
     assert.equal(
       els.settingsDiaryPath.textContent,
       "/home/user/Documents/diary",
     );
     assert.equal(els.settingsDiaryPath.title, "/home/user/Documents/diary");
+  });
+});
+
+test("openSettings shows the build version, commit and author", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.openSettings();
+
+    assert.equal(els.settingsAppVersion.textContent, "0.1.7");
+    assert.equal(els.settingsAppCommit.textContent, "abc123");
+    assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
 });
 
@@ -487,8 +503,8 @@ test("saveSettings writes both timing values before the passphrase", async () =>
     els.autoLockSelect.value = "15";
     els.autosaveDelaySelect.value = "200";
     els.settingsCurrentPass.value = "old";
-    els.settingsNewPass.value = "newpass";
-    els.settingsNewPassConfirm.value = "newpass";
+    els.settingsNewPass.value = "newpassphrase";
+    els.settingsNewPassConfirm.value = "newpassphrase";
 
     await settings.saveSettings();
 
@@ -504,8 +520,8 @@ test("saveSettings requires the current passphrase before changing it", async ()
   await withSettings(async ({ settings, els, invoke }) => {
     els.autoLockSelect.value = "5";
     els.autosaveDelaySelect.value = "800";
-    els.settingsNewPass.value = "newpass";
-    els.settingsNewPassConfirm.value = "newpass";
+    els.settingsNewPass.value = "newpassphrase";
+    els.settingsNewPassConfirm.value = "newpassphrase";
 
     await settings.saveSettings();
 
@@ -518,7 +534,7 @@ test("saveSettings requires the current passphrase before changing it", async ()
 test("saveSettings rejects a mismatched confirmation", async () => {
   await withSettings(async ({ settings, els, invoke }) => {
     els.settingsCurrentPass.value = "old";
-    els.settingsNewPass.value = "newpass";
+    els.settingsNewPass.value = "newpassphrase";
     els.settingsNewPassConfirm.value = "different";
 
     await settings.saveSettings();
@@ -533,8 +549,8 @@ test("saveSettings changes the passphrase with the advanced KDF", async () => {
     els.autoLockSelect.value = "5";
     els.autosaveDelaySelect.value = "800";
     els.settingsCurrentPass.value = "old";
-    els.settingsNewPass.value = "newpass";
-    els.settingsNewPassConfirm.value = "newpass";
+    els.settingsNewPass.value = "newpassphrase";
+    els.settingsNewPassConfirm.value = "newpassphrase";
     els.settingsKdfMemory.value = "64";
     els.settingsKdfIterations.value = "3";
     els.settingsKdfParallelism.value = "4";
@@ -543,7 +559,7 @@ test("saveSettings changes the passphrase with the advanced KDF", async () => {
 
     assert.deepEqual(invoke.argsOf("change_passphrase"), {
       currentPassphrase: "old",
-      newPassphrase: "newpass",
+      newPassphrase: "newpassphrase",
       kdf: { memoryKib: 65536, iterations: 3, parallelism: 4 },
     });
     // The dialog now shows the parameters it just sent.
@@ -651,7 +667,8 @@ test("saveSettings requires the current passphrase for a parameter-only change",
           c !== "diary_path" &&
           c !== "get_settings" &&
           c !== "get_vault_kdf" &&
-          c !== "get_recovery_status",
+          c !== "get_recovery_status" &&
+          c !== "app_info",
       );
     assert.deepEqual(writes, []);
   });
@@ -674,8 +691,8 @@ test("saveSettings rejects non-numeric KDF parameters", async () => {
     els.autoLockSelect.value = "5";
     els.autosaveDelaySelect.value = "800";
     els.settingsCurrentPass.value = "old";
-    els.settingsNewPass.value = "newpass";
-    els.settingsNewPassConfirm.value = "newpass";
+    els.settingsNewPass.value = "newpassphrase";
+    els.settingsNewPassConfirm.value = "newpassphrase";
     els.settingsKdfMemory.value = "abc";
 
     await settings.saveSettings();

@@ -38,9 +38,10 @@
 //! interrupted export leaves the destination untouched instead of truncated.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+
+use rand::{rngs::OsRng, RngCore};
 
 /// Mode for files that hold diary data: owner read/write only.
 #[cfg(unix)]
@@ -53,18 +54,22 @@ const DIR_MODE: u32 = 0o700;
 /// Suffix for the sibling file a write goes through before being renamed.
 const TEMP_SUFFIX: &str = ".tmp";
 
-/// Counter that makes temporary names unique within one process.
-///
-/// The importer writes many entries in parallel from the rayon pool. A fixed
-/// temporary name would let two threads open the same file, interleave their
-/// bytes and then race to rename it, so each write gets its own name.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// How many times a temporary-name collision is retried.
+const TEMP_ATTEMPTS: usize = 8;
 
-/// Build a unique sibling path for `path`, e.g. `entry.xml.tmp-1234-7`.
+/// Build an unpredictable sibling path for `path`, e.g.
+/// `entry.xml.tmp-3f2a...`.
+///
+/// The random suffix matters when the diary folder is shared or synced: a
+/// predictable temporary name lets another local writer pre-create a symlink
+/// at that path and redirect the subsequent write.
 fn temp_path(path: &Path) -> PathBuf {
-    let n = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!("{TEMP_SUFFIX}-{}-{n}", std::process::id()));
+    name.push(format!(
+        "{TEMP_SUFFIX}-{:016x}{:016x}",
+        OsRng.next_u64(),
+        OsRng.next_u64()
+    ));
     path.with_file_name(name)
 }
 
@@ -84,14 +89,31 @@ fn temp_path(path: &Path) -> PathBuf {
 /// would otherwise keep its `0644` permissions forever.
 pub fn write_private(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()> {
     let data = data.as_ref();
-    let tmp = temp_path(path);
+    let mut last_error = None;
 
-    // Any early return must not leave the temporary file behind.
-    let result = write_temp(&tmp, data).and_then(|()| replace(&tmp, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+    for _ in 0..TEMP_ATTEMPTS {
+        let tmp = temp_path(path);
+        // Any early return must not leave the temporary file behind.
+        match write_temp(&tmp, data).and_then(|()| replace(&tmp, path)) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                // A collision means the path belongs to someone else. Never
+                // delete it; just choose another random name.
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+        }
     }
-    result
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate a temporary file name",
+        )
+    }))
 }
 
 /// Copy `source` to `dest` atomically, readable only by the current user.
@@ -104,13 +126,62 @@ pub fn write_private(path: &Path, data: impl AsRef<[u8]>) -> std::io::Result<()>
 /// `source` is read in chunks rather than with `fs::copy` so the bytes pass
 /// through the same flush-then-rename path as every other write.
 pub fn copy_private(source: &Path, dest: &Path) -> std::io::Result<()> {
-    let tmp = temp_path(dest);
-
-    let result = copy_temp(source, &tmp).and_then(|()| replace(&tmp, dest));
-    if result.is_err() {
-        let _ = fs::remove_file(&tmp);
+    if fs::symlink_metadata(source)?.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "source must not be a symbolic link",
+        ));
     }
-    result
+    let mut last_error = None;
+
+    for _ in 0..TEMP_ATTEMPTS {
+        let tmp = temp_path(dest);
+        match copy_temp(source, &tmp).and_then(|()| replace(&tmp, dest)) {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                // A collision means the path belongs to someone else. Never
+                // delete it; just choose another random name.
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    let _ = fs::remove_file(&tmp);
+                    return Err(error);
+                }
+                last_error = Some(error);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not allocate a temporary file name",
+        )
+    }))
+}
+
+/// Read at most `max` bytes from `path`.
+///
+/// The limit is enforced while reading (`take`), not from a separate metadata
+/// call, so a file that grows between the check and the read cannot allocate
+/// unbounded memory. Oversized files are reported as invalid data.
+pub fn read_limited(path: &Path, max: u64) -> std::io::Result<Vec<u8>> {
+    let file = fs::File::open(path)?;
+    let mut data = Vec::new();
+    file.take(max.saturating_add(1)).read_to_end(&mut data)?;
+    if data.len() as u64 > max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file exceeds the size limit",
+        ));
+    }
+    Ok(data)
+}
+
+/// UTF-8 version of [`read_limited`].
+pub fn read_string_limited(path: &Path, max: u64) -> std::io::Result<String> {
+    let bytes = read_limited(path, max)?;
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "file is not valid UTF-8")
+    })
 }
 
 /// Create `tmp` with the private mode, write `data` and flush it to disk.
@@ -138,9 +209,9 @@ fn open_private(path: &Path) -> std::io::Result<fs::File> {
 
     fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .mode(FILE_MODE)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(path)
 }
 
@@ -148,8 +219,7 @@ fn open_private(path: &Path) -> std::io::Result<fs::File> {
 fn open_private(path: &Path) -> std::io::Result<fs::File> {
     fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .open(path)
 }
 
@@ -216,7 +286,10 @@ fn replace_file_w(replacement: &Path, path: &Path) -> std::io::Result<()> {
     const REPLACEFILE_WRITE_THROUGH: u32 = 0x0000_0001;
 
     let wide = |p: &Path| -> Vec<u16> {
-        p.as_os_str().encode_wide().chain(std::iter::once(0)).collect()
+        p.as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
     };
     let replaced = wide(path);
     let replacement = wide(replacement);
@@ -284,6 +357,14 @@ fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
 /// read `vault.xml`. Only the group/other bits are cleared, so the owner's own
 /// bits (and any ACLs) are left as the user set them.
 pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    if let Ok(metadata) = fs::symlink_metadata(dir) {
+        if metadata.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "directory must not be a symbolic link",
+            ));
+        }
+    }
     if dir.is_dir() {
         return tighten_dir(dir);
     }
@@ -527,7 +608,10 @@ mod tests {
 
         for i in 0..16 {
             let path = dir.join(format!("entry-{i}.xml"));
-            assert_eq!(fs::read(&path).unwrap(), format!("payload-{i}").into_bytes());
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                format!("payload-{i}").into_bytes()
+            );
         }
         // No temporary files survived the race.
         assert!(names_starting_with(&dir, "entry-")
@@ -610,6 +694,49 @@ mod tests {
         let dir = temp_dir("sync-missing");
         let missing = dir.join("nope");
         assert!(sync_dir(&missing).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn open_private_refuses_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("symlink");
+        let target = dir.join("target");
+        let link = dir.join("link");
+        fs::write(&target, b"keep me").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(open_private(&link).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"keep me");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_private_refuses_a_symlink_source() {
+        use std::os::unix::fs::symlink;
+
+        let dir = temp_dir("copy-symlink");
+        let target = dir.join("target");
+        let link = dir.join("link");
+        fs::write(&target, b"secret").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(copy_private(&link, &dir.join("out")).is_err());
+        assert!(!dir.join("out").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_limited_rejects_oversized_files() {
+        let dir = temp_dir("limit");
+        let path = dir.join("big");
+        fs::write(&path, b"12345").unwrap();
+
+        assert_eq!(read_limited(&path, 5).unwrap(), b"12345");
+        assert!(read_limited(&path, 4).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 

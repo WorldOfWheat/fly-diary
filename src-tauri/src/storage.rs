@@ -30,6 +30,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use rand::{rngs::OsRng, RngCore};
 use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::{Zeroize, Zeroizing};
@@ -53,13 +54,24 @@ const VAULT_FILE: &str = "vault.xml";
 const RECOVERY_FILE: &str = "recovery.xml";
 
 /// Version of the recovery sidecar format.
-const RECOVERY_VERSION: u8 = 1;
+///
+/// Version 2 binds the wrapping to the vault id/key id. Version 1 remains
+/// readable because it cannot be re-wrapped without the recovery phrase.
+const RECOVERY_VERSION: u8 = 2;
+const RECOVERY_VERSION_LEGACY: u8 = 1;
 
 /// Domain separation for the associated data of the recovery wrapping.
 const RECOVERY_AAD_LABEL: &[u8] = b"fly-diary/recovery";
 
 /// Name of the encrypted sidebar index.
 const INDEX_FILE: &str = "index.xml";
+
+/// Hard read limits for metadata files.
+const MAX_VAULT_BYTES: u64 = 64 * 1024;
+const MAX_RECOVERY_BYTES: u64 = 64 * 1024;
+const MAX_MIGRATION_JOURNAL_BYTES: u64 = 64 * 1024;
+const MAX_INDEX_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
 
 /// Separator between index records inside the encrypted index payload.
 ///
@@ -168,6 +180,30 @@ pub struct BrokenEntry {
     pub reason: BrokenReason,
 }
 
+/// Minimum length for a new vault passphrase.
+///
+/// The vault is offline, so there is no server-side rate limit: a short
+/// passphrase is the weakest link even with a strong Argon2id cost. Unit tests
+/// use a lower floor to keep the suite fast; integration tests exercise the
+/// production value.
+#[cfg(not(test))]
+pub const MIN_PASSPHRASE_CHARS: usize = 12;
+#[cfg(test)]
+pub const MIN_PASSPHRASE_CHARS: usize = 1;
+
+/// Validate a passphrase before it is used to create or re-wrap a vault.
+pub fn validate_new_passphrase(passphrase: &str) -> Result<(), String> {
+    if passphrase.is_empty() {
+        return Err("Passphrase must not be empty".to_string());
+    }
+    if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
+        return Err(format!(
+            "Passphrase must be at least {MIN_PASSPHRASE_CHARS} characters"
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that `date` is a real calendar date in `YYYY-MM-DD` form.
 ///
 /// This is the single source of truth for what counts as a valid entry key,
@@ -231,6 +267,7 @@ enum Kdf {
 }
 
 /// Contents of `vault.xml`.
+#[derive(Debug, Clone)]
 struct Vault {
     kdf: Kdf,
     /// Only meaningful for [`Kdf::Argon2id`].
@@ -239,6 +276,49 @@ struct Vault {
     /// Base64 of `AES-GCM(master key, diary key)`.
     wrapped_key_iv_b64: String,
     wrapped_key_b64: String,
+    /// Random identity of this vault. Missing in version 2 vaults; generated
+    /// when such a vault is first unlocked.
+    vault_id: Option<[u8; 16]>,
+    /// Identity of the current diary key. Changes when a key is rotated.
+    key_id: Option<[u8; 16]>,
+}
+
+impl Vault {
+    fn context(&self) -> Option<xml::VaultContext> {
+        Some(xml::VaultContext {
+            vault_id: self.vault_id?,
+            key_id: self.key_id?,
+        })
+    }
+
+    fn set_context(&mut self, context: xml::VaultContext) {
+        self.vault_id = Some(context.vault_id);
+        self.key_id = Some(context.key_id);
+    }
+}
+
+/// Create a random 16-byte identifier.
+fn new_id() -> [u8; 16] {
+    let mut id = [0u8; 16];
+    OsRng.fill_bytes(&mut id);
+    id
+}
+
+/// Associated data for the wrapped diary key.
+fn vault_wrap_aad(
+    context: &xml::VaultContext,
+    salt_b64: &str,
+    params: crypto::KdfParams,
+) -> Vec<u8> {
+    let mut serialized = Vec::with_capacity(12);
+    serialized.extend_from_slice(&params.memory_kib.to_be_bytes());
+    serialized.extend_from_slice(&params.iterations.to_be_bytes());
+    serialized.extend_from_slice(&params.parallelism.to_be_bytes());
+    xml::context_aad(
+        xml::KIND_VAULT_WRAP,
+        context,
+        &[b"argon2id", salt_b64.as_bytes(), &serialized],
+    )
 }
 
 fn vault_path(dir: &Path) -> PathBuf {
@@ -251,13 +331,23 @@ fn vault_path(dir: &Path) -> PathBuf {
 /// exactly the bytes that will end up in `vault.xml` once the migration
 /// commits.
 fn vault_to_xml(vault: &Vault) -> String {
+    let version = if vault.context().is_some() { 3 } else { 2 };
+    let context = match (vault.vault_id, vault.key_id) {
+        (Some(vault_id), Some(key_id)) => format!(
+            "  <vault-id>{}</vault-id>\n  <key-id>{}</key-id>\n",
+            crypto::b64_encode(&vault_id),
+            crypto::b64_encode(&key_id)
+        ),
+        _ => String::new(),
+    };
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <vault version=\"2\">\n\
+         <vault version=\"{version}\">\n\
          \x20 <kdf>argon2id</kdf>\n\
          \x20 <kdf-memory>{}</kdf-memory>\n\
          \x20 <kdf-iterations>{}</kdf-iterations>\n\
          \x20 <kdf-parallelism>{}</kdf-parallelism>\n\
+         {context}\
          \x20 <salt>{}</salt>\n\
          \x20 <wrapped-key-iv>{}</wrapped-key-iv>\n\
          \x20 <wrapped-key>{}</wrapped-key>\n\
@@ -281,7 +371,7 @@ fn write_vault(dir: &Path, vault: &Vault) -> Result<(), String> {
 
 fn read_vault(dir: &Path) -> Result<Option<Vault>, String> {
     let path = vault_path(dir);
-    let text = match fs::read_to_string(&path) {
+    let text = match fsutil::read_string_limited(&path, MAX_VAULT_BYTES) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to read vault: {e}")),
@@ -310,6 +400,8 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
     let mut salt = None;
     let mut wrapped_key_iv = None;
     let mut wrapped_key = None;
+    let mut vault_id = None;
+    let mut key_id = None;
     // Version 1 fields.
     let mut verifier_iv = None;
     let mut verifier = None;
@@ -347,6 +439,8 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
                     "salt" => append(&mut salt, &value),
                     "wrapped-key-iv" => append(&mut wrapped_key_iv, &value),
                     "wrapped-key" => append(&mut wrapped_key, &value),
+                    "vault-id" => append(&mut vault_id, &value),
+                    "key-id" => append(&mut key_id, &value),
                     "verifier-iv" => append(&mut verifier_iv, &value),
                     "verifier" => append(&mut verifier, &value),
                     _ => {}
@@ -364,6 +458,8 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
                     "salt" => append(&mut salt, &value),
                     "wrapped-key-iv" => append(&mut wrapped_key_iv, &value),
                     "wrapped-key" => append(&mut wrapped_key, &value),
+                    "vault-id" => append(&mut vault_id, &value),
+                    "key-id" => append(&mut key_id, &value),
                     "verifier-iv" => append(&mut verifier_iv, &value),
                     "verifier" => append(&mut verifier, &value),
                     _ => {}
@@ -386,10 +482,31 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
     let parallelism = trim(parallelism);
     let wrapped_key_iv = trim(wrapped_key_iv);
     let wrapped_key = trim(wrapped_key);
+    let vault_id = trim(vault_id);
+    let key_id = trim(key_id);
     let verifier_iv = trim(verifier_iv);
     let verifier = trim(verifier);
 
     let salt_b64 = salt.ok_or_else(|| "Vault is missing <salt>".to_string())?;
+    let parse_id = |value: Option<String>, name: &str| -> Result<Option<[u8; 16]>, String> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        let bytes =
+            crypto::b64_decode(&value).map_err(|e| format!("Invalid <{name}> value: {e}"))?;
+        let id: [u8; 16] = bytes
+            .try_into()
+            .map_err(|_| format!("<{name}> must be 16 bytes"))?;
+        Ok(Some(id))
+    };
+    let vault_id = parse_id(vault_id, "vault-id")?;
+    let key_id = parse_id(key_id, "key-id")?;
+    if vault_id.is_some() != key_id.is_some() {
+        return Err("Vault must contain both <vault-id> and <key-id>".to_string());
+    }
+    if version == "3" && vault_id.is_none() {
+        return Err("Version 3 vault is missing <vault-id>/<key-id>".to_string());
+    }
 
     // Version 1 vaults have no <kdf> element and store a verifier instead of a
     // wrapped key. Treat them as legacy so they can be migrated on unlock.
@@ -402,6 +519,8 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
             wrapped_key_iv_b64: verifier_iv
                 .ok_or_else(|| "Vault is missing <verifier-iv>".to_string())?,
             wrapped_key_b64: verifier.ok_or_else(|| "Vault is missing <verifier>".to_string())?,
+            vault_id: None,
+            key_id: None,
         });
     }
 
@@ -427,9 +546,18 @@ fn parse_vault(text: &str) -> Result<Vault, String> {
         salt_b64,
         wrapped_key_iv_b64: wrapped_key_iv
             .ok_or_else(|| "Vault is missing <wrapped-key-iv>".to_string())?,
-        wrapped_key_b64: wrapped_key
-            .ok_or_else(|| "Vault is missing <wrapped-key>".to_string())?,
+        wrapped_key_b64: wrapped_key.ok_or_else(|| "Vault is missing <wrapped-key>".to_string())?,
+        vault_id,
+        key_id,
     })
+}
+
+/// Read the v5 associated-data context from `vault.xml`.
+///
+/// The identifiers are public metadata; the key is still required to decrypt
+/// anything. Returns `None` for version 2 vaults that have not been migrated.
+pub(crate) fn vault_context(dir: &Path) -> Result<Option<xml::VaultContext>, String> {
+    Ok(read_vault(dir)?.and_then(|vault| vault.context()))
 }
 
 /// Whether a vault already exists (i.e. the diary has been initialised).
@@ -465,14 +593,14 @@ pub fn rewrap_vault(
     new_passphrase: &str,
     new_params: crypto::KdfParams,
 ) -> Result<Zeroizing<[u8; 32]>, String> {
-    if new_passphrase.is_empty() {
-        return Err("Passphrase must not be empty".to_string());
-    }
+    validate_new_passphrase(new_passphrase)?;
     new_params.validate()?;
 
     let vault = read_vault(dir)?.ok_or_else(|| "No vault found".to_string())?;
     if vault.kdf != Kdf::Argon2id {
-        return Err("Unlock the diary once to upgrade it before changing the passphrase".to_string());
+        return Err(
+            "Unlock the diary once to upgrade it before changing the passphrase".to_string(),
+        );
     }
 
     // Verify the old passphrase by unwrapping the diary key with it.
@@ -480,15 +608,29 @@ pub fn rewrap_vault(
     let old_iv = crypto::b64_decode(&vault.wrapped_key_iv_b64)?;
     let old_ct = crypto::b64_decode(&vault.wrapped_key_b64)?;
     let old_master = crypto::derive_master_key(old_passphrase, &old_salt, vault.params)?;
-    let plain = crypto::decrypt(&old_master, &old_iv, &old_ct)
-        .map_err(|_| "Incorrect passphrase".to_string())?;
+    let plain = match vault.context() {
+        Some(context) => crypto::decrypt_with_aad(
+            &old_master,
+            &vault_wrap_aad(&context, &vault.salt_b64, vault.params),
+            &old_iv,
+            &old_ct,
+        ),
+        None => crypto::decrypt(&old_master, &old_iv, &old_ct),
+    }
+    .map_err(|_| "Incorrect passphrase".to_string())?;
     let diary_key = unwrap_diary_key(&plain)?;
 
-    // Wrap the same diary key under the new master key.
+    // Wrap the same diary key under the new master key, preserving the vault
+    // identity (or creating one for a version 2 vault).
+    let context = vault.context().unwrap_or(xml::VaultContext {
+        vault_id: new_id(),
+        key_id: new_id(),
+    });
     let new_salt_b64 = crypto::new_salt_b64();
     let new_salt = crypto::b64_decode(&new_salt_b64)?;
     let new_master = crypto::derive_master_key(new_passphrase, &new_salt, new_params)?;
-    let (new_iv, new_ct) = crypto::encrypt(&new_master, diary_key.as_ref())?;
+    let aad = vault_wrap_aad(&context, &new_salt_b64, new_params);
+    let (new_iv, new_ct) = crypto::encrypt_with_aad(&new_master, &aad, diary_key.as_ref())?;
 
     let rewritten = Vault {
         kdf: Kdf::Argon2id,
@@ -496,6 +638,8 @@ pub fn rewrap_vault(
         salt_b64: new_salt_b64,
         wrapped_key_iv_b64: crypto::b64_encode(&new_iv),
         wrapped_key_b64: crypto::b64_encode(&new_ct),
+        vault_id: Some(context.vault_id),
+        key_id: Some(context.key_id),
     };
     write_vault(dir, &rewritten)?;
 
@@ -515,9 +659,7 @@ pub fn create_vault(
     if vault_exists(dir)? {
         return Err("Vault already exists".to_string());
     }
-    if passphrase.is_empty() {
-        return Err("Passphrase must not be empty".to_string());
-    }
+    validate_new_passphrase(passphrase)?;
     params.validate()?;
 
     // A sidecar without a vault cannot belong to anything; the new random diary
@@ -530,7 +672,12 @@ pub fn create_vault(
     let master = crypto::derive_master_key(passphrase, &salt, params)?;
 
     let diary_key = crypto::new_diary_key();
-    let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref())?;
+    let context = xml::VaultContext {
+        vault_id: new_id(),
+        key_id: new_id(),
+    };
+    let aad = vault_wrap_aad(&context, &salt_b64, params);
+    let (iv, ct) = crypto::encrypt_with_aad(&master, &aad, diary_key.as_ref())?;
 
     let vault = Vault {
         kdf: Kdf::Argon2id,
@@ -538,6 +685,8 @@ pub fn create_vault(
         salt_b64,
         wrapped_key_iv_b64: crypto::b64_encode(&iv),
         wrapped_key_b64: crypto::b64_encode(&ct),
+        vault_id: Some(context.vault_id),
+        key_id: Some(context.key_id),
     };
     write_vault(dir, &vault)?;
 
@@ -566,9 +715,37 @@ pub fn unlock_vault(dir: &Path, passphrase: &str) -> Result<Zeroizing<[u8; 32]>,
     match vault.kdf {
         Kdf::Argon2id => {
             let master = crypto::derive_master_key(passphrase, &salt, vault.params)?;
-            let plain = crypto::decrypt(&master, &iv, &ct)
-                .map_err(|_| "Incorrect passphrase".to_string())?;
-            unwrap_diary_key(&plain)
+            let context = vault.context();
+            let plain = match context.as_ref() {
+                Some(context) => crypto::decrypt_with_aad(
+                    &master,
+                    &vault_wrap_aad(context, &vault.salt_b64, vault.params),
+                    &iv,
+                    &ct,
+                ),
+                None => crypto::decrypt(&master, &iv, &ct),
+            }
+            .map_err(|_| "Incorrect passphrase".to_string())?;
+            let diary_key = unwrap_diary_key(&plain)?;
+
+            // Upgrade a version 2 vault to include a random vault id/key id.
+            // Existing entries stay readable through their v4 AAD; the next
+            // save rewrites them in v5.
+            if context.is_none() {
+                let context = xml::VaultContext {
+                    vault_id: new_id(),
+                    key_id: new_id(),
+                };
+                let aad = vault_wrap_aad(&context, &vault.salt_b64, vault.params);
+                let (new_iv, new_ct) = crypto::encrypt_with_aad(&master, &aad, diary_key.as_ref())?;
+                let mut upgraded = vault;
+                upgraded.wrapped_key_iv_b64 = crypto::b64_encode(&new_iv);
+                upgraded.wrapped_key_b64 = crypto::b64_encode(&new_ct);
+                upgraded.set_context(context);
+                write_vault(dir, &upgraded)?;
+            }
+
+            Ok(diary_key)
         }
         Kdf::LegacySha256 => {
             let legacy = crypto::derive_legacy_key(passphrase, &salt);
@@ -613,6 +790,7 @@ fn unwrap_diary_key(plain: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
 /// Contents of `recovery.xml`.
 #[derive(Debug, Clone)]
 struct Recovery {
+    version: u8,
     iv_b64: String,
     wrapped_key_b64: String,
 }
@@ -632,11 +810,11 @@ fn recovery_path(dir: &Path) -> PathBuf {
 fn recovery_to_xml(recovery: &Recovery) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <recovery version=\"{RECOVERY_VERSION}\">\n\
+         <recovery version=\"{}\">\n\
          \x20 <iv>{}</iv>\n\
          \x20 <wrapped-key>{}</wrapped-key>\n\
          </recovery>\n",
-        recovery.iv_b64, recovery.wrapped_key_b64
+        recovery.version, recovery.iv_b64, recovery.wrapped_key_b64
     )
 }
 
@@ -694,20 +872,17 @@ fn parse_recovery(text: &str) -> Result<Recovery, String> {
     }
 
     let version = version.trim();
-    if version != RECOVERY_VERSION.to_string() {
-        return Err(format!(
-            "Unsupported recovery file version: {}",
-            if version.is_empty() {
-                "missing"
-            } else {
-                version
-            }
-        ));
+    let version: u8 = version
+        .parse()
+        .map_err(|_| format!("Unsupported recovery file version: {version}"))?;
+    if version != RECOVERY_VERSION && version != RECOVERY_VERSION_LEGACY {
+        return Err(format!("Unsupported recovery file version: {version}"));
     }
 
     let trim = |value: Option<String>| value.map(|value| value.trim().to_string());
 
     Ok(Recovery {
+        version,
         iv_b64: trim(iv).ok_or_else(|| "Recovery file is missing <iv>".to_string())?,
         wrapped_key_b64: trim(wrapped_key)
             .ok_or_else(|| "Recovery file is missing <wrapped-key>".to_string())?,
@@ -722,7 +897,7 @@ fn write_recovery(dir: &Path, recovery: &Recovery) -> Result<(), String> {
 
 fn read_recovery(dir: &Path) -> Result<Option<Recovery>, String> {
     let path = recovery_path(dir);
-    let text = match fs::read_to_string(&path) {
+    let text = match fsutil::read_string_limited(&path, MAX_RECOVERY_BYTES) {
         Ok(text) => text,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to read recovery file: {e}")),
@@ -730,12 +905,18 @@ fn read_recovery(dir: &Path) -> Result<Option<Recovery>, String> {
     parse_recovery(&text).map(Some)
 }
 
-/// Associated data that binds a recovery wrapping to this format version.
-fn recovery_aad() -> Vec<u8> {
+/// Associated data that binds a recovery wrapping to its format version and,
+/// for version 2, the vault identity.
+fn recovery_aad(version: u8, context: Option<&xml::VaultContext>) -> Vec<u8> {
+    if version >= RECOVERY_VERSION {
+        if let Some(context) = context {
+            return xml::context_aad(xml::KIND_RECOVERY, context, &[&[version]]);
+        }
+    }
     let mut aad = Vec::with_capacity(RECOVERY_AAD_LABEL.len() + 2);
     aad.extend_from_slice(RECOVERY_AAD_LABEL);
     aad.push(0);
-    aad.push(RECOVERY_VERSION);
+    aad.push(version);
     aad
 }
 
@@ -775,14 +956,46 @@ pub fn confirm_recovery_phrase(
     bip39::verify_answers(&words, indices, answers)?;
 
     let recovery_key = crypto::derive_recovery_key(&entropy);
-    let aad = recovery_aad();
+    // A legacy v1 vault has no identity yet. Keep writing the legacy recovery
+    // sidecar so the existing "unlock once to migrate" flow still works; the
+    // next successful recovery rewrites it in v2.
+    let context = vault_context(dir)?;
+    let version = if context.is_some() {
+        RECOVERY_VERSION
+    } else {
+        RECOVERY_VERSION_LEGACY
+    };
+    let aad = recovery_aad(version, context.as_ref());
     let (iv, wrapped_key) = crypto::encrypt_with_aad(&recovery_key, &aad, diary_key)?;
 
     let recovery = Recovery {
+        version,
         iv_b64: crypto::b64_encode(&iv),
         wrapped_key_b64: crypto::b64_encode(&wrapped_key),
     };
     write_recovery(dir, &recovery)
+}
+
+/// Re-write an existing recovery sidecar in the current context-bound format.
+///
+/// Used after a successful recovery: the caller has already proved the phrase,
+/// so the sidecar can be upgraded from v1 to v2 without asking the user to
+/// re-enter the confirmation words.
+pub fn rewrite_recovery(dir: &Path, diary_key: &[u8; 32], phrase: &str) -> Result<(), String> {
+    let words = bip39::normalize_phrase(phrase)?;
+    let entropy = bip39::words_to_entropy(&words)?;
+    let recovery_key = crypto::derive_recovery_key(&entropy);
+    let context = vault_context(dir)?.ok_or_else(|| "No upgraded vault found".to_string())?;
+    let aad = recovery_aad(RECOVERY_VERSION, Some(&context));
+    let (iv, wrapped_key) = crypto::encrypt_with_aad(&recovery_key, &aad, diary_key)?;
+    write_recovery(
+        dir,
+        &Recovery {
+            version: RECOVERY_VERSION,
+            iv_b64: crypto::b64_encode(&iv),
+            wrapped_key_b64: crypto::b64_encode(&wrapped_key),
+        },
+    )
 }
 
 /// Whether `key` can actually open the diary data in `dir`.
@@ -847,12 +1060,19 @@ pub fn recover_diary_key(dir: &Path, phrase: &str) -> Result<Zeroizing<[u8; 32]>
 
     let entropy = bip39::parse_phrase(phrase)?;
     let recovery_key = crypto::derive_recovery_key(&entropy);
-    let aad = recovery_aad();
+    let context = vault.context();
+    if recovery.version >= RECOVERY_VERSION && context.is_none() {
+        return Err(
+            "Recovery file requires a vault-id upgrade; unlock once with the passphrase first"
+                .to_string(),
+        );
+    }
+    let aad = recovery_aad(recovery.version, context.as_ref());
     let plain = crypto::decrypt_with_aad(&recovery_key, &aad, &iv, &wrapped_key)
         .map_err(|_| "Recovery phrase does not match this diary".to_string())?;
     let diary_key = unwrap_diary_key(&plain)?;
 
-    if !diary_key_matches(dir, &*diary_key)? {
+    if !diary_key_matches(dir, &diary_key)? {
         return Err(
             "Recovery phrase does not match this diary's data; the vault was left unchanged"
                 .to_string(),
@@ -873,18 +1093,21 @@ pub fn reset_passphrase(
     new_passphrase: &str,
     params: crypto::KdfParams,
 ) -> Result<(), String> {
-    if new_passphrase.is_empty() {
-        return Err("Passphrase must not be empty".to_string());
-    }
+    validate_new_passphrase(new_passphrase)?;
     params.validate()?;
     if !vault_exists(dir)? {
         return Err("No vault found".to_string());
     }
 
+    let context = vault_context(dir)?.unwrap_or(xml::VaultContext {
+        vault_id: new_id(),
+        key_id: new_id(),
+    });
     let salt_b64 = crypto::new_salt_b64();
     let salt = crypto::b64_decode(&salt_b64)?;
     let master = crypto::derive_master_key(new_passphrase, &salt, params)?;
-    let (iv, ct) = crypto::encrypt(&master, diary_key)?;
+    let aad = vault_wrap_aad(&context, &salt_b64, params);
+    let (iv, ct) = crypto::encrypt_with_aad(&master, &aad, diary_key)?;
 
     let vault = Vault {
         kdf: Kdf::Argon2id,
@@ -892,6 +1115,8 @@ pub fn reset_passphrase(
         salt_b64,
         wrapped_key_iv_b64: crypto::b64_encode(&iv),
         wrapped_key_b64: crypto::b64_encode(&ct),
+        vault_id: Some(context.vault_id),
+        key_id: Some(context.key_id),
     };
     write_vault(dir, &vault)
 }
@@ -931,14 +1156,21 @@ fn migrate_legacy_vault(
     let params = crypto::KdfParams::default();
     let master = crypto::derive_master_key(passphrase, salt, params)?;
     let diary_key = crypto::new_diary_key();
-
-    let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref())?;
+    let context = xml::VaultContext {
+        vault_id: new_id(),
+        key_id: new_id(),
+    };
+    let salt_b64 = crypto::b64_encode(salt);
+    let aad = vault_wrap_aad(&context, &salt_b64, params);
+    let (iv, ct) = crypto::encrypt_with_aad(&master, &aad, diary_key.as_ref())?;
     let vault = Vault {
         kdf: Kdf::Argon2id,
         params,
-        salt_b64: crypto::b64_encode(salt),
+        salt_b64,
         wrapped_key_iv_b64: crypto::b64_encode(&iv),
         wrapped_key_b64: crypto::b64_encode(&ct),
+        vault_id: Some(context.vault_id),
+        key_id: Some(context.key_id),
     };
 
     // Record the destination state before touching a single entry. From here
@@ -946,7 +1178,7 @@ fn migrate_legacy_vault(
     // finish the migration, including the new key.
     write_migration_journal(dir, &vault)?;
 
-    migrate_entries(dir, &legacy_key, &diary_key)?;
+    migrate_entries(dir, &legacy_key, &diary_key, &context)?;
 
     // The vault is the commit point: once it says "version 2", the entries are
     // all under the new key and the journal is no longer needed.
@@ -979,17 +1211,45 @@ fn resume_migration(
     let iv = crypto::b64_decode(&journal.wrapped_key_iv_b64)?;
     let ct = crypto::b64_decode(&journal.wrapped_key_b64)?;
     let master = crypto::derive_master_key(passphrase, &salt, journal.params)?;
-    let plain = crypto::decrypt(&master, &iv, &ct)
-        .map_err(|_| "Incorrect passphrase".to_string())?;
+    let mut journal = journal.clone();
+    let existing_context = journal.context();
+    let plain = match existing_context.as_ref() {
+        Some(context) => crypto::decrypt_with_aad(
+            &master,
+            &vault_wrap_aad(context, &journal.salt_b64, journal.params),
+            &iv,
+            &ct,
+        ),
+        None => crypto::decrypt(&master, &iv, &ct),
+    }
+    .map_err(|_| "Incorrect passphrase".to_string())?;
     let diary_key = unwrap_diary_key(&plain)?;
+
+    // Upgrade a journal written by an older build before migrating entries.
+    let context = match existing_context {
+        Some(context) => context,
+        None => {
+            let context = xml::VaultContext {
+                vault_id: new_id(),
+                key_id: new_id(),
+            };
+            let aad = vault_wrap_aad(&context, &journal.salt_b64, journal.params);
+            let (new_iv, new_ct) = crypto::encrypt_with_aad(&master, &aad, diary_key.as_ref())?;
+            journal.wrapped_key_iv_b64 = crypto::b64_encode(&new_iv);
+            journal.wrapped_key_b64 = crypto::b64_encode(&new_ct);
+            journal.set_context(context);
+            write_migration_journal(dir, &journal)?;
+            context
+        }
+    };
 
     // The legacy key is derived from the same passphrase and salt the journal
     // recorded, so it can still decrypt whatever the first attempt did not
     // reach.
     let legacy_key = crypto::derive_legacy_key(passphrase, &salt);
-    migrate_entries(dir, &legacy_key, &diary_key)?;
+    migrate_entries(dir, &legacy_key, &diary_key, &context)?;
 
-    write_vault(dir, journal)?;
+    write_vault(dir, &journal)?;
     clear_migration_journal(dir)?;
     // The journal's diary key replaced the legacy key; a sidecar from before
     // the migration cannot wrap it. See `migrate_legacy_vault`.
@@ -1007,7 +1267,9 @@ fn write_migration_journal(dir: &Path, vault: &Vault) -> Result<(), String> {
 
 /// Read the journal, if one is present.
 fn read_migration_journal(dir: &Path) -> Option<Vault> {
-    let text = fs::read_to_string(dir.join(MIGRATION_JOURNAL)).ok()?;
+    let text =
+        fsutil::read_string_limited(&dir.join(MIGRATION_JOURNAL), MAX_MIGRATION_JOURNAL_BYTES)
+            .ok()?;
     parse_vault(&text).ok()
 }
 
@@ -1030,6 +1292,7 @@ fn migrate_entries(
     dir: &Path,
     old_key: &[u8; 32],
     new_key: &[u8; 32],
+    context: &xml::VaultContext,
 ) -> Result<(), String> {
     let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
     for item in read_dir {
@@ -1045,23 +1308,23 @@ fn migrate_entries(
             continue;
         }
 
-        let text = fs::read_to_string(&path)
+        let text = fsutil::read_string_limited(&path, MAX_ENTRY_BYTES)
             .map_err(|e| format!("Failed to read entry {date}: {e}"))?;
         let encrypted = xml::from_xml(&text)?;
         let iv = crypto::b64_decode(&encrypted.iv)?;
         let ct = crypto::b64_decode(&encrypted.payload)?;
 
         // Already migrated by an earlier, interrupted run.
-        if decrypt_entry_payload(new_key, date, &encrypted, &iv, &ct).is_ok() {
+        if decrypt_entry_payload(new_key, date, &encrypted, &iv, &ct, Some(context)).is_ok() {
             continue;
         }
 
-        let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct)
+        let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct, None)
             .map_err(|_| format!("Entry {date} could not be decrypted during migration"))?;
 
         // Rewrite in the current format, so the migrated entry gains the
-        // version-bound AAD too.
-        let aad = xml::entry_aad(date, xml::CURRENT_VERSION);
+        // vault-context AAD too.
+        let aad = xml::entry_aad_v5(date, xml::CURRENT_VERSION, context);
         let (new_iv, new_ct) = crypto::encrypt_with_aad(new_key, &aad, &plain)?;
         let rewritten = xml::EncryptedEntry::new(
             date,
@@ -1074,8 +1337,8 @@ fn migrate_entries(
 
     // The old index was encrypted with `old_key`, so it is now unreadable.
     // Rebuild it under the new key from the freshly re-encrypted entries.
-    let index = scan_entries(dir, new_key)?;
-    write_index(dir, new_key, &index)
+    let (index, _) = scan_entries_with_context(dir, new_key, Some(context))?;
+    write_index_with_context(dir, new_key, &index, Some(context))
 }
 
 // ---------------------------------------------------------------------------
@@ -1172,13 +1435,28 @@ fn write_index(
     key: &[u8; 32],
     entries: &BTreeMap<String, IndexRecord>,
 ) -> Result<(), String> {
+    let context = vault_context(dir)?;
+    write_index_with_context(dir, key, entries, context.as_ref())
+}
+
+fn write_index_with_context(
+    dir: &Path,
+    key: &[u8; 32],
+    entries: &BTreeMap<String, IndexRecord>,
+    context: Option<&xml::VaultContext>,
+) -> Result<(), String> {
     ensure_dir(dir)?;
-    let (iv, ct) = crypto::encrypt_with_aad(key, INDEX_AAD, &pack_index(entries))?;
-    let document = xml::to_xml(&EncryptedEntry::new(
-        "index",
-        crypto::b64_encode(&iv),
-        crypto::b64_encode(&ct),
-    ))?;
+    let aad = match context {
+        Some(context) => xml::index_aad_v5(xml::CURRENT_VERSION, context),
+        None => INDEX_AAD.to_vec(),
+    };
+    let (iv, ct) = crypto::encrypt_with_aad(key, &aad, &pack_index(entries))?;
+    let mut envelope =
+        EncryptedEntry::new("index", crypto::b64_encode(&iv), crypto::b64_encode(&ct));
+    if context.is_none() {
+        envelope.version = 4;
+    }
+    let document = xml::to_xml(&envelope)?;
     fsutil::write_private(&index_path(dir), document)
         .map_err(|e| format!("Failed to write index: {e}"))
 }
@@ -1186,12 +1464,18 @@ fn write_index(
 /// Read and decrypt the index, returning `None` when it is missing or cannot
 /// be decrypted (wrong key, corrupt file, or written by another vault).
 fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, IndexRecord>> {
-    let text = fs::read_to_string(index_path(dir)).ok()?;
+    let text = fsutil::read_string_limited(&index_path(dir), MAX_INDEX_BYTES).ok()?;
     let encrypted = xml::from_xml(&text).ok()?;
     let iv = crypto::b64_decode(&encrypted.iv).ok()?;
     let ct = crypto::b64_decode(&encrypted.payload).ok()?;
-    // Version 3 indexes are AAD-bound; older ones were written without it.
-    let plain = if encrypted.is_aad_bound() {
+    let context = vault_context(dir).ok().flatten();
+    // Version 5 indexes bind the vault/key context; version 3 and 4 use the
+    // fixed index label; older ones were written without AAD.
+    let plain = if encrypted.uses_context_aad() {
+        let context = context.as_ref()?;
+        let aad = xml::index_aad_v5(encrypted.version, context);
+        crypto::decrypt_with_aad(key, &aad, &iv, &ct).ok()?
+    } else if encrypted.is_aad_bound() {
         crypto::decrypt_with_aad(key, INDEX_AAD, &iv, &ct).ok()?
     } else {
         crypto::decrypt(key, &iv, &ct).ok()?
@@ -1204,7 +1488,16 @@ fn read_index(dir: &Path, key: &[u8; 32]) -> Option<BTreeMap<String, IndexRecord
 /// This is the slow path: it is only used to build the index from scratch, or
 /// to repair it when it is missing or stale.
 fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexRecord>, String> {
-    Ok(scan_entries_with_broken(dir, key)?.0)
+    let context = vault_context(dir)?;
+    scan_entries_with_context(dir, key, context.as_ref()).map(|(entries, _)| entries)
+}
+
+fn scan_entries_with_context(
+    dir: &Path,
+    key: &[u8; 32],
+    context: Option<&xml::VaultContext>,
+) -> Result<(BTreeMap<String, IndexRecord>, Vec<BrokenEntry>), String> {
+    scan_entries_with_broken_context(dir, key, context)
 }
 
 /// Scan every entry file, splitting the readable ones from the broken ones.
@@ -1216,6 +1509,15 @@ fn scan_entries(dir: &Path, key: &[u8; 32]) -> Result<BTreeMap<String, IndexReco
 fn scan_entries_with_broken(
     dir: &Path,
     key: &[u8; 32],
+) -> Result<(BTreeMap<String, IndexRecord>, Vec<BrokenEntry>), String> {
+    let context = vault_context(dir)?;
+    scan_entries_with_broken_context(dir, key, context.as_ref())
+}
+
+fn scan_entries_with_broken_context(
+    dir: &Path,
+    key: &[u8; 32],
+    context: Option<&xml::VaultContext>,
 ) -> Result<(BTreeMap<String, IndexRecord>, Vec<BrokenEntry>), String> {
     ensure_dir(dir)?;
     let mut entries = BTreeMap::new();
@@ -1245,7 +1547,7 @@ fn scan_entries_with_broken(
             });
         };
 
-        let text = match fs::read_to_string(&path) {
+        let text = match fsutil::read_string_limited(&path, MAX_ENTRY_BYTES) {
             Ok(text) => text,
             Err(_) => {
                 record_broken(BrokenReason::Unreadable);
@@ -1269,7 +1571,7 @@ fn scan_entries_with_broken(
                 continue;
             }
         };
-        let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct) {
+        let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context) {
             Ok(plain) => plain,
             Err(_) => {
                 record_broken(BrokenReason::DecryptFailed);
@@ -1309,8 +1611,7 @@ pub fn export_broken_entry(dir: &Path, date: &str, dest: &Path) -> Result<(), St
     // The user is rescuing the only copy of a day they cannot open, so the
     // export goes through a temporary file and a rename: an interrupted copy
     // leaves the destination untouched rather than truncated.
-    fsutil::copy_private(&source, dest)
-        .map_err(|e| format!("Failed to export entry {date}: {e}"))
+    fsutil::copy_private(&source, dest).map_err(|e| format!("Failed to export entry {date}: {e}"))
 }
 
 /// Rebuild `index.xml` from the entry files and return the fresh index.
@@ -1352,7 +1653,11 @@ fn pack(title: &str, content: &str, favourite: bool) -> Zeroizing<Vec<u8>> {
     let mut title = title.replace(['\r', '\n'], " ");
     let mut plain = Zeroizing::new(Vec::with_capacity(title.len() + content.len() + 4));
     plain.push(FAVOURITE_MARKER);
-    plain.push(if favourite { FAVOURITE_ON } else { FAVOURITE_OFF });
+    plain.push(if favourite {
+        FAVOURITE_ON
+    } else {
+        FAVOURITE_OFF
+    });
     plain.push(FIELD_SEPARATOR);
     plain.extend_from_slice(title.as_bytes());
     plain.push(FIELD_SEPARATOR);
@@ -1419,8 +1724,12 @@ fn decrypt_entry_payload(
     encrypted: &EncryptedEntry,
     iv: &[u8],
     ct: &[u8],
+    context: Option<&xml::VaultContext>,
 ) -> Result<Zeroizing<Vec<u8>>, String> {
-    match encrypted.aad(date) {
+    if encrypted.uses_context_aad() && context.is_none() {
+        return Err("Entry is missing its vault context".to_string());
+    }
+    match encrypted.aad_with_context(date, context) {
         Some(aad) => crypto::decrypt_with_aad(key, &aad, iv, ct),
         None => crypto::decrypt(key, iv, ct),
     }
@@ -1428,8 +1737,18 @@ fn decrypt_entry_payload(
 
 /// Read and decrypt a single entry. Returns `None` when the file is missing.
 pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry>, String> {
+    let context = vault_context(dir)?;
+    read_entry_with_context(dir, key, date, context.as_ref())
+}
+
+fn read_entry_with_context(
+    dir: &Path,
+    key: &[u8; 32],
+    date: &str,
+    context: Option<&xml::VaultContext>,
+) -> Result<Option<Entry>, String> {
     let path = entry_path(dir, date)?;
-    let text = match fs::read_to_string(&path) {
+    let text = match fsutil::read_string_limited(&path, MAX_ENTRY_BYTES) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to read entry {date}: {e}")),
@@ -1440,7 +1759,7 @@ pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry
     let ct = crypto::b64_decode(&encrypted.payload)?;
     // Passing the *requested* date as AAD is what makes a copied file fail
     // loudly instead of silently showing another day's diary.
-    let plain = decrypt_entry_payload(key, date, &encrypted, &iv, &ct)?;
+    let plain = decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context)?;
     let (title, content, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
 
     Ok(Some(Entry {
@@ -1465,18 +1784,37 @@ fn write_entry_file(
     content: &str,
     favourite: bool,
 ) -> Result<(), String> {
+    let context = vault_context(dir)?;
+    write_entry_file_with_context(dir, key, date, title, content, favourite, context.as_ref())
+}
+
+fn write_entry_file_with_context(
+    dir: &Path,
+    key: &[u8; 32],
+    date: &str,
+    title: &str,
+    content: &str,
+    favourite: bool,
+    context: Option<&xml::VaultContext>,
+) -> Result<(), String> {
     ensure_dir(dir)?;
     let path = entry_path(dir, date)?;
 
-    // Bind the ciphertext to its date *and* to the document version, so it can
-    // neither be relocated to another day nor re-labelled as an older format
-    // that would be decrypted with weaker (or no) associated data.
-    let aad = xml::entry_aad(date, xml::CURRENT_VERSION);
+    // Bind the ciphertext to its date, the document version, and (for v5) the
+    // vault identity, so it can neither be relocated to another day nor moved
+    // between vaults.
+    let (aad, version) = match context {
+        Some(context) => (
+            xml::entry_aad_v5(date, xml::CURRENT_VERSION, context),
+            xml::CURRENT_VERSION,
+        ),
+        None => (xml::entry_aad(date, 4), 4),
+    };
     let (iv, ct) = crypto::encrypt_with_aad(key, &aad, &pack(title, content, favourite))?;
-    let encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
+    let mut encrypted = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct));
+    encrypted.version = version;
     let document = xml::to_xml(&encrypted)?;
-    fsutil::write_private(&path, document)
-        .map_err(|e| format!("Failed to write entry {date}: {e}"))
+    fsutil::write_private(&path, document).map_err(|e| format!("Failed to write entry {date}: {e}"))
 }
 
 /// Encrypt and write (create or overwrite) the entry for a given date.
@@ -1512,7 +1850,8 @@ pub fn write_entry(
 
     // Keep the sidebar index in sync. A missing index is rebuilt from scratch
     // so the first write after an upgrade also seeds it.
-    let mut index = read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
+    let mut index =
+        read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
     index.insert(
         date.to_string(),
         IndexRecord {
@@ -1545,7 +1884,8 @@ pub fn set_favourite(
 
     write_entry_file(dir, key, date, &entry.title, &entry.content, favourite)?;
 
-    let mut index = read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
+    let mut index =
+        read_index(dir, key).unwrap_or_else(|| scan_entries(dir, key).unwrap_or_default());
     index.insert(
         date.to_string(),
         IndexRecord {
@@ -1836,8 +2176,8 @@ pub fn scan_import(
     import_dir: &Path,
     existing: &BTreeMap<String, IndexRecord>,
 ) -> Result<ImportScan, String> {
-    let entries = fs::read_dir(import_dir)
-        .map_err(|e| format!("Failed to read import folder: {e}"))?;
+    let entries =
+        fs::read_dir(import_dir).map_err(|e| format!("Failed to read import folder: {e}"))?;
 
     // Collect the paths first; `read_dir` itself is sequential and cheap.
     let mut paths = Vec::new();
@@ -1882,7 +2222,10 @@ pub fn scan_import(
         (None, None) => a.name.cmp(&b.name),
     });
 
-    let ready = files.iter().filter(|f| f.status == ImportStatus::Ready).count();
+    let ready = files
+        .iter()
+        .filter(|f| f.status == ImportStatus::Ready)
+        .count();
     let conflicts = files
         .iter()
         .filter(|f| f.status == ImportStatus::Conflict)
@@ -2140,6 +2483,7 @@ enum UpgradeOutcome {
 /// might still want to rescue.
 pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, String> {
     ensure_dir(dir)?;
+    let context = vault_context(dir)?;
     let mut outdated = Vec::new();
 
     let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
@@ -2156,7 +2500,7 @@ pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, Stri
             continue;
         }
 
-        let Ok(text) = fs::read_to_string(&path) else {
+        let Ok(text) = fsutil::read_string_limited(&path, MAX_ENTRY_BYTES) else {
             continue;
         };
         let Ok(encrypted) = xml::from_xml(&text) else {
@@ -2176,7 +2520,7 @@ pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, Stri
         let Ok(ct) = crypto::b64_decode(&encrypted.payload) else {
             continue;
         };
-        if decrypt_entry_payload(key, date, &encrypted, &iv, &ct).is_err() {
+        if decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context.as_ref()).is_err() {
             continue;
         }
         outdated.push(date.to_string());
@@ -2191,10 +2535,21 @@ pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, Stri
 /// Returns [`UpgradeOutcome::Skipped`] when the entry is already current or when
 /// its mtime changed while we were working (the user saved it concurrently).
 fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
-    let fail = |reason: String| UpgradeOutcome::Failed(UpgradeFailure {
-        date: date.to_string(),
-        reason,
-    });
+    let context = match vault_context(dir) {
+        Ok(context) => context,
+        Err(e) => {
+            return UpgradeOutcome::Failed(UpgradeFailure {
+                date: date.to_string(),
+                reason: e,
+            })
+        }
+    };
+    let fail = |reason: String| {
+        UpgradeOutcome::Failed(UpgradeFailure {
+            date: date.to_string(),
+            reason,
+        })
+    };
 
     let path = match entry_path(dir, date) {
         Ok(path) => path,
@@ -2207,7 +2562,7 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Err(e) => return fail(format!("Failed to stat entry {date}: {e}")),
     };
 
-    let text = match fs::read_to_string(&path) {
+    let text = match fsutil::read_string_limited(&path, MAX_ENTRY_BYTES) {
         Ok(text) => text,
         Err(e) => return fail(format!("Failed to read entry {date}: {e}")),
     };
@@ -2227,7 +2582,7 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Ok(ct) => ct,
         Err(e) => return fail(format!("Failed to decode payload for {date}: {e}")),
     };
-    let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct) {
+    let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context.as_ref()) {
         Ok(plain) => plain,
         Err(e) => return fail(format!("Failed to decrypt entry {date}: {e}")),
     };
@@ -2242,11 +2597,16 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         plain
     };
 
-    // Re-encrypt with the current AAD (date + version), then read it straight
-    // back. The round trip is what makes an unattended upgrade trustworthy: if
-    // the new ciphertext does not decrypt to the exact same bytes, we refuse to
-    // write.
-    let aad = xml::entry_aad(date, xml::CURRENT_VERSION);
+    // Re-encrypt with the current AAD, then read it straight back. The round
+    // trip is what makes an unattended upgrade trustworthy: if the new
+    // ciphertext does not decrypt to the exact same bytes, we refuse to write.
+    let (aad, version) = match context.as_ref() {
+        Some(context) => (
+            xml::entry_aad_v5(date, xml::CURRENT_VERSION, context),
+            xml::CURRENT_VERSION,
+        ),
+        None => (xml::entry_aad(date, 4), 4),
+    };
     let (new_iv, new_ct) = match crypto::encrypt_with_aad(key, &aad, &plain) {
         Ok(pair) => pair,
         Err(e) => return fail(format!("Failed to encrypt entry {date}: {e}")),
@@ -2257,11 +2617,12 @@ fn upgrade_one(dir: &Path, key: &[u8; 32], date: &str) -> UpgradeOutcome {
         Err(e) => return fail(format!("Round-trip check failed for entry {date}: {e}")),
     }
 
-    let rewritten = EncryptedEntry::new(
+    let mut rewritten = EncryptedEntry::new(
         date,
         crypto::b64_encode(&new_iv),
         crypto::b64_encode(&new_ct),
     );
+    rewritten.version = version;
     let document = match xml::to_xml(&rewritten) {
         Ok(document) => document,
         Err(e) => return fail(format!("Failed to serialise entry {date}: {e}")),
@@ -2383,7 +2744,7 @@ mod tests {
         let key = create_vault(&dir, "old-pass", fast()).unwrap();
         let (phrase, indices, answers) = recovery_fixture();
 
-        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+        confirm_recovery_phrase(&dir, &key, &phrase, &indices, &answers).unwrap();
         assert!(dir.join("recovery.xml").exists());
 
         let status = recovery_status(&dir).unwrap();
@@ -2397,7 +2758,7 @@ mod tests {
         assert_eq!(*recover_diary_key(&dir, &phrase).unwrap(), *key);
 
         // Recovery sets a new passphrase without knowing the old one.
-        reset_passphrase(&dir, &*key, "reset-pass", fast()).unwrap();
+        reset_passphrase(&dir, &key, "reset-pass", fast()).unwrap();
         assert_eq!(*unlock_vault(&dir, "reset-pass").unwrap(), *key);
         assert!(unlock_vault(&dir, "new-pass").is_err());
         assert_eq!(*recover_diary_key(&dir, &phrase).unwrap(), *key);
@@ -2408,10 +2769,10 @@ mod tests {
         let dir = temp_dir("recovery-not-plain");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         let (phrase, indices, answers) = recovery_fixture();
-        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+        confirm_recovery_phrase(&dir, &key, &phrase, &indices, &answers).unwrap();
 
         let raw = fs::read_to_string(dir.join("recovery.xml")).unwrap();
-        let plain_key = crypto::b64_encode(&*key);
+        let plain_key = crypto::b64_encode(&key[..]);
         assert!(
             !raw.contains(&plain_key),
             "recovery file leaked the diary key"
@@ -2426,7 +2787,7 @@ mod tests {
         let (phrase, indices, mut answers) = recovery_fixture();
         answers[1] = "wrong".to_string();
 
-        assert!(confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).is_err());
+        assert!(confirm_recovery_phrase(&dir, &key, &phrase, &indices, &answers).is_err());
         assert!(!dir.join("recovery.xml").exists());
     }
 
@@ -2437,7 +2798,7 @@ mod tests {
         let (phrase, indices, answers) = recovery_fixture();
         let bad = phrase.replace("about", "abandon");
 
-        assert!(confirm_recovery_phrase(&dir, &*key, &bad, &indices, &answers).is_err());
+        assert!(confirm_recovery_phrase(&dir, &key, &bad, &indices, &answers).is_err());
         assert!(!dir.join("recovery.xml").exists());
     }
 
@@ -2446,7 +2807,7 @@ mod tests {
         let dir = temp_dir("recovery-other-phrase");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         let (phrase, indices, answers) = recovery_fixture();
-        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+        confirm_recovery_phrase(&dir, &key, &phrase, &indices, &answers).unwrap();
 
         let other = bip39::entropy_to_words(&[0x42u8; 16]).unwrap().join(" ");
         let err = recover_diary_key(&dir, &other).unwrap_err();
@@ -2461,15 +2822,12 @@ mod tests {
         let key_b = create_vault(&dir_b, "b", fast()).unwrap();
         let (phrase, indices, answers) = recovery_fixture();
 
-        confirm_recovery_phrase(&dir_a, &*key_a, &phrase, &indices, &answers).unwrap();
-        write_entry(&dir_b, &*key_b, "2026-10-23", "b", "b").unwrap();
+        confirm_recovery_phrase(&dir_a, &key_a, &phrase, &indices, &answers).unwrap();
+        write_entry(&dir_b, &key_b, "2026-10-23", "b", "b").unwrap();
         fs::copy(dir_a.join("recovery.xml"), dir_b.join("recovery.xml")).unwrap();
 
         let err = recover_diary_key(&dir_b, &phrase).unwrap_err();
-        assert!(
-            err.contains("does not match this diary's data"),
-            "got: {err}"
-        );
+        assert!(err.contains("does not match"), "got: {err}");
 
         // The failed attempt must not have touched B's vault.
         assert_eq!(*unlock_vault(&dir_b, "b").unwrap(), *key_b);
@@ -2481,7 +2839,7 @@ mod tests {
         let dir = temp_dir("recovery-remove");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         let (phrase, indices, answers) = recovery_fixture();
-        confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers).unwrap();
+        confirm_recovery_phrase(&dir, &key, &phrase, &indices, &answers).unwrap();
         assert!(recovery_exists(&dir));
 
         remove_recovery(&dir).unwrap();
@@ -2508,7 +2866,7 @@ mod tests {
         let dir = temp_dir("recovery-stale");
         let (phrase, indices, answers) = recovery_fixture();
         let old_key = create_vault(&dir, "old", fast()).unwrap();
-        confirm_recovery_phrase(&dir, &*old_key, &phrase, &indices, &answers).unwrap();
+        confirm_recovery_phrase(&dir, &old_key, &phrase, &indices, &answers).unwrap();
         assert!(dir.join("recovery.xml").exists());
 
         // Simulate `vault.xml` being deleted while the sidecar survives.
@@ -2633,7 +2991,7 @@ mod tests {
         write_entry(&dir, &key, "2026-10-23", "舊標題", "legacy body").unwrap();
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
         assert!(!raw.contains("舊標題"));
-        assert!(raw.contains("version=\"4\""), "raw was: {raw}");
+        assert!(raw.contains("version=\"5\""), "raw was: {raw}");
     }
 
     #[test]
@@ -2707,7 +3065,10 @@ mod tests {
         assert!(raw.contains("<kdf-memory>16384</kdf-memory>"));
         assert!(raw.contains("<kdf-iterations>3</kdf-iterations>"));
         assert!(raw.contains("<kdf-parallelism>2</kdf-parallelism>"));
-        assert!(raw.contains("version=\"2\""));
+        assert!(raw.contains("version=\"3\""));
+        assert!(raw.contains("<vault-id>"));
+        assert!(raw.contains("<key-id>"));
+        assert!(read_vault(&dir).unwrap().unwrap().context().is_some());
     }
 
     #[test]
@@ -2779,7 +3140,7 @@ mod tests {
         assert_ne!(*new_key, *legacy_key);
 
         let raw_vault = fs::read_to_string(dir.join("vault.xml")).unwrap();
-        assert!(raw_vault.contains("version=\"2\""));
+        assert!(raw_vault.contains("version=\"3\""));
         assert!(raw_vault.contains("<kdf>argon2id</kdf>"));
 
         let entry = read_entry(&dir, &new_key, "2026-10-23").unwrap().unwrap();
@@ -2893,6 +3254,8 @@ mod tests {
             salt_b64: crypto::b64_encode(&salt),
             wrapped_key_iv_b64: crypto::b64_encode(&iv),
             wrapped_key_b64: crypto::b64_encode(&ct),
+            vault_id: None,
+            key_id: None,
         };
         write_migration_journal(&dir, &journal).unwrap();
 
@@ -2901,7 +3264,7 @@ mod tests {
         assert_eq!(*recovered, *diary_key);
 
         let raw_vault = fs::read_to_string(dir.join(VAULT_FILE)).unwrap();
-        assert!(raw_vault.contains("version=\"2\""));
+        assert!(raw_vault.contains("version=\"3\""));
         assert!(!dir.join(MIGRATION_JOURNAL).exists());
 
         let entry = read_entry(&dir, &recovered, "2026-10-23").unwrap().unwrap();
@@ -2920,17 +3283,29 @@ mod tests {
         let params = crypto::KdfParams::default();
         let master = crypto::derive_master_key("pw", &salt, params).unwrap();
         let diary_key = crypto::new_diary_key();
-        let (iv, ct) = crypto::encrypt(&master, diary_key.as_ref()).unwrap();
+        let salt_b64 = crypto::b64_encode(&salt);
+        let context = xml::VaultContext {
+            vault_id: new_id(),
+            key_id: new_id(),
+        };
+        let (iv, ct) = crypto::encrypt_with_aad(
+            &master,
+            &vault_wrap_aad(&context, &salt_b64, params),
+            diary_key.as_ref(),
+        )
+        .unwrap();
         let journal = Vault {
             kdf: Kdf::Argon2id,
             params,
-            salt_b64: crypto::b64_encode(&salt),
+            salt_b64,
             wrapped_key_iv_b64: crypto::b64_encode(&iv),
             wrapped_key_b64: crypto::b64_encode(&ct),
+            vault_id: Some(context.vault_id),
+            key_id: Some(context.key_id),
         };
         write_migration_journal(&dir, &journal).unwrap();
 
-        let aad = xml::entry_aad("2026-10-22", xml::CURRENT_VERSION);
+        let aad = xml::entry_aad_v5("2026-10-22", xml::CURRENT_VERSION, &context);
         let (n_iv, n_ct) =
             crypto::encrypt_with_aad(&diary_key, &aad, &pack("new title", "new body", false))
                 .unwrap();
@@ -2939,11 +3314,7 @@ mod tests {
             crypto::b64_encode(&n_iv),
             crypto::b64_encode(&n_ct),
         );
-        fs::write(
-            dir.join("2026-10-22.xml"),
-            xml::to_xml(&converted).unwrap(),
-        )
-        .unwrap();
+        fs::write(dir.join("2026-10-22.xml"), xml::to_xml(&converted).unwrap()).unwrap();
 
         let recovered = unlock_vault(&dir, "pw").unwrap();
         assert_eq!(*recovered, *diary_key);
@@ -2955,6 +3326,34 @@ mod tests {
         let new = read_entry(&dir, &recovered, "2026-10-22").unwrap().unwrap();
         assert_eq!(new.title, "new title");
         assert!(read_entry(&dir, &legacy_key, "2026-10-23").is_err());
+    }
+
+    #[test]
+    fn version_2_vault_metadata_is_upgraded_on_unlock() {
+        let dir = temp_dir("v2-metadata-upgrade");
+        let key = create_vault(&dir, "pw", fast()).unwrap();
+        let vault = read_vault(&dir).unwrap().unwrap();
+        let salt = crypto::b64_decode(&vault.salt_b64).unwrap();
+        let master = crypto::derive_master_key("pw", &salt, vault.params).unwrap();
+        let (iv, ct) = crypto::encrypt(&master, key.as_ref()).unwrap();
+        let v2 = Vault {
+            kdf: Kdf::Argon2id,
+            params: vault.params,
+            salt_b64: vault.salt_b64.clone(),
+            wrapped_key_iv_b64: crypto::b64_encode(&iv),
+            wrapped_key_b64: crypto::b64_encode(&ct),
+            vault_id: None,
+            key_id: None,
+        };
+        write_vault(&dir, &v2).unwrap();
+
+        let unlocked = unlock_vault(&dir, "pw").unwrap();
+        assert_eq!(*unlocked, *key);
+        let upgraded = read_vault(&dir).unwrap().unwrap();
+        assert!(upgraded.context().is_some());
+        assert!(fs::read_to_string(dir.join("vault.xml"))
+            .unwrap()
+            .contains("version=\"3\""));
     }
 
     #[test]
@@ -2973,6 +3372,8 @@ mod tests {
             salt_b64: crypto::b64_encode(&salt),
             wrapped_key_iv_b64: crypto::b64_encode(&iv),
             wrapped_key_b64: crypto::b64_encode(&ct),
+            vault_id: None,
+            key_id: None,
         };
         write_migration_journal(&dir, &journal).unwrap();
 
@@ -3129,11 +3530,7 @@ mod tests {
         write_entry(&dir_a, &key_a, "2026-10-23", "t", "secret").unwrap();
 
         // Copy the encrypted file into the other vault's directory.
-        fs::copy(
-            dir_a.join("2026-10-23.xml"),
-            dir_b.join("2026-10-23.xml"),
-        )
-        .unwrap();
+        fs::copy(dir_a.join("2026-10-23.xml"), dir_b.join("2026-10-23.xml")).unwrap();
 
         assert!(read_entry(&dir_b, &key_b, "2026-10-23").is_err());
     }
@@ -3374,8 +3771,7 @@ mod tests {
 
         let src = import_dir("import-skip-src", &[("2026-10-23.txt", "新的\n新內容")]);
 
-        let report =
-            import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
+        let report = import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
         assert!(report.imported.is_empty());
         assert_eq!(report.skipped, vec!["2026-10-23"]);
 
@@ -3389,7 +3785,10 @@ mod tests {
         let key = create_vault(&dir, "pw", fast()).unwrap();
         write_entry(&dir, &key, "2026-10-23", "原本", "原本內容").unwrap();
 
-        let src = import_dir("import-overwrite-src", &[("2026-10-23.txt", "新的\n新內容")]);
+        let src = import_dir(
+            "import-overwrite-src",
+            &[("2026-10-23.txt", "新的\n新內容")],
+        );
 
         let report = import_entries(&dir, &key, &src, &["2026-10-23".to_string()], true).unwrap();
         assert_eq!(report.imported, vec!["2026-10-23"]);
@@ -3444,7 +3843,10 @@ mod tests {
     fn imported_entry_is_encrypted_on_disk() {
         let dir = temp_dir("import-encrypted");
         let key = create_vault(&dir, "pw", fast()).unwrap();
-        let src = import_dir("import-encrypted-src", &[("2026-10-23.txt", "秘密標題\n秘密內容")]);
+        let src = import_dir(
+            "import-encrypted-src",
+            &[("2026-10-23.txt", "秘密標題\n秘密內容")],
+        );
 
         import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
 
@@ -3465,7 +3867,16 @@ mod tests {
         let files: Vec<(&str, &str)> = names
             .iter()
             .enumerate()
-            .map(|(i, name)| (name.as_str(), if i % 2 == 0 { "標題\n內容" } else { "另一篇\n更多" }))
+            .map(|(i, name)| {
+                (
+                    name.as_str(),
+                    if i % 2 == 0 {
+                        "標題\n內容"
+                    } else {
+                        "另一篇\n更多"
+                    },
+                )
+            })
             .collect();
         let src = import_dir("import-parallel-src", &files);
 
@@ -3484,7 +3895,11 @@ mod tests {
         for (i, date) in dates.iter().enumerate() {
             let entry = read_entry(&dir, &key, date).unwrap().unwrap();
             assert_eq!(entry.title, *date, "wrong title for {date}");
-            let expected = if i % 2 == 0 { "標題\n內容" } else { "另一篇\n更多" };
+            let expected = if i % 2 == 0 {
+                "標題\n內容"
+            } else {
+                "另一篇\n更多"
+            };
             assert_eq!(entry.content, expected, "wrong content for {date}");
         }
 
@@ -3660,7 +4075,12 @@ mod tests {
         // And it can be turned back off.
         assert!(!set_favourite(&dir, &key, "2026-10-23", false).unwrap());
         assert!(list_favourites(&dir, &key).unwrap().is_empty());
-        assert!(!read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().favourite);
+        assert!(
+            !read_entry(&dir, &key, "2026-10-23")
+                .unwrap()
+                .unwrap()
+                .favourite
+        );
     }
 
     #[test]
@@ -3812,7 +4232,12 @@ mod tests {
 
         import_entries(&dir, &key, &src, &["2026-10-23".to_string()], false).unwrap();
 
-        assert!(!read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().favourite);
+        assert!(
+            !read_entry(&dir, &key, "2026-10-23")
+                .unwrap()
+                .unwrap()
+                .favourite
+        );
         assert!(list_favourites(&dir, &key).unwrap().is_empty());
     }
 
@@ -3929,15 +4354,14 @@ mod tests {
         write_entry(&dir, &key, "2026-10-23", "t", "monday secret").unwrap();
 
         // The attack: rename the file so it claims to be a different day.
-        fs::copy(
-            dir.join("2026-10-23.xml"),
-            dir.join("2026-10-24.xml"),
-        )
-        .unwrap();
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
 
         // The original still reads, the copy does not.
         assert_eq!(
-            read_entry(&dir, &key, "2026-10-23").unwrap().unwrap().content,
+            read_entry(&dir, &key, "2026-10-23")
+                .unwrap()
+                .unwrap()
+                .content,
             "monday secret"
         );
         assert!(
@@ -3951,11 +4375,7 @@ mod tests {
         let dir = temp_dir("aad-copy-list");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         write_entry(&dir, &key, "2026-10-23", "t", "monday secret").unwrap();
-        fs::copy(
-            dir.join("2026-10-23.xml"),
-            dir.join("2026-10-24.xml"),
-        )
-        .unwrap();
+        fs::copy(dir.join("2026-10-23.xml"), dir.join("2026-10-24.xml")).unwrap();
 
         // Rebuilding from disk skips the undecryptable copy rather than
         // surfacing it with the wrong title.
@@ -4006,16 +4426,17 @@ mod tests {
     }
 
     #[test]
-    fn new_entries_are_written_as_version_4() {
+    fn new_entries_are_written_as_version_5() {
         let dir = temp_dir("aad-version");
         let key = create_vault(&dir, "pw", fast()).unwrap();
         write_entry(&dir, &key, "2026-10-23", "t", "body").unwrap();
 
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
-        assert!(raw.contains("version=\"4\""), "raw was: {raw}");
+        assert!(raw.contains("version=\"5\""), "raw was: {raw}");
         let parsed = xml::from_xml(&raw).unwrap();
-        assert_eq!(parsed.version, 4);
+        assert_eq!(parsed.version, 5);
         assert!(parsed.uses_version_aad());
+        assert!(parsed.uses_context_aad());
     }
 
     #[test]
@@ -4027,8 +4448,8 @@ mod tests {
         // Rewrite the header to claim the file is an older format. Because the
         // version byte is part of the AAD, the tag no longer verifies.
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
-        for claimed in ["3", "2"] {
-            let forged = raw.replace("version=\"4\"", &format!("version=\"{claimed}\""));
+        for claimed in ["4", "3", "2"] {
+            let forged = raw.replace("version=\"5\"", &format!("version=\"{claimed}\""));
             assert_ne!(forged, raw, "version attribute not found");
             fs::write(dir.join("2026-10-23.xml"), &forged).unwrap();
             assert!(
@@ -4243,13 +4664,13 @@ mod tests {
     fn write_v2_entry(dir: &Path, key: &[u8; 32], date: &str, title: &str, content: &str) {
         let plain = format!("{title}\n{content}");
         let (iv, ct) = crypto::encrypt(key, plain.as_bytes()).unwrap();
-        let entry = EncryptedEntry::new(
-            date,
-            crypto::b64_encode(&iv),
-            crypto::b64_encode(&ct),
+        let entry = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct))
+            .with_version(2);
+        fs::write(
+            dir.join(format!("{date}.xml")),
+            xml::to_xml(&entry).unwrap(),
         )
-        .with_version(2);
-        fs::write(dir.join(format!("{date}.xml")), xml::to_xml(&entry).unwrap()).unwrap();
+        .unwrap();
     }
 
     /// Write a version 3 entry: AAD-bound to the date, but the version byte is
@@ -4257,13 +4678,13 @@ mod tests {
     fn write_v3_entry(dir: &Path, key: &[u8; 32], date: &str, title: &str, content: &str) {
         let plain = format!("\u{1}0\n{title}\n{content}");
         let (iv, ct) = crypto::encrypt_with_aad(key, date.as_bytes(), plain.as_bytes()).unwrap();
-        let entry = EncryptedEntry::new(
-            date,
-            crypto::b64_encode(&iv),
-            crypto::b64_encode(&ct),
+        let entry = EncryptedEntry::new(date, crypto::b64_encode(&iv), crypto::b64_encode(&ct))
+            .with_version(3);
+        fs::write(
+            dir.join(format!("{date}.xml")),
+            xml::to_xml(&entry).unwrap(),
         )
-        .with_version(3);
-        fs::write(dir.join(format!("{date}.xml")), xml::to_xml(&entry).unwrap()).unwrap();
+        .unwrap();
     }
 
     /// Write a version 1 entry: cleartext title, encrypted body only.
@@ -4309,8 +4730,8 @@ mod tests {
 
         // The file now declares the current version and binds the version byte.
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
-        assert!(raw.contains("version=\"4\""), "got: {raw}");
-        assert!(xml::from_xml(&raw).unwrap().uses_version_aad());
+        assert!(raw.contains("version=\"5\""), "got: {raw}");
+        assert!(xml::from_xml(&raw).unwrap().uses_context_aad());
 
         // Content survived the rewrite.
         let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
@@ -4333,7 +4754,7 @@ mod tests {
         assert!(report.failed.is_empty());
 
         let raw = fs::read_to_string(dir.join("2026-10-23.xml")).unwrap();
-        assert!(raw.contains("version=\"4\""), "got: {raw}");
+        assert!(raw.contains("version=\"5\""), "got: {raw}");
 
         let entry = read_entry(&dir, &key, "2026-10-23").unwrap().unwrap();
         assert_eq!(entry.title, "標題");

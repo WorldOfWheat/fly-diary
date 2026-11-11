@@ -35,8 +35,9 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 | ------------ | ---------------------------------------------------------------------- |
 | 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
 | 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
-| 預設參數     | 19 MiB 記憶體、2 次迭代、平行度 1（OWASP 建議值）                      |
-| 參數範圍     | 記憶體 8–1024 MiB、迭代 1–16、平行度 1–16                              |
+| 預設參數     | 64 MiB 記憶體、3 次迭代、平行度 1（高於 OWASP 建議值）                 |
+| 參數範圍     | 記憶體 64–1024 MiB、迭代 2–16、平行度 1–16                             |
+| 新密碼長度   | 至少 12 個字元；由 Rust 後端強制，不只靠前端                           |
 | Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
 | IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
 | 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
@@ -44,18 +45,36 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 | 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
 | 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
 | 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本 |
-| 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux 排除 dump/fork；鎖定或關閉即抹除、解鎖、unmap |
+| 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux／Android 排除 dump/fork、Windows 排除 WER dump；鎖定或關閉即抹除、解鎖、unmap |
 
 > ⚠️ **忘記密碼無法救回**（除非已啟用回復短語）：master key 由密碼派生且不落地，沒有後門。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
+
+### Vault 身分與 AAD
+
+`vault.xml` v3 會記錄兩組隨機 16 bytes 的公開識別碼：
+
+- `vault-id`：這個日記本的身分；建立或首次解鎖舊 vault 時產生。
+- `key-id`：目前 diary key 的身分；未來輪換 diary key 時會更新。
+
+日記、索引、附件、manifest、recovery 與 wrapped diary key 的 AAD 都是 canonical、長度前綴的欄位：
+
+```text
+"fly-diary/aad/v5" || kind || vault-id || key-id
+  || len(field1) || field1 || len(field2) || field2 ...
+```
+
+欄位包含 object kind（entry/index/manifest/attachment/recovery/vault-wrap）、日期、附件 id、格式版本；wrapped diary key 另外綁定 salt 與 KDF 參數。這樣把日記密文搬到別的日期、把索引當成日記、或把整組密文搬到另一個 vault，都會在 GCM 驗證時失敗。**不要**把 app 版本、檔案路徑、mtime 或裝置 id 放進 AAD，否則升級或同步後會解不開。
+
+舊的 v4 entry、v4 index、v1 manifest/attachment 與 v1 recovery 仍可讀取；新寫入會使用 v5。舊 `recovery.xml` 因缺少短語無法自動重包裝，會維持 v1，直到下次成功復原或重新產生短語。AAD 只能證明上下文，不能防 replay／rollback；能改寫整個資料夾的攻擊者仍可把舊檔搬回來。
 
 ### KDF 校準
 
 不同機器的 CPU 速度差距可達數倍，同一組 Argon2id 參數在桌機上可能 0.2 秒、在舊筆電上卻要 3 秒。
 設定頁的「自動校準」會實際跑一次派生並計時，目標是**約 1 秒**：
 
-1. 從 64 MiB 記憶體、1 次迭代開始測量。先取上限再往下調，慢機器才不會一開始就超支。
-2. 若超過 1 秒就把記憶體砍半重測，直到進入預算或碰到 19 MiB 下限（再低就失去防護意義）。
+1. 從 128 MiB 記憶體、1 次迭代開始測量。先取上限再往下調，慢機器才不會一開始就超支。
+2. 若超過 1 秒就把記憶體砍半重測，直到進入預算或碰到 64 MiB 下限（再低就低於目前的離線防護目標）。
 3. 剩下的時間預算換成迭代次數（上限 16），把記憶體省下的時間補回去。
 4. 平行度固定為 1，讓同一台機器每次校準的結果一致，也避免核心數不同的機器算出不同成本。
 
@@ -86,7 +105,7 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 短語包裝存在 `recovery.xml`，而不是 `vault.xml`。這是刻意的：舊版 App 在改密碼或改 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的 recovery 欄位會被靜默刪掉。獨立檔案對舊版而言不存在，所以不會被覆寫；而 diary key 在改密碼時不變，短語也就持續有效。
 
-`recovery.xml` 的格式是 `iv`、`wrapped-key`；AAD 是 `"fly-diary/recovery" || 0x00 || version`，讓 recovery 密文不會被當成日記、索引或附件的密文使用。把 recovery blob 換到另一個 vault 時，短語仍可能解出一把金鑰，但接著的 `diary_key_matches` 驗證會失敗並保持 vault 不變。
+`recovery.xml` v2 的 AAD 綁定 `vault-id`、`key-id`、object kind 與版本；v1 仍保留舊的 `"fly-diary/recovery" || 0x00 || version`，因為沒有回復短語就無法重新包裝舊檔。把 recovery blob 換到另一個 vault 時，v2 會直接解密失敗；v1 仍會由 `diary_key_matches` 驗證並保持 vault 不變。下次成功復原或重新產生短語時會寫成 v2。
 
 **顯示與確認**：
 
@@ -102,12 +121,31 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 - **專用一頁**：用 `mmap`（Unix）或 `VirtualAlloc`（Windows）配置一頁，key 放在頁首，避免鎖到旁邊不相干的 heap 物件。
 - **不進 swap**：`mlock`（Unix）／`VirtualLock`（Windows）把這一頁鎖在 RAM。
-- **不進 dump、不進 fork**：Linux 另加 `madvise(MADV_DONTDUMP)` 與 `MADV_WIPEONFORK`，core dump 與 fork 出的子行程都不會帶走金鑰。
+- **不進 dump、不進 fork**：Linux 與 Android 加 `madvise(MADV_DONTDUMP)` 與 `MADV_WIPEONFORK`，core dump 與 fork 出的子行程都不會帶走金鑰。
+- **Windows 不進 WER dump**：key page 會註冊到 `WerRegisterExcludedMemoryBlock`，Drop 時解除；`VirtualLock` 本身不阻止 crash dump。
 - **同使用者也讀不到**：Linux／Android 啟動時 `prctl(PR_SET_DUMPABLE, 0)`，關掉 `/proc/<pid>/mem` 與同使用者 `ptrace` attach；Unix 另保留 `RLIMIT_CORE = 0`。代價是 gdb／profiler 不能直接 attach，開發時若要除錯需暫時註解這行。
 - **一定會抹除**：`Drop` 先 zeroize 整段 key，再 `munlock`／`VirtualUnlock`，最後 `munmap`／`VirtualFree`。
 - **可失敗**：`mlock` 可能因 `RLIMIT_MEMLOCK`、sandbox 或平台限制而失敗；這時仍照常解鎖，只是少了「不進 swap」那層保證，不會把 App 卡住。
+- **suspend／resume**：前端監聽 Tauri 的 `tauri://suspended` / `tauri://resumed`、`visibilitychange` 與 `pagehide`，在背景化或休眠前走同一條「先存檔再鎖定」路徑；Android 另外由 `FLAG_SECURE` 阻止截圖與最近任務縮圖。
 
 這層保護只涵蓋**長時間存活的 session key**。`session_key()` 複製給背景工作的暫時副本、AES key schedule，以及 webview 裡的明文仍是架構性暴露，詳見「已知限制」。
+
+### Android 備份與畫面保護
+
+Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否則換手機就失去日記，因此沒有關閉 Auto Backup。作法是「有條件、可驗證的備份」：
+
+- `android:allowBackup="true"`，以 `dataExtractionRules`（Android 12+）與 `fullBackupContent`（Android 11 以前）只包含日記資料、排除 cache。
+- `cloud-backup` 加上 `disableIfNoEncryptionCapabilities="true"`：裝置沒有可用的備份加密能力時就不上傳。
+- `recovery.xml` 會一起備份，但回復短語本身不在備份裡；取得備份仍需要密碼或短語才能解開 wrapped key。
+- `MainActivity` 設定 `FLAG_SECURE`，避免截圖、螢幕錄影與最近任務縮圖看到明文。
+- 備份與螢幕保護由 `scripts/harden-android.mjs` 套用；`src-tauri/gen/android` 仍保持 gitignored，重新產生 Android 專案後要用 `pnpm android:init`／`android:dev`／`android:build` 重新套用。
+
+### 檔案系統防護
+
+- 暫存檔使用 `create_new` + `O_NOFOLLOW` + 隨機 suffix；避免在共用／同步資料夾中被預放 symlink，讓寫入轉向其他檔案。
+- `vault.xml`、`recovery.xml`、`index.xml`、entry、manifest 與 settings 都有硬讀取上限；超大的損壞檔會被視為 broken 或拒絕，不會讓 App OOM。
+- 路徑中的 `..` 與 symlink 會被拒絕；Windows 共用磁碟／FAT 的 ACL 仍要由使用者確認。
+- 需要解鎖才能使用的命令（拖放圖片、剪貼簿、自動鎖定設定、匯出壞檔等）都要求 session；截圖保護的暫時關閉移到 Rust 的原生資料夾選擇器內。
 
 ## 供應鏈安全
 
@@ -145,7 +183,7 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - 日期為明文（檔名與 `<date>`），但標題與內容皆已加密。
 - 舊版（SHA-256）vault 會在解鎖時自動遷移，遷移期間需要重新加密所有日記，日記量大時會較慢；遷移完成前無法在設定頁變更密碼。遷移會先寫下 `migration.journal`（內含新 vault 的 salt 與包裝後的新 diary key）才開始改寫日記，所以中途斷電或關閉程式不會讓日記卡在「一半用舊金鑰、一半用新金鑰」而無法解鎖的狀態——下次解鎖會偵測到 journal 並自動續跑。`migrate_entries` 本身是冪等的，已經轉換過的日記會直接跳過，因此反覆中斷也只會反覆續跑。
 - 格式升級在解鎖後於背景進行，日記量大時會持續數秒到數十秒；期間狀態列會顯示進度，但日記本身已可正常使用。若升級途中關閉程式，下次解鎖會從剩下的舊格式檔案繼續。
-- 自動鎖定只在 App 視窗內計時：若把視窗縮到最小或切到別的程式，仍會照常計時並鎖定（這是刻意的）。
+- 閒置計時只在 App 視窗內計算；另外會在 Tauri 的 suspend／resume、`visibilitychange`、`pagehide` 與 Android 背景化時鎖定。若平台沒有送出 suspend 事件，休眠瞬間仍可能有極短空窗；甦醒後會再鎖一次。
 - KDF 校準的結果取決於當下機器負載，忙碌時可能選到偏保守的參數；重新校準即可。
 - 每個檔案本身是原子寫入，但**跨檔案沒有交易**：`index.xml` 與日記檔是兩個獨立的原子寫入，中間沒有兩階段提交。這裡改用「寫入順序」把失敗方向固定成可修復的那一邊：`write_entry` / `set_favourite` / 匯入都是**先寫日記、後寫索引**（日記是資料、索引是快取，索引落後只會少列一天，`read_index` 讀不到時會自動退回 `scan_entries` 重建）；`delete_entry` 則是**先改索引、後刪檔案**（反過來會讓索引短暫宣稱某天存在、實際卻打不開）。因此任何中斷點都只會留下「索引落後」這種可自癒的狀態，不會出現「索引指向不存在的檔案」。
 - 上述順序保證的是「不會產生無法自癒的狀態」，不是「兩個檔案永遠一致」。若同步軟體在兩次寫入之間把資料夾同步出去，另一台裝置可能短暫看到索引少一天；下次在任一裝置寫入或呼叫 `rebuild_index()` 就會補回。
@@ -170,19 +208,20 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - 檔案權限收緊只在 Unix 生效（`0600` / `0700`）。Windows 上沿用 `%APPDATA%` 既有的 per-user ACL，程式本身不額外設定 ACL；若把日記放在共用磁碟或同步資料夾，請自行確認該處的權限設定。
 - AAD 綁定只保護「搬檔」與「索引／日記互換」這類攻擊。若攻擊者同時能改寫檔名與檔案內容，仍可把某一天的密文連同檔名一起搬走——AAD 綁的是檔案自稱的日期，不是外部可信的時間來源。
 - 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `LockedKey` 的 zeroize／munmap 不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
-- session key 已放進 `LockedKey`（mlock + `MADV_DONTDUMP` / `MADV_WIPEONFORK`），但 `mlock` 是盡力而為，且**不阻止休眠**：hibernation 會把整份 RAM 寫到磁碟。若需要更強的保證，請在系統層停用休眠或使用加密 swap／加密休眠。
+- session key 已放進 `LockedKey`（mlock + `MADV_DONTDUMP` / `MADV_WIPEONFORK`），Windows 另排除 WER dump；但 `mlock` 是盡力而為，且**不阻止休眠**：hibernation 會把整份 RAM 寫到磁碟。App 會盡量在 suspend 前鎖定，但若需要在休眠映像中也不留下金鑰，請使用加密 swap／加密休眠或在系統層停用休眠。
 - 記憶體保護只涵蓋長時間存活的 session key。`session_key()` 的暫時副本、AES key schedule、Rust 配置器曾使用過的頁面，以及 webview 內的明文都可能不在鎖定頁內；root 權限的攻擊者也不受 `PR_SET_DUMPABLE` 限制。
 - 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
-- Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；換一台機器建置時需要重新產生，並自備 Android SDK／NDK 與 Rust target。目前 repo 只包含手機版程式碼與 Android 產生器的輸出，沒有 iOS 專案。
-- 防止截圖只在 Windows 與 macOS 生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
+- Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；安全性覆蓋由 `scripts/harden-android.mjs` 套用，重新產生專案後要再跑一次。換一台機器建置時需要自備 Android SDK／NDK 與 Rust target；目前 repo 沒有 iOS 專案。
+- 防止截圖在 Windows、macOS 與 Android（`FLAG_SECURE`）生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
 - 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。
 - 回復短語是 12 個**英文** BIP39 單字；目前沒有繁中或其他語言的 wordlist，也不接受使用者自訂短語。
 - 回復短語只顯示一次，之後無法查看。忘記短語且忘記密碼時，資料無法救回。
 - 短語包裝存在 `recovery.xml`；刪除或損毀該檔會讓短語失效。備份與還原時要讓 `vault.xml`、`recovery.xml` 與日記檔保持同一組，不要只還原其中一個。
-- 以較舊的備份還原整個資料夾時，舊的 `recovery.xml` 與舊短語也會一起回來，即使目前短語已被重新產生。判斷短語是否仍有效時，以 `recovery.xml` 的 `id` 為準。
+- 以較舊的備份還原整個資料夾時，舊的 `vault.xml`、`recovery.xml` 與舊密碼／短語也會一起回來；目前沒有 diary key 輪換功能，所以外流的舊 `vault.xml`／`recovery.xml` 無法真正撤銷。改密碼只重新包裝同一把 diary key，不會讓舊檔失效。
+- 舊 `recovery.xml`（v1）沒有 `vault-id`／`key-id`，只能維持舊 AAD；下次成功復原或重新產生短語時才會升級成 v2。
 - 「不可複製」只是 CSS 與事件攔截，不是安全邊界；開發者工具、螢幕截圖或相機仍可取得畫面上的單字。它的目的是提醒使用者親手抄寫，並避免剪貼簿同步把短語帶到雲端。
 - 短語包裝以 128-bit 熵為輸入；有效安全強度是 128 bits，不是 256 bits。這是刻意的取捨：12 個字比 24 個字更容易正確抄寫，而 128 bits 仍遠超離線暴力破解。
 - 產生與確認期間，短語會以明文存在 webview 的 JS 字串、DOM 與 Rust 的暫時緩衝中；`clearPhrase()` 會清空陣列與 DOM，但 JS 字串無法可靠抹除，和密碼欄位的限制相同。

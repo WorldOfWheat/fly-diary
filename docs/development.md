@@ -107,8 +107,15 @@ Linux 只產出 `.deb` 與 `.rpm`，**不產出 AppImage**。AppImage 會把 GTK
 ## 行動版（Android）
 
 手機版沿用同一份前端，靠 `640px` 斷點切換成兩層式排版。Tauri 產生的 Android 專案位於
-`src-tauri/gen/android`，已列在 `.gitignore`，不隨 repo 提交；需要 Android SDK／NDK 與對應的
+`src-tauri/gen/android`，已列在 `.gitignore`；需要 Android SDK／NDK 與對應的
 Rust target，之後可用 `pnpm tauri android dev` / `pnpm tauri android build` 建置。
+
+Android 的備份與截圖保護由 `scripts/harden-android.mjs` 套用（`AndroidManifest.xml` 的
+`allowBackup`／backup rules、`MainActivity` 的 `FLAG_SECURE`）。`src-tauri/gen/android` 是
+generated 專案，仍保持 gitignored；重新產生後請用 `pnpm android:init`、`pnpm android:dev` 或
+`pnpm android:build`，這些指令會先跑 patch script。備份保持開啟，讓 `vault.xml`、`recovery.xml`
+與日記可以在換手機後還原；Android 12+ 的雲端備份會加上
+`disableIfNoEncryptionCapabilities="true"`，沒有備份加密能力時不上傳。
 
 行動版有三個刻意不同的行為：
 
