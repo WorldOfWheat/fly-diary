@@ -1519,8 +1519,53 @@ fn scan_entries_with_broken_context(
     key: &[u8; 32],
     context: Option<&xml::VaultContext>,
 ) -> Result<(BTreeMap<String, IndexRecord>, Vec<BrokenEntry>), String> {
-    ensure_dir(dir)?;
     let mut entries = BTreeMap::new();
+    let broken = scan_entry_contents_with_context(
+        dir,
+        key,
+        context,
+        &mut |date, title, _content, favourite| {
+            entries.insert(
+                date.to_string(),
+                IndexRecord {
+                    title: title.to_string(),
+                    favourite,
+                },
+            );
+        },
+    )?;
+    Ok((entries, broken))
+}
+
+/// Scan every entry file, decrypting the title and content of the readable ones.
+///
+/// The collector is called once per readable entry, in directory order. Broken
+/// files are skipped and returned instead, exactly like
+/// [`scan_entries_with_broken`], so callers that need the decrypted body do not
+/// have to duplicate the parsing and AAD rules.
+///
+/// The content is borrowed only for the duration of the call: a caller that
+/// wants to keep it must copy (and zeroize) it itself. This is the slow path —
+/// one read and one decryption attempt per entry.
+pub fn scan_entry_contents<F>(
+    dir: &Path,
+    key: &[u8; 32],
+    mut on_entry: F,
+) -> Result<Vec<BrokenEntry>, String>
+where
+    F: FnMut(&str, &str, &str, bool),
+{
+    let context = vault_context(dir)?;
+    scan_entry_contents_with_context(dir, key, context.as_ref(), &mut on_entry)
+}
+
+fn scan_entry_contents_with_context(
+    dir: &Path,
+    key: &[u8; 32],
+    context: Option<&xml::VaultContext>,
+    on_entry: &mut dyn FnMut(&str, &str, &str, bool),
+) -> Result<Vec<BrokenEntry>, String> {
+    ensure_dir(dir)?;
     let mut broken = Vec::new();
 
     let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
@@ -1578,12 +1623,12 @@ fn scan_entries_with_broken_context(
                 continue;
             }
         };
-        let (title, _, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
-        entries.insert(date.to_string(), IndexRecord { title, favourite });
+        let (title, content, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
+        on_entry(date, &title, &content, favourite);
     }
 
     broken.sort_by(|a, b| b.date.cmp(&a.date));
-    Ok((entries, broken))
+    Ok(broken)
 }
 
 /// List the entry files that exist on disk but cannot be decrypted.

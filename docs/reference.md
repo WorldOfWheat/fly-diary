@@ -63,6 +63,8 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `list_favourites()`                       | 只列出收藏的日記（新到舊）                                                   |
 | `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態                                           |
 | `rebuild_index()`                         | 丟棄 `index.xml` 並重新掃描所有日記重建索引                                  |
+| `scan_vault()`                            | 掃描整個 vault，回傳日記清單與損壞檔，並重建記憶體內的全文索引               |
+| `search_entries(query, limit?, favouritesOnly?)` | 搜尋日期、標題與內容，回傳命中摘要與 UTF-16 標記範圍（需解鎖）      |
 | `list_broken_entries()`                   | 列出無法解密的日記檔（日期、大小、失敗原因）                                 |
 | `export_broken_entry(date)`               | 開啟存檔對話框，把原始 `.xml` 位元組複製到指定位置                           |
 | `pick_import_dir()`                       | 桌面版開啟原生資料夾選擇器；行動版回報不支援資料夾匯入                       |

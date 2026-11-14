@@ -220,6 +220,20 @@ html[data-input-modality="keyboard"] .entry-item:focus {
   font-style: italic;
 }
 
+/* Full-text results: the title is a strong lead-in, the snippet follows on the
+   same ellipsised line so the virtual list keeps its fixed row height. */
+.entry-item .entry-preview.search-preview .search-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.entry-item .entry-preview mark {
+  background: var(--accent-wash-strong);
+  color: inherit;
+  border-radius: 0.125rem;
+  padding: 0 0.0625rem;
+}
+
 /* The dark favourite background is too close to the muted text token; use the
    normal text colour on highlighted rows so secondary text stays above 4.5:1. */
 .entry-item.favourite .entry-weekday,

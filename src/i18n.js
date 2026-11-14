@@ -88,8 +88,9 @@ const zhHant = {
   // --- Sidebar -------------------------------------------------------------
   "sidebar.newToday": "今天",
   "sidebar.newTodayTitle": "前往今天 (Ctrl/Cmd+T)",
-  "sidebar.search": "搜尋日期或標題…",
-  "sidebar.searchLabel": "搜尋日期或標題",
+  "sidebar.search": "搜尋日期、標題或內容…",
+  "sidebar.searchLabel": "搜尋日期、標題或內容",
+  "sidebar.searchFailed": "搜尋失敗",
   "sidebar.pathTitle": "日記儲存位置",
   "sidebar.import": "匯入",
   "sidebar.importTitle": "從資料夾匯入日記",
@@ -443,8 +444,9 @@ const en = {
   // --- Sidebar -------------------------------------------------------------
   "sidebar.newToday": "Today",
   "sidebar.newTodayTitle": "Go to today (Ctrl/Cmd+T)",
-  "sidebar.search": "Search date or title…",
-  "sidebar.searchLabel": "Search date or title",
+  "sidebar.search": "Search date, title or content…",
+  "sidebar.searchLabel": "Search date, title or content",
+  "sidebar.searchFailed": "Search failed",
   "sidebar.pathTitle": "Diary location",
   "sidebar.import": "Import",
   "sidebar.importTitle": "Import diaries from a folder",

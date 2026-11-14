@@ -130,6 +130,8 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 
 這層保護只涵蓋**長時間存活的 session key**。`session_key()` 複製給背景工作的暫時副本、AES key schedule，以及 webview 裡的明文仍是架構性暴露，詳見「已知限制」。
 
+全文搜尋索引是額外的明文暴露面：它保存解鎖期間所有日記的標題與內容（原文與小寫副本），供關鍵字比對。索引只存在 Rust 記憶體、**不落盤**，`lock()` 會直接丟棄整個索引並 zeroize 每個字串；但它不在 `LockedKey` 的鎖定頁內，也不阻止休眠。搜尋結果只把命中摘要（而非整篇內容）送到 webview。
+
 ### Android 備份與畫面保護
 
 Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否則換手機就失去日記，因此沒有關閉 Auto Backup。作法是「有條件、可驗證的備份」：
@@ -210,6 +212,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `LockedKey` 的 zeroize／munmap 不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
 - session key 已放進 `LockedKey`（mlock + `MADV_DONTDUMP` / `MADV_WIPEONFORK`），Windows 另排除 WER dump；但 `mlock` 是盡力而為，且**不阻止休眠**：hibernation 會把整份 RAM 寫到磁碟。App 會盡量在 suspend 前鎖定，但若需要在休眠映像中也不留下金鑰，請使用加密 swap／加密休眠或在系統層停用休眠。
 - 記憶體保護只涵蓋長時間存活的 session key。`session_key()` 的暫時副本、AES key schedule、Rust 配置器曾使用過的頁面，以及 webview 內的明文都可能不在鎖定頁內；root 權限的攻擊者也不受 `PR_SET_DUMPABLE` 限制。
+- 全文搜尋索引保存解鎖期間所有日記的明文標題與內容，且不在 `mlock` 頁內；鎖定時會清除並 zeroize，但休眠映像與行程記憶體 dump 仍可能帶走它。索引不會寫入日記資料夾，關閉 App 後不留下任何副本。
 - 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。

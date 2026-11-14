@@ -19,6 +19,7 @@ import {
   weekdayName,
 } from "./i18n.js";
 import { toISODate, shiftDate, monthStartOf } from "./lib/dates.js";
+import { highlightedSegments } from "./lib/highlight.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -47,6 +48,17 @@ let saveTimer = null;
 let allEntries = [];
 /** Search filter string. */
 let searchQuery = "";
+/**
+ * Full-text hits for `searchQuery`, or `null` while the query is empty (or the
+ * backend index is not ready) and the local date/title filter is in charge.
+ */
+let searchResults = null;
+/** Debounce timer for full-text search. */
+let searchTimer = null;
+/** Monotonic id so an out-of-order response can be discarded. */
+let searchSeq = 0;
+/** Milliseconds between the last keystroke and a backend search. */
+const SEARCH_DEBOUNCE_MS = 200;
 /**
  * Which sidebar view is showing: `"all"`, `"favourites"` or `"broken"`.
  *
@@ -526,9 +538,18 @@ let renderedEnd = -1;
  *
  * The view filter runs first: the favourites page is a subset of the same
  * list, and searching inside it should only ever narrow that subset.
+ *
+ * A non-empty query normally comes back from the backend as `searchResults`.
+ * `null` means the index is not ready (or the query was just cleared), so the
+ * cheap local date/title filter runs instead and the user still sees something
+ * useful while typing.
  */
 function applyFilter() {
   const q = searchQuery.trim().toLowerCase();
+  if (q && searchResults !== null) {
+    visibleEntries = searchResults;
+    return;
+  }
   const base =
     currentView === "favourites"
       ? allEntries.filter((e) => e.favourite)
@@ -538,6 +559,66 @@ function applyFilter() {
         (e) => e.date.includes(q) || (e.title || "").toLowerCase().includes(q)
       )
     : base;
+}
+
+/** Cancel a pending debounced search. */
+function cancelPendingSearch() {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+}
+
+/**
+ * Schedule a full-text search for the current query.
+ *
+ * The input handler already re-renders the local date/title filter, so this
+ * only has to debounce the expensive request. Every request carries a sequence
+ * number: typing while a search is in flight must not let the older response
+ * overwrite the newer one.
+ */
+function scheduleSearch({ immediate = false } = {}) {
+  cancelPendingSearch();
+  const query = searchQuery.trim();
+  if (!query) {
+    searchSeq += 1;
+    searchResults = null;
+    renderList();
+    return;
+  }
+  if (immediate) {
+    void runSearch(query);
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    void runSearch(query);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+async function runSearch(query) {
+  const seq = ++searchSeq;
+  try {
+    const response = await invoke("search_entries", {
+      query,
+      favouritesOnly: currentView === "favourites",
+    });
+    // A newer keystroke or a view switch invalidates this response.
+    if (seq !== searchSeq || query !== searchQuery.trim()) return;
+    if (!response?.ready) {
+      searchResults = null;
+      renderList();
+      return;
+    }
+    searchResults = response.hits ?? [];
+    renderList();
+  } catch (err) {
+    if (seq !== searchSeq || query !== searchQuery.trim()) return;
+    console.error("search_entries failed:", err);
+    searchResults = null;
+    renderList();
+    setStatus(t("sidebar.searchFailed"));
+  }
 }
 
 /** Broken rows matching the current search, newest first. */
@@ -562,6 +643,25 @@ function formatBytes(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Append `text` to `container`, wrapping the UTF-16 ranges in `<mark>`.
+ *
+ * Ranges come from the backend as `[start, end]` pairs so the frontend never
+ * has to re-implement case folding. Everything is inserted as text nodes: entry
+ * content must never be interpreted as HTML.
+ */
+function appendHighlighted(container, text, ranges) {
+  for (const segment of highlightedSegments(text, ranges)) {
+    if (!segment.marked) {
+      container.append(document.createTextNode(segment.text));
+      continue;
+    }
+    const mark = document.createElement("mark");
+    mark.textContent = segment.text;
+    container.append(mark);
+  }
 }
 
 /** Build the DOM node for one entry row. */
@@ -591,8 +691,20 @@ function createRow(entry, index) {
   dateRow.append(dateText, weekday);
 
   const preview = document.createElement("div");
-  preview.className = "entry-preview" + (entry.title ? "" : " empty");
-  preview.textContent = entry.title || t("common.untitled");
+  if (Array.isArray(entry.matches) && typeof entry.snippet === "string") {
+    preview.className = "entry-preview search-preview";
+    const title = document.createElement("span");
+    title.className = "search-title";
+    title.textContent = entry.title || t("common.untitled");
+    preview.append(title);
+    if (entry.snippet) {
+      preview.append(document.createTextNode(" · "));
+      appendHighlighted(preview, entry.snippet, entry.matches);
+    }
+  } else {
+    preview.className = "entry-preview" + (entry.title ? "" : " empty");
+    preview.textContent = entry.title || t("common.untitled");
+  }
 
   button.append(dateRow, preview);
   button.addEventListener("click", () => selectDate(entry.date));
@@ -762,20 +874,15 @@ function scrollDateIntoView(date) {
 // ---------------------------------------------------------------------------
 
 /**
- * Refresh the broken-file list and the sidebar tab that advertises it.
+ * Apply a broken-file list to the sidebar and its tab.
  *
  * The tab is hidden entirely when nothing is broken, so a healthy diary never
  * shows a scary red badge. `announce` is only true on the first load, so the
  * user is told once per session rather than on every autosave.
  */
-async function refreshBroken(announce = false) {
+function applyBrokenState(list, announce = false) {
   const previous = brokenEntries.length;
-  try {
-    brokenEntries = await invoke("list_broken_entries");
-  } catch (err) {
-    console.error("list_broken_entries failed:", err);
-    brokenEntries = [];
-  }
+  brokenEntries = Array.isArray(list) ? list : [];
 
   if (els.brokenCount) {
     els.brokenCount.textContent = brokenEntries.length
@@ -794,6 +901,16 @@ async function refreshBroken(announce = false) {
 
   if (announce && brokenEntries.length > previous) {
     setStatus(t("broken.notify", { n: brokenEntries.length }));
+  }
+}
+
+/** Refresh the broken-file list without touching the search index. */
+async function refreshBroken(announce = false) {
+  try {
+    applyBrokenState(await invoke("list_broken_entries"), announce);
+  } catch (err) {
+    console.error("list_broken_entries failed:", err);
+    applyBrokenState([], announce);
   }
 }
 
@@ -842,10 +959,12 @@ async function upgradeEntries() {
 /**
  * Reload the sidebar from disk.
  *
- * `scanBroken` controls whether the broken-file list is refreshed too. That
- * refresh is expensive: `list_broken_entries` reads, parses and decrypts *every*
- * entry file in the vault, because a broken file is by definition absent from
- * the index and can only be found by walking the directory.
+ * `scanBroken` controls whether the vault is scanned end to end. That scan is
+ * expensive: it reads, parses and decrypts *every* entry file, because a broken
+ * file is by definition absent from the index and can only be found by walking
+ * the directory. `scan_vault` does that work once and returns both the broken
+ * list and a freshly built full-text index, so the two features never pay for
+ * the same pass twice.
  *
  * Saving cannot create a broken file — the app just wrote it with the key it
  * holds — so the autosave path passes `false` and skips the scan entirely. The
@@ -858,15 +977,26 @@ async function refreshList({ scanBroken = true } = {}) {
   if (!lockScreen.isVaultInitialized()) {
     allEntries = [];
     brokenEntries = [];
+    searchResults = null;
+    cancelPendingSearch();
     renderList();
     return;
   }
   try {
-    allEntries = await invoke("list_entries");
-    if (scanBroken) await refreshBroken();
+    if (scanBroken) {
+      const snapshot = await invoke("scan_vault");
+      allEntries = snapshot?.entries ?? [];
+      applyBrokenState(snapshot?.broken ?? [], false);
+    } else {
+      allEntries = await invoke("list_entries");
+    }
     renderList();
+    // The scan may have changed an entry the user is currently searching for.
+    if (scanBroken && searchQuery.trim()) {
+      await runSearch(searchQuery.trim());
+    }
   } catch (err) {
-    console.error("list_entries failed:", err);
+    console.error(scanBroken ? "scan_vault failed:" : "list_entries failed:", err);
     allEntries = [];
     renderList();
     setStatus(t("status.listFailed"));
@@ -933,7 +1063,15 @@ function setView(view) {
 
   // The row count changes, so the old scroll offset is meaningless.
   els.listScroll.scrollTop = 0;
-  renderList();
+  if (searchQuery.trim()) {
+    // The favourites view changes which documents match, so the backend has to
+    // run the query again with `favouritesOnly`.
+    searchResults = null;
+    renderList();
+    scheduleSearch({ immediate: true });
+  } else {
+    renderList();
+  }
 }
 
 /**
@@ -980,9 +1118,18 @@ async function toggleFavourite() {
     if (meta) meta.favourite = stored;
 
     // Un-favouriting while looking at the favourites page removes the row the
-    // user is reading, so the list has to be rebuilt.
-    if (currentView === "favourites") renderList();
-    else renderVisibleRows(true);
+    // user is reading, so the list has to be rebuilt. With an active search the
+    // backend index gained the new flag too, so rerun it to keep both views in
+    // step.
+    if (searchQuery.trim()) {
+      searchResults = null;
+      renderList();
+      scheduleSearch({ immediate: true });
+    } else if (currentView === "favourites") {
+      renderList();
+    } else {
+      renderVisibleRows(true);
+    }
   } catch (err) {
     console.error("set_favourite failed:", err);
     setStatus(t("status.favouriteFailed"));
@@ -1374,6 +1521,11 @@ function resetEditorState() {
   savedContent = "";
   allEntries = [];
   brokenEntries = [];
+  // Drop the decrypted result metadata before the backend clears its index, so
+  // no title or snippet survives on the lock screen.
+  searchResults = null;
+  cancelPendingSearch();
+  searchSeq += 1;
   unlockEditor();
   // The read-only gate belongs to the entry that was open, so it goes with it.
   readOnlyEntry = false;
@@ -1826,6 +1978,10 @@ function wireEvents() {
     setView,
     setSearchQuery: (query) => {
       searchQuery = query;
+      // Show the local date/title filter at once; the debounced backend query
+      // replaces it with full-text hits when it returns.
+      searchResults = null;
+      scheduleSearch();
     },
     renderList,
     renderVisibleRows,

@@ -5,13 +5,14 @@ mod bip39;
 mod clipboard;
 pub mod crypto;
 mod fsutil;
+mod search;
 mod secure_memory;
 mod settings;
 pub mod storage;
 mod xml;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use attachments::{AttachmentData, AttachmentMeta, DroppedImage, OrphanAttachment};
 use clipboard::ClipboardImage;
@@ -113,6 +114,38 @@ impl Session {
 }
 
 type SharedSession = Mutex<Session>;
+
+/// Session-scoped full-text index.
+///
+/// `None` means the index has not been built yet (locked, switching workspace,
+/// or the initial scan failed). The index holds decrypted titles and bodies, so
+/// it is cleared whenever the session key is dropped. It is never persisted.
+#[derive(Default)]
+struct SearchState {
+    index: Option<search::SearchIndex>,
+    /// Bumped whenever the session/workspace changes. A scan captures this
+    /// before it starts and refuses to install its result if it has moved on,
+    /// so a slow scan from a previous vault cannot leak into the next one.
+    generation: u64,
+}
+
+type SharedSearch = Arc<Mutex<SearchState>>;
+
+/// Clone the search-state handle out of the Tauri manager.
+///
+/// The handle is an `Arc`, so callers can drop the `State` borrow and move it
+/// into a blocking task.
+fn search_state(app: &tauri::AppHandle) -> SharedSearch {
+    app.state::<SharedSearch>().inner().clone()
+}
+
+/// Drop the decrypted index without disturbing the session key.
+fn clear_search(app: &tauri::AppHandle) {
+    let search = search_state(app);
+    let mut state = search.lock().unwrap();
+    state.index = None;
+    state.generation = state.generation.wrapping_add(1);
+}
 
 /// Run blocking work off the main thread.
 ///
@@ -217,6 +250,9 @@ async fn set_diary_dir(
 
     let dir = PathBuf::from(path.trim());
     settings::validate_diary_dir(&dir)?;
+    // The index belongs to the old workspace even when the session was already
+    // locked, so it must not survive the switch.
+    clear_search(&app);
 
     let config = config_dir(&app)?;
     blocking("Set diary dir", move || {
@@ -480,6 +516,9 @@ async fn create_vault(
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
+    // A new vault has no index yet; discard anything left over from a previous
+    // workspace or session.
+    clear_search(&app);
     Ok(())
 }
 
@@ -497,13 +536,17 @@ async fn unlock(
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
+    // The index is rebuilt by `scan_vault`; never let one session's plaintext
+    // index leak into the next.
+    clear_search(&app);
     Ok(())
 }
 
-/// Forget the in-memory key.
+/// Forget the in-memory key and the decrypted search index.
 #[tauri::command]
-fn lock(session: tauri::State<'_, SharedSession>) {
+fn lock(app: tauri::AppHandle, session: tauri::State<'_, SharedSession>) {
     *session.lock().unwrap() = Session::default();
+    clear_search(&app);
 }
 
 /// The Argon2id parameters currently recorded in the vault.
@@ -700,6 +743,9 @@ async fn recover_vault(
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
+    // Recovery keeps the same diary key, but rebuilding is cheap compared with
+    // risking a stale index from a different vault.
+    clear_search(&app);
     Ok(())
 }
 
@@ -741,8 +787,15 @@ async fn save_entry(
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
+    let search = search_state(&app);
     blocking("Save entry", move || {
-        storage::write_entry(&dir, &key, &date, &title, &content)
+        storage::write_entry(&dir, &key, &date, &title, &content)?;
+        // Keep the session index in step without re-reading the file. The
+        // favourite flag is preserved by `upsert`.
+        if let Some(index) = search.lock().unwrap().index.as_mut() {
+            index.upsert(&date, &title, &content);
+        }
+        Ok(())
     })
     .await
 }
@@ -755,8 +808,13 @@ async fn delete_entry(
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
+    let search = search_state(&app);
     blocking("Delete entry", move || {
-        storage::delete_entry(&dir, &key, &date)
+        storage::delete_entry(&dir, &key, &date)?;
+        if let Some(index) = search.lock().unwrap().index.as_mut() {
+            index.remove(&date);
+        }
+        Ok(())
     })
     .await
 }
@@ -954,8 +1012,19 @@ async fn set_favourite(
 ) -> Result<bool, String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
+    let search = search_state(&app);
     blocking("Set favourite", move || {
-        storage::set_favourite(&dir, &key, &date, favourite)
+        let stored = storage::set_favourite(&dir, &key, &date, favourite)?;
+        if let Some(index) = search.lock().unwrap().index.as_mut() {
+            if stored {
+                index.set_favourite(&date, favourite);
+            } else {
+                // `set_favourite` is a no-op for a missing entry; make sure a
+                // stale document does not keep it searchable.
+                index.remove(&date);
+            }
+        }
+        Ok(stored)
     })
     .await
 }
@@ -994,6 +1063,79 @@ async fn list_broken_entries(
     let key = session_key(&session)?;
     blocking("List broken entries", move || {
         storage::list_broken_entries(&dir, &key)
+    })
+    .await
+}
+
+/// Snapshot returned by [`scan_vault`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultScan {
+    entries: Vec<EntryMeta>,
+    broken: Vec<BrokenEntry>,
+}
+
+/// Scan the vault once, returning the sidebar metadata, the broken files and a
+/// freshly built full-text index.
+///
+/// The unlock path already has to read and decrypt every entry to find broken
+/// files. Folding the search-index build into that pass keeps the two from
+/// multiplying the startup cost. The index is installed only after the scan
+/// succeeds; until then `search_entries` reports `ready: false`.
+#[tauri::command]
+async fn scan_vault(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<VaultScan, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    let search = search_state(&app);
+    blocking("Scan vault", move || {
+        let generation = search.lock().unwrap().generation;
+        let (index, broken) = search::build(&dir, &key)?;
+        {
+            let mut state = search.lock().unwrap();
+            // Locking, switching workspace or a second scan supersedes this
+            // one. Dropping `index` here also zeroizes the plaintext we no
+            // longer need.
+            if state.generation != generation {
+                return Err("Vault changed while the search index was being built".to_string());
+            }
+            state.index = Some(index);
+        }
+        // The sidebar index is a cheap read; install the content index first so
+        // a save that lands during this step updates the fresh copy instead of
+        // being overwritten by the scan.
+        let entries = storage::list_entries(&dir, &key)?;
+        Ok(VaultScan { entries, broken })
+    })
+    .await
+}
+
+/// Search titles and bodies of every entry.
+///
+/// The query runs against the session index in memory; only the matching
+/// snippets are returned, so the whole decrypted corpus never crosses into the
+/// webview. When the index has not been built the response has `ready: false`
+/// and the frontend falls back to its local date/title filter.
+#[tauri::command]
+async fn search_entries(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    query: String,
+    limit: Option<usize>,
+    favourites_only: Option<bool>,
+) -> Result<search::SearchResponse, String> {
+    require_unlocked(&session)?;
+    let search = search_state(&app);
+    let limit = limit.unwrap_or(search::DEFAULT_LIMIT);
+    let favourites_only = favourites_only.unwrap_or(false);
+    blocking("Search entries", move || {
+        let state = search.lock().unwrap();
+        Ok(match state.index.as_ref() {
+            Some(index) => index.query(&query, limit, favourites_only),
+            None => search::SearchResponse::not_ready(),
+        })
     })
     .await
 }
@@ -1269,7 +1411,8 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(navigation_guard())
         .plugin(tauri_plugin_dialog::init())
-        .manage(SharedSession::default());
+        .manage(SharedSession::default())
+        .manage(SharedSearch::default());
 
     // The menu is desktop-only: `tauri::menu` does not exist on mobile, and
     // there is no menu bar to attach it to.
@@ -1318,6 +1461,8 @@ pub fn run() {
             set_favourite,
             rebuild_index,
             list_broken_entries,
+            scan_vault,
+            search_entries,
             export_broken_entry,
             pick_import_dir,
             scan_import,
