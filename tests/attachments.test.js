@@ -253,6 +253,67 @@ test("adding files flushes text, uploads, and refreshes the sidebar", async () =
   }
 });
 
+test("addFiles prepares in parallel but saves in selection order", async () => {
+  let active = 0;
+  let maxActive = 0;
+  const prepareFile = async (file) => {
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    active -= 1;
+    return {
+      mime: "image/webp",
+      data: `data-${file.name}`,
+      width: 10,
+      height: 10,
+    };
+  };
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      save_attachment: (args) => ({
+        id: args.data,
+        mime: args.mime,
+        width: args.width,
+        height: args.height,
+        size: args.data.length,
+        missing: false,
+      }),
+    },
+  });
+  ctx.gallery = createAttachmentGallery({
+    els: ctx.els,
+    invoke: ctx.invoke,
+    t: ctx.t,
+    setStatus: ctx.setStatus,
+    confirm: () => true,
+    canEdit: () => true,
+    isLocked: () => false,
+    flushText: ctx.flushText,
+    refreshList: ctx.refreshList,
+    prepareFile,
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    await ctx.gallery.addFiles(
+      ["a.png", "b.png", "c.png", "d.png"].map((name) => ({
+        name,
+        type: "image/png",
+      }))
+    );
+
+    assert.equal(maxActive, 3, "three images should be prepared at once");
+    const saved = ctx.invoke.calls
+      .filter((call) => call.command === "save_attachment")
+      .map((call) => call.args.data);
+    assert.deepEqual(saved, ["data-a.png", "data-b.png", "data-c.png", "data-d.png"]);
+    assert.deepEqual(ctx.gallery.ids(), saved);
+  } finally {
+    ctx.restore();
+  }
+});
+
 test("addPaths reads native drop paths before running the normal upload pipeline", async () => {
   const saved = {
     id: "d".repeat(32),

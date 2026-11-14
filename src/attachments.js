@@ -27,6 +27,8 @@ export const MAX_LONG_EDGE = 1000;
 export const WEBP_QUALITY = 0.8;
 /** Largest input file accepted before decoding. */
 export const MAX_INPUT_BYTES = 64 * 1024 * 1024;
+/** Images compressed concurrently before they are saved in selection order. */
+const ATTACHMENT_PREPARE_CONCURRENCY = 3;
 
 // Keeps an unloaded thumbnail visually empty instead of making the browser
 // render the `alt` text as an "IMAGE" placeholder.
@@ -586,12 +588,16 @@ export function createAttachmentGallery(deps) {
     els.attachmentInput.click();
   }
 
-  async function uploadOne(file, date) {
+  async function prepareOne(file) {
     const prepare = deps.prepareFile || prepareImageFile;
     const prepared = await prepare(file);
     if (!prepared || !prepared.data || !prepared.mime) {
       throw new Error("Image preparation failed");
     }
+    return prepared;
+  }
+
+  async function savePrepared(prepared, date) {
     const meta = await deps.invoke("save_attachment", {
       date,
       mime: prepared.mime,
@@ -607,39 +613,67 @@ export function createAttachmentGallery(deps) {
     };
   }
 
-  /** Add every selected file, reporting per-file failures. */
+  /**
+   * Add every selected file, reporting per-file failures.
+   *
+   * Image decoding/resizing/encoding is the expensive part and happens in the
+   * webview, so a small chunk is prepared in parallel. Saves stay sequential:
+   * the backend serialises manifest writes anyway, and keeping the save order
+   * means the new images are appended in the order the user selected them.
+   */
   async function addFiles(fileList) {
     if (!editable()) return 0;
     const files = Array.from(fileList || []);
     if (files.length === 0) return 0;
 
     const date = currentDate;
+    const total = files.length;
     busy = true;
     render();
-    setLocalStatus(deps.t("attachments.uploading", { done: 0, total: files.length }));
-    deps.setStatus?.(deps.t("attachments.uploading", { done: 0, total: files.length }));
-
     let done = 0;
     let failed = 0;
+    const showProgress = () =>
+      setLocalStatus(deps.t("attachments.uploading", { done, total }));
+    showProgress();
+    deps.setStatus?.(deps.t("attachments.uploading", { done, total }));
+
     try {
       await deps.flushText?.();
-      for (const file of files) {
+      for (let start = 0; start < total; start += ATTACHMENT_PREPARE_CONCURRENCY) {
         if (currentDate !== date) break;
-        try {
-          const { meta, previewUrl } = await uploadOne(file, date);
-          if (currentDate === date) {
-            imageCache.set(meta.id, previewUrl);
-            items.push(meta);
-            render();
-          }
-          done += 1;
-        } catch (err) {
-          console.error("save_attachment failed:", err);
-          failed += 1;
-        }
-        setLocalStatus(
-          deps.t("attachments.uploading", { done, total: files.length })
+        const chunk = files.slice(start, start + ATTACHMENT_PREPARE_CONCURRENCY);
+        const prepared = await Promise.all(
+          chunk.map(async (file) => {
+            try {
+              return { prepared: await prepareOne(file) };
+            } catch (err) {
+              console.error("prepare attachment failed:", err);
+              return { error: err };
+            }
+          })
         );
+
+        for (const result of prepared) {
+          if (currentDate !== date) break;
+          if (result.error) {
+            failed += 1;
+            showProgress();
+            continue;
+          }
+          try {
+            const { meta, previewUrl } = await savePrepared(result.prepared, date);
+            if (currentDate === date) {
+              imageCache.set(meta.id, previewUrl);
+              items.push(meta);
+              render();
+            }
+            done += 1;
+          } catch (err) {
+            console.error("save_attachment failed:", err);
+            failed += 1;
+          }
+          showProgress();
+        }
       }
     } finally {
       busy = false;

@@ -41,11 +41,13 @@ use base64::Engine;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 use rand::RngCore;
+use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::Zeroizing;
 
 use crate::crypto;
 use crate::fsutil;
+use crate::pool::vault_pool;
 use crate::storage;
 use crate::xml::{self, EncryptedEntry};
 
@@ -150,7 +152,7 @@ pub fn read_dropped_images(paths: &[String]) -> Result<Vec<DroppedImage>, String
         ));
     }
 
-    let mut images = Vec::with_capacity(paths.len());
+    let mut files = Vec::with_capacity(paths.len());
     let mut total = 0u64;
     for path in paths {
         let path = Path::new(path);
@@ -173,24 +175,35 @@ pub fn read_dropped_images(paths: &[String]) -> Result<Vec<DroppedImage>, String
                 MAX_DROPPED_TOTAL_BYTES / (1024 * 1024)
             ));
         }
-
-        let bytes = fsutil::read_limited(path, MAX_DROPPED_FILE_BYTES)
-            .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
-        // The command only advertises images. Validating the magic here keeps a
-        // crafted path (or a malicious renderer) from turning it into a
-        // general-purpose local file reader.
-        sniff_mime(&bytes)?;
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("image")
-            .to_string();
-        images.push(DroppedImage {
-            name,
-            data: B64.encode(bytes),
-        });
+        files.push(path.to_path_buf());
     }
-    Ok(images)
+
+    let images: Vec<Result<DroppedImage, String>> = vault_pool().install(|| {
+        files
+            .par_iter()
+            .map(|path| {
+                let bytes = fsutil::read_limited(path, MAX_DROPPED_FILE_BYTES)
+                    .map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+                // The command only advertises images. Validating the magic here
+                // keeps a crafted path (or a malicious renderer) from turning it
+                // into a general-purpose local file reader.
+                sniff_mime(&bytes)?;
+                let name = path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("image")
+                    .to_string();
+                Ok(DroppedImage {
+                    name,
+                    data: B64.encode(bytes),
+                })
+            })
+            .collect()
+    });
+
+    // `par_iter` over a slice preserves input order, so the drop order the user
+    // sees is stable even though the reads finish out of order.
+    images.into_iter().collect()
 }
 
 /// An attachment directory with no matching diary entry.
@@ -914,7 +927,7 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
         Err(e) => return Err(format!("Failed to read attachment root: {e}")),
     };
 
-    let mut orphans = Vec::new();
+    let mut dirs = Vec::new();
     for item in read_dir {
         let item = item.map_err(|e| format!("Failed to read attachment root: {e}"))?;
         let path = item.path();
@@ -930,25 +943,32 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
         if dir.join(format!("{date}.xml")).is_file() {
             continue;
         }
+        dirs.push((date.to_string(), path));
+    }
 
-        let mut file_count = 0u64;
-        let mut size = 0u64;
-        if let Ok(entries) = fs::read_dir(&path) {
-            for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.is_file() {
-                        file_count += 1;
-                        size += metadata.len();
+    let mut orphans: Vec<OrphanAttachment> = vault_pool().install(|| {
+        dirs.par_iter()
+            .map(|(date, path)| {
+                let mut file_count = 0u64;
+                let mut size = 0u64;
+                if let Ok(entries) = fs::read_dir(path) {
+                    for entry in entries.flatten() {
+                        if let Ok(metadata) = entry.metadata() {
+                            if metadata.is_file() {
+                                file_count += 1;
+                                size += metadata.len();
+                            }
+                        }
                     }
                 }
-            }
-        }
-        orphans.push(OrphanAttachment {
-            date: date.to_string(),
-            file_count,
-            size,
-        });
-    }
+                OrphanAttachment {
+                    date: date.clone(),
+                    file_count,
+                    size,
+                }
+            })
+            .collect()
+    });
     orphans.sort_by(|a, b| b.date.cmp(&a.date));
     Ok(orphans)
 }
@@ -1020,6 +1040,26 @@ mod tests {
         assert_eq!(images.len(), 1);
         assert_eq!(images[0].name, "photo.png");
         assert_eq!(B64.decode(&images[0].data).unwrap(), PNG);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropped_files_keep_the_order_they_were_dropped_in() {
+        let dir = temp_dir("dropped-order");
+        let names = ["first.png", "second.png", "third.png"];
+        let paths: Vec<String> = names
+            .iter()
+            .map(|name| {
+                let path = dir.join(name);
+                fs::write(&path, PNG).unwrap();
+                path.to_string_lossy().to_string()
+            })
+            .collect();
+
+        let images = read_dropped_images(&paths).unwrap();
+
+        let actual: Vec<_> = images.iter().map(|image| image.name.as_str()).collect();
+        assert_eq!(actual, names.to_vec());
         let _ = fs::remove_dir_all(&dir);
     }
 

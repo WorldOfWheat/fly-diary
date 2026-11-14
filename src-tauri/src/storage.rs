@@ -38,6 +38,7 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::bip39;
 use crate::crypto;
 use crate::fsutil;
+use crate::pool::vault_pool;
 use crate::xml::{self, EncryptedEntry};
 
 /// Name of the vault metadata file (salt + verifier).
@@ -1294,51 +1295,57 @@ fn migrate_entries(
     new_key: &[u8; 32],
     context: &xml::VaultContext,
 ) -> Result<(), String> {
-    let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
-    for item in read_dir {
-        let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
-        let path = item.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("xml") {
-            continue;
-        }
-        let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if validate_date(date).is_err() {
-            continue;
-        }
-
-        let text = fsutil::read_string_limited(&path, MAX_ENTRY_BYTES)
-            .map_err(|e| format!("Failed to read entry {date}: {e}"))?;
-        let encrypted = xml::from_xml(&text)?;
-        let iv = crypto::b64_decode(&encrypted.iv)?;
-        let ct = crypto::b64_decode(&encrypted.payload)?;
-
-        // Already migrated by an earlier, interrupted run.
-        if decrypt_entry_payload(new_key, date, &encrypted, &iv, &ct, Some(context)).is_ok() {
-            continue;
-        }
-
-        let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct, None)
-            .map_err(|_| format!("Entry {date} could not be decrypted during migration"))?;
-
-        // Rewrite in the current format, so the migrated entry gains the
-        // vault-context AAD too.
-        let aad = xml::entry_aad_v5(date, xml::CURRENT_VERSION, context);
-        let (new_iv, new_ct) = crypto::encrypt_with_aad(new_key, &aad, &plain)?;
-        let rewritten = xml::EncryptedEntry::new(
-            date,
-            crypto::b64_encode(&new_iv),
-            crypto::b64_encode(&new_ct),
-        );
-        fsutil::write_private(&path, xml::to_xml(&rewritten)?)
-            .map_err(|e| format!("Failed to rewrite entry {date}: {e}"))?;
+    let tasks = collect_entry_tasks(dir)?;
+    let results = vault_pool().install(|| {
+        tasks
+            .par_iter()
+            .map(|task| migrate_one(task, old_key, new_key, context))
+            .collect::<Vec<_>>()
+    });
+    // Fold in task order so the reported failure is stable.
+    for result in results {
+        result?;
     }
 
     // The old index was encrypted with `old_key`, so it is now unreadable.
     // Rebuild it under the new key from the freshly re-encrypted entries.
     let (index, _) = scan_entries_with_context(dir, new_key, Some(context))?;
     write_index_with_context(dir, new_key, &index, Some(context))
+}
+
+/// Migrate one entry file. Runs on a pool worker.
+fn migrate_one(
+    task: &EntryTask,
+    old_key: &[u8; 32],
+    new_key: &[u8; 32],
+    context: &xml::VaultContext,
+) -> Result<(), String> {
+    let date = task.date.as_str();
+    let text = fsutil::read_string_limited(&task.path, MAX_ENTRY_BYTES)
+        .map_err(|e| format!("Failed to read entry {date}: {e}"))?;
+    let encrypted = xml::from_xml(&text)?;
+    let iv = crypto::b64_decode(&encrypted.iv)?;
+    let ct = crypto::b64_decode(&encrypted.payload)?;
+
+    // Already migrated by an earlier, interrupted run.
+    if decrypt_entry_payload(new_key, date, &encrypted, &iv, &ct, Some(context)).is_ok() {
+        return Ok(());
+    }
+
+    let plain = decrypt_entry_payload(old_key, date, &encrypted, &iv, &ct, None)
+        .map_err(|_| format!("Entry {date} could not be decrypted during migration"))?;
+
+    // Rewrite in the current format, so the migrated entry gains the
+    // vault-context AAD too.
+    let aad = xml::entry_aad_v5(date, xml::CURRENT_VERSION, context);
+    let (new_iv, new_ct) = crypto::encrypt_with_aad(new_key, &aad, &plain)?;
+    let rewritten = xml::EncryptedEntry::new(
+        date,
+        crypto::b64_encode(&new_iv),
+        crypto::b64_encode(&new_ct),
+    );
+    fsutil::write_private(&task.path, xml::to_xml(&rewritten)?)
+        .map_err(|e| format!("Failed to rewrite entry {date}: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1519,56 +1526,56 @@ fn scan_entries_with_broken_context(
     key: &[u8; 32],
     context: Option<&xml::VaultContext>,
 ) -> Result<(BTreeMap<String, IndexRecord>, Vec<BrokenEntry>), String> {
+    let scan = scan_entry_contents_with_context(dir, key, context, false)?;
     let mut entries = BTreeMap::new();
-    let broken = scan_entry_contents_with_context(
-        dir,
-        key,
-        context,
-        &mut |date, title, _content, favourite| {
-            entries.insert(
-                date.to_string(),
-                IndexRecord {
-                    title: title.to_string(),
-                    favourite,
-                },
-            );
-        },
-    )?;
-    Ok((entries, broken))
+    for entry in scan.entries {
+        entries.insert(
+            entry.date,
+            IndexRecord {
+                title: entry.title.to_string(),
+                favourite: entry.favourite,
+            },
+        );
+    }
+    Ok((entries, scan.broken))
 }
 
-/// Scan every entry file, decrypting the title and content of the readable ones.
+/// One readable entry produced by a vault scan.
 ///
-/// The collector is called once per readable entry, in directory order. Broken
-/// files are skipped and returned instead, exactly like
-/// [`scan_entries_with_broken`], so callers that need the decrypted body do not
-/// have to duplicate the parsing and AAD rules.
-///
-/// The content is borrowed only for the duration of the call: a caller that
-/// wants to keep it must copy (and zeroize) it itself. This is the slow path —
-/// one read and one decryption attempt per entry.
-pub fn scan_entry_contents<F>(
-    dir: &Path,
-    key: &[u8; 32],
-    mut on_entry: F,
-) -> Result<Vec<BrokenEntry>, String>
-where
-    F: FnMut(&str, &str, &str, bool),
-{
-    let context = vault_context(dir)?;
-    scan_entry_contents_with_context(dir, key, context.as_ref(), &mut on_entry)
+/// Title and content are owned and zeroized on drop, so a caller may keep them
+/// (for a full-text index) or drop them immediately (for the sidebar index).
+pub struct ScannedEntry {
+    pub date: String,
+    pub title: Zeroizing<String>,
+    pub content: Zeroizing<String>,
+    pub favourite: bool,
 }
 
-fn scan_entry_contents_with_context(
-    dir: &Path,
-    key: &[u8; 32],
-    context: Option<&xml::VaultContext>,
-    on_entry: &mut dyn FnMut(&str, &str, &str, bool),
-) -> Result<Vec<BrokenEntry>, String> {
+/// The readable and broken halves of a vault scan.
+pub struct ScanResult {
+    pub entries: Vec<ScannedEntry>,
+    pub broken: Vec<BrokenEntry>,
+}
+
+/// A candidate entry file, collected before the parallel phase.
+struct EntryTask {
+    date: String,
+    path: PathBuf,
+}
+
+enum ScanOutcome {
+    Entry(ScannedEntry),
+    Broken(BrokenEntry),
+}
+
+/// Walk the diary directory and collect valid entry files.
+///
+/// Directory iteration stays sequential and cheap; sorting by date makes the
+/// parallel results deterministic for progress reporting and reporting order.
+fn collect_entry_tasks(dir: &Path) -> Result<Vec<EntryTask>, String> {
     ensure_dir(dir)?;
-    let mut broken = Vec::new();
-
     let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
+    let mut tasks = Vec::new();
     for item in read_dir {
         let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
         let path = item.path();
@@ -1578,57 +1585,111 @@ fn scan_entry_contents_with_context(
         let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
             continue;
         };
-        // Skip the vault/index files and anything that is not a valid date.
         if validate_date(date).is_err() {
             continue;
         }
+        tasks.push(EntryTask {
+            date: date.to_string(),
+            path,
+        });
+    }
+    tasks.sort_by(|a, b| a.date.cmp(&b.date));
+    Ok(tasks)
+}
 
-        let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let mut record_broken = |reason: BrokenReason| {
-            broken.push(BrokenEntry {
-                date: date.to_string(),
-                size,
-                reason,
-            });
-        };
+fn broken_outcome(task: &EntryTask, size: u64, reason: BrokenReason) -> ScanOutcome {
+    ScanOutcome::Broken(BrokenEntry {
+        date: task.date.clone(),
+        size,
+        reason,
+    })
+}
 
-        let text = match fsutil::read_string_limited(&path, MAX_ENTRY_BYTES) {
-            Ok(text) => text,
-            Err(_) => {
-                record_broken(BrokenReason::Unreadable);
-                continue;
-            }
-        };
-        let encrypted = match xml::from_xml(&text) {
-            Ok(encrypted) => encrypted,
-            Err(_) => {
-                record_broken(BrokenReason::MalformedXml);
-                continue;
-            }
-        };
-        let (iv, ct) = match (
-            crypto::b64_decode(&encrypted.iv),
-            crypto::b64_decode(&encrypted.payload),
-        ) {
-            (Ok(iv), Ok(ct)) => (iv, ct),
-            _ => {
-                record_broken(BrokenReason::BadEncoding);
-                continue;
-            }
-        };
-        let plain = match decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context) {
-            Ok(plain) => plain,
-            Err(_) => {
-                record_broken(BrokenReason::DecryptFailed);
-                continue;
-            }
-        };
-        let (title, content, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
-        on_entry(date, &title, &content, favourite);
+/// Read, parse and decrypt one entry file. Runs on a pool worker.
+fn scan_one(
+    task: &EntryTask,
+    key: &[u8; 32],
+    context: Option<&xml::VaultContext>,
+    retain_content: bool,
+) -> ScanOutcome {
+    let size = fs::metadata(&task.path).map(|m| m.len()).unwrap_or(0);
+
+    let text = match fsutil::read_string_limited(&task.path, MAX_ENTRY_BYTES) {
+        Ok(text) => text,
+        Err(_) => return broken_outcome(task, size, BrokenReason::Unreadable),
+    };
+    let encrypted = match xml::from_xml(&text) {
+        Ok(encrypted) => encrypted,
+        Err(_) => return broken_outcome(task, size, BrokenReason::MalformedXml),
+    };
+    let (iv, ct) = match (
+        crypto::b64_decode(&encrypted.iv),
+        crypto::b64_decode(&encrypted.payload),
+    ) {
+        (Ok(iv), Ok(ct)) => (iv, ct),
+        _ => return broken_outcome(task, size, BrokenReason::BadEncoding),
+    };
+    let plain = match decrypt_entry_payload(key, &task.date, &encrypted, &iv, &ct, context) {
+        Ok(plain) => plain,
+        Err(_) => return broken_outcome(task, size, BrokenReason::DecryptFailed),
+    };
+    let (title, content, favourite) = unpack(&plain, encrypted.legacy_title.as_deref());
+    // Callers that only need sidebar metadata should not pin the whole corpus
+    // in memory while the parallel scan is running.
+    let content = if retain_content {
+        Zeroizing::new(content)
+    } else {
+        let mut content = content;
+        content.zeroize();
+        Zeroizing::default()
+    };
+    ScanOutcome::Entry(ScannedEntry {
+        date: task.date.clone(),
+        title: Zeroizing::new(title),
+        content,
+        favourite,
+    })
+}
+
+/// Scan every entry file, decrypting the title and content of the readable ones.
+///
+/// Entry files are independent, so the read/parse/decrypt work runs on the
+/// bounded [`vault_pool`]. Broken files are returned instead of aborting the
+/// scan, exactly like [`scan_entries_with_broken`], so callers that need the
+/// decrypted body do not have to duplicate the parsing and AAD rules.
+///
+/// The returned text is owned and zeroized on drop. This is the slow path — one
+/// read and one decryption attempt per entry.
+pub fn scan_entry_contents(dir: &Path, key: &[u8; 32]) -> Result<ScanResult, String> {
+    let context = vault_context(dir)?;
+    scan_entry_contents_with_context(dir, key, context.as_ref(), true)
+}
+
+fn scan_entry_contents_with_context(
+    dir: &Path,
+    key: &[u8; 32],
+    context: Option<&xml::VaultContext>,
+    retain_content: bool,
+) -> Result<ScanResult, String> {
+    let tasks = collect_entry_tasks(dir)?;
+    let outcomes = vault_pool().install(|| {
+        tasks
+            .par_iter()
+            .map(|task| scan_one(task, key, context, retain_content))
+            .collect::<Vec<_>>()
+    });
+
+    let mut entries = Vec::with_capacity(outcomes.len());
+    let mut broken = Vec::new();
+    for outcome in outcomes {
+        match outcome {
+            ScanOutcome::Entry(entry) => entries.push(entry),
+            ScanOutcome::Broken(entry) => broken.push(entry),
+        }
     }
 
     broken.sort_by(|a, b| b.date.cmp(&a.date));
-    Ok(broken)
+    Ok(ScanResult { entries, broken })
 }
 
 /// List the entry files that exist on disk but cannot be decrypted.
@@ -2253,11 +2314,13 @@ pub fn scan_import(
         }
     }
 
-    files.par_extend(
+    let scanned: Vec<ImportFile> = vault_pool().install(|| {
         paths
             .par_iter()
-            .map(|path| inspect_import_file(path, existing)),
-    );
+            .map(|path| inspect_import_file(path, existing))
+            .collect()
+    });
+    files.extend(scanned);
 
     // Newest first, matching the sidebar; failures without a date go last.
     files.sort_by(|a, b| match (&a.date, &b.date) {
@@ -2398,22 +2461,24 @@ where
     let total = dates.len();
     let done = AtomicUsize::new(0);
 
-    let outcomes: Vec<ImportOutcome> = dates
-        .par_iter()
-        .map(|date| {
-            let outcome = import_one(
-                dir,
-                key,
-                import_dir,
-                date,
-                index.contains_key(date),
-                overwrite,
-            );
-            let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
-            progress(finished, total);
-            outcome
-        })
-        .collect();
+    let outcomes: Vec<ImportOutcome> = vault_pool().install(|| {
+        dates
+            .par_iter()
+            .map(|date| {
+                let outcome = import_one(
+                    dir,
+                    key,
+                    import_dir,
+                    date,
+                    index.contains_key(date),
+                    overwrite,
+                );
+                let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+                progress(finished, total);
+                outcome
+            })
+            .collect()
+    });
 
     let mut report = ImportReport {
         imported: Vec::new(),
@@ -2527,49 +2592,35 @@ enum UpgradeOutcome {
 /// they cannot be decrypted, so rewriting them would destroy the bytes the user
 /// might still want to rescue.
 pub fn scan_upgrade_plan(dir: &Path, key: &[u8; 32]) -> Result<Vec<String>, String> {
-    ensure_dir(dir)?;
+    let tasks = collect_entry_tasks(dir)?;
     let context = vault_context(dir)?;
-    let mut outdated = Vec::new();
 
-    let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
-    for item in read_dir {
-        let item = item.map_err(|e| format!("Failed to read directory entry: {e}"))?;
-        let path = item.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("xml") {
-            continue;
-        }
-        let Some(date) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if validate_date(date).is_err() {
-            continue;
-        }
-
-        let Ok(text) = fsutil::read_string_limited(&path, MAX_ENTRY_BYTES) else {
-            continue;
-        };
-        let Ok(encrypted) = xml::from_xml(&text) else {
-            continue;
-        };
-        // Anything below the current version is a candidate: version 3 is
-        // AAD-bound but does not authenticate the version byte, so it still
-        // needs rewriting to close the downgrade hole.
-        if encrypted.version >= xml::CURRENT_VERSION {
-            continue;
-        }
-        // Only plan an upgrade for entries we can actually read. A file that
-        // fails here is broken, and broken files are never rewritten.
-        let Ok(iv) = crypto::b64_decode(&encrypted.iv) else {
-            continue;
-        };
-        let Ok(ct) = crypto::b64_decode(&encrypted.payload) else {
-            continue;
-        };
-        if decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context.as_ref()).is_err() {
-            continue;
-        }
-        outdated.push(date.to_string());
-    }
+    let mut outdated: Vec<String> = vault_pool().install(|| {
+        tasks
+            .par_iter()
+            .filter_map(|task| {
+                let date = task.date.as_str();
+                let text = fsutil::read_string_limited(&task.path, MAX_ENTRY_BYTES).ok()?;
+                let encrypted = xml::from_xml(&text).ok()?;
+                // Anything below the current version is a candidate: version 3
+                // is AAD-bound but does not authenticate the version byte, so
+                // it still needs rewriting to close the downgrade hole.
+                if encrypted.version >= xml::CURRENT_VERSION {
+                    return None;
+                }
+                // Only plan an upgrade for entries we can actually read. A file
+                // that fails here is broken, and broken files are never
+                // rewritten.
+                let iv = crypto::b64_decode(&encrypted.iv).ok()?;
+                let ct = crypto::b64_decode(&encrypted.payload).ok()?;
+                if decrypt_entry_payload(key, date, &encrypted, &iv, &ct, context.as_ref()).is_err()
+                {
+                    return None;
+                }
+                Some(date.to_string())
+            })
+            .collect()
+    });
 
     outdated.sort();
     Ok(outdated)
@@ -2708,19 +2759,32 @@ pub fn upgrade_entries_with_progress<F>(
     progress: F,
 ) -> Result<UpgradeReport, String>
 where
-    F: Fn(usize, usize),
+    F: Fn(usize, usize) + Sync,
 {
     let plan = scan_upgrade_plan(dir, key)?;
     let total = plan.len();
-    let mut report = UpgradeReport::default();
+    let done = AtomicUsize::new(0);
 
-    for (index, date) in plan.iter().enumerate() {
-        match upgrade_one(dir, key, date) {
+    let outcomes: Vec<UpgradeOutcome> = vault_pool().install(|| {
+        plan.par_iter()
+            .map(|date| {
+                let outcome = upgrade_one(dir, key, date);
+                let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+                progress(finished, total);
+                outcome
+            })
+            .collect()
+    });
+
+    let mut report = UpgradeReport::default();
+    // Fold in plan order, so a partial report is stable regardless of which
+    // worker finished first.
+    for outcome in outcomes {
+        match outcome {
             UpgradeOutcome::Upgraded(date) => report.upgraded.push(date),
             UpgradeOutcome::Skipped(date) => report.skipped.push(date),
             UpgradeOutcome::Failed(failure) => report.failed.push(failure),
         }
-        progress(index + 1, total);
     }
 
     Ok(report)
@@ -4884,10 +4948,15 @@ mod tests {
         .unwrap();
 
         assert_eq!(report.upgraded.len(), 3);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|(_, total)| *total == 3));
+        let mut done: Vec<_> = seen.iter().map(|(done, _)| *done).collect();
+        done.sort_unstable();
         assert_eq!(
-            *seen.lock().unwrap(),
-            vec![(1, 3), (2, 3), (3, 3)],
-            "progress should count up to the total"
+            done,
+            vec![1, 2, 3],
+            "progress should count up to the total, in any completion order"
         );
     }
 

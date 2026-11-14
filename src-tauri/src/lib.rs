@@ -5,6 +5,7 @@ mod bip39;
 mod clipboard;
 pub mod crypto;
 mod fsutil;
+mod pool;
 mod search;
 mod secure_memory;
 mod settings;

@@ -12,9 +12,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::pool::vault_pool;
 use crate::storage::{self, BrokenEntry};
 
 /// Number of results returned when the caller does not ask for a specific size.
@@ -29,6 +31,12 @@ const SNIPPET_BEFORE: usize = 30;
 
 /// Characters of context kept after the first match in a snippet.
 const SNIPPET_AFTER: usize = 60;
+
+/// Original text size above which a query fans out over the I/O pool.
+///
+/// Small diaries finish in well under a millisecond sequentially; Rayon's setup
+/// and wake-up cost would only add overhead there.
+const PARALLEL_QUERY_MIN_BYTES: usize = 2 * 1024 * 1024;
 
 /// One decrypted entry held in memory.
 ///
@@ -54,6 +62,24 @@ impl SearchDoc {
             favourite,
         }
     }
+
+    /// Build a document from text a vault scan already owns. The lowercase
+    /// copies are produced on a worker, so no second copy of the originals is
+    /// made on the merging thread.
+    fn from_owned(title: Zeroizing<String>, content: Zeroizing<String>, favourite: bool) -> Self {
+        Self {
+            title_lower: Zeroizing::new(title.to_lowercase()),
+            content_lower: Zeroizing::new(content.to_lowercase()),
+            title,
+            content,
+            favourite,
+        }
+    }
+
+    /// Original text size, used to decide whether a query should be parallel.
+    fn text_len(&self) -> usize {
+        self.title.len() + self.content.len()
+    }
 }
 
 /// The in-memory index: one document per date.
@@ -63,6 +89,8 @@ impl SearchDoc {
 #[derive(Default)]
 pub struct SearchIndex {
     docs: BTreeMap<String, SearchDoc>,
+    /// Sum of the original title/body bytes, used as the parallel-query switch.
+    text_bytes: usize,
 }
 
 impl SearchIndex {
@@ -73,13 +101,19 @@ impl SearchIndex {
             .get(date)
             .map(|doc| doc.favourite)
             .unwrap_or(false);
-        self.docs
-            .insert(date.to_string(), SearchDoc::new(title, content, favourite));
+        if let Some(previous) = self.docs.get(date) {
+            self.text_bytes = self.text_bytes.saturating_sub(previous.text_len());
+        }
+        let doc = SearchDoc::new(title, content, favourite);
+        self.text_bytes += doc.text_len();
+        self.docs.insert(date.to_string(), doc);
     }
 
     /// Drop a deleted entry from the index.
     pub fn remove(&mut self, date: &str) {
-        self.docs.remove(date);
+        if let Some(previous) = self.docs.remove(date) {
+            self.text_bytes = self.text_bytes.saturating_sub(previous.text_len());
+        }
     }
 
     /// Update the favourite flag without touching the decrypted text.
@@ -107,18 +141,37 @@ impl SearchIndex {
         }
 
         let limit = limit.clamp(1, MAX_LIMIT);
-        let mut matched: Vec<(&String, &SearchDoc, Match)> = Vec::new();
-        for (date, doc) in &self.docs {
-            if favourites_only && !doc.favourite {
-                continue;
-            }
-            if let Some(found) = doc.matches(date, &terms) {
-                matched.push((date, doc, found));
-            }
-        }
+        let parallel = self.text_bytes >= PARALLEL_QUERY_MIN_BYTES;
+        let collect = || {
+            self.docs
+                .iter()
+                .filter_map(|(date, doc)| {
+                    if favourites_only && !doc.favourite {
+                        return None;
+                    }
+                    doc.matches(date, &terms).map(|found| (date, doc, found))
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut matched: Vec<(&String, &SearchDoc, Match)> = if parallel {
+            vault_pool().install(|| {
+                self.docs
+                    .par_iter()
+                    .filter_map(|(date, doc)| {
+                        if favourites_only && !doc.favourite {
+                            return None;
+                        }
+                        doc.matches(date, &terms).map(|found| (date, doc, found))
+                    })
+                    .collect()
+            })
+        } else {
+            collect()
+        };
 
         let total = matched.len();
-        // Results follow the sidebar's order: newest first.
+        // Parallel collection does not preserve BTreeMap order, and the sidebar
+        // order is date-descending either way.
         matched.sort_by(|a, b| b.0.cmp(a.0));
 
         let hits = matched
@@ -151,13 +204,18 @@ impl SearchIndex {
 /// keep advertising them. The collector borrows the plaintext only briefly, and
 /// [`SearchDoc`] copies it into zeroizing buffers.
 pub fn build(dir: &Path, key: &[u8; 32]) -> Result<(SearchIndex, Vec<BrokenEntry>), String> {
-    let mut index = SearchIndex::default();
-    let broken = storage::scan_entry_contents(dir, key, |date, title, content, favourite| {
-        index
-            .docs
-            .insert(date.to_string(), SearchDoc::new(title, content, favourite));
-    })?;
-    Ok((index, broken))
+    let scan = storage::scan_entry_contents(dir, key)?;
+    let docs: BTreeMap<String, SearchDoc> = vault_pool().install(|| {
+        scan.entries
+            .into_par_iter()
+            .map(|entry| {
+                let doc = SearchDoc::from_owned(entry.title, entry.content, entry.favourite);
+                (entry.date, doc)
+            })
+            .collect()
+    });
+    let text_bytes = docs.values().map(SearchDoc::text_len).sum();
+    Ok((SearchIndex { docs, text_bytes }, scan.broken))
 }
 
 /// One search result sent to the frontend.
@@ -526,5 +584,19 @@ mod tests {
         assert!(response.ready);
         assert_eq!(response.total, 0);
         assert!(response.hits.is_empty());
+    }
+
+    #[test]
+    fn the_parallel_query_path_returns_the_same_order() {
+        let mut index = SearchIndex::default();
+        let body = "x".repeat(PARALLEL_QUERY_MIN_BYTES + 1);
+        index.upsert("2026-10-23", "newer", &format!("needle {body}"));
+        index.upsert("2026-10-22", "older", "needle");
+        assert!(index.text_bytes >= PARALLEL_QUERY_MIN_BYTES);
+
+        let response = index.query("needle", DEFAULT_LIMIT, false);
+        assert_eq!(response.total, 2);
+        assert_eq!(response.hits[0].date, "2026-10-23");
+        assert_eq!(response.hits[1].date, "2026-10-22");
     }
 }
