@@ -84,6 +84,8 @@ const zhHant = {
   "lock.errNoDir": "請選擇日記儲存資料夾",
   "lock.errKdfNaN": "進階參數必須是數字",
   "lock.errUnlockFailed": "解鎖失敗，請再試一次",
+  "lock.errWorkspace": "無法切換工作區，請再試一次",
+  "lock.errNoRecoveryHere": "這個資料夾沒有可用的回復短語",
   "lock.errPicker": "無法開啟資料夾選擇器",
   "lock.errSettings": "無法讀取設定檔",
 
@@ -454,6 +456,8 @@ const en = {
   "lock.errNoDir": "Please choose a diary folder",
   "lock.errKdfNaN": "Advanced parameters must be numbers",
   "lock.errUnlockFailed": "Unlock failed. Please try again.",
+  "lock.errWorkspace": "Could not switch workspace. Please try again.",
+  "lock.errNoRecoveryHere": "This folder has no recovery phrase.",
   "lock.errPicker": "Could not open the folder picker",
   "lock.errSettings": "Could not read the settings file",
 
