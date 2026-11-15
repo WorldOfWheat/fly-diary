@@ -1,4 +1,5 @@
 import { createFocusTrap } from "./focus-trap.js";
+import { animateOverlayExit } from "./lib/motion.js";
 
 // ---------------------------------------------------------------------------
 // Import dialog
@@ -170,6 +171,7 @@ export function createImportDialog(deps) {
   }
 
   function closeImport() {
+    animateOverlayExit(els.importOverlay);
     els.importOverlay.hidden = true;
     focusTrap.deactivate();
     importScan = null;

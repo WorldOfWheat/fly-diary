@@ -94,6 +94,22 @@
   opacity: 0.45;
 }
 
+@keyframes attachment-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.attachment-item.is-new {
+  animation: attachment-enter 180ms ease-out;
+}
+
 .attachment-frame {
   position: relative;
   width: 100%;

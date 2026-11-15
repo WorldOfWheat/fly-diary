@@ -79,6 +79,34 @@ function declarations(body, property) {
 
 const rules = topLevelRules(css);
 
+/** Every rule declared inside each `@media (<condition>)` block. */
+function mediaBlocks(condition) {
+  const marker = `@media (${condition})`;
+  const blocks = [];
+  let from = 0;
+
+  while (true) {
+    const at = css.indexOf(marker, from);
+    if (at === -1) break;
+
+    const open = css.indexOf("{", at + marker.length);
+    if (open === -1) break;
+
+    let depth = 1;
+    let i = open + 1;
+    for (; i < css.length; i += 1) {
+      if (css[i] === "{") depth += 1;
+      else if (css[i] === "}") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    blocks.push(...topLevelRules(css.slice(open + 1, i)));
+    from = i + 1;
+  }
+  return blocks;
+}
+
 /**
  * The rules declared inside the `@media (<condition>)` block, or `null` when
  * no such block exists. The block is located by its condition text and its
@@ -237,10 +265,10 @@ test("the broken tab badge is hidden while it is empty", () => {
   );
 });
 
-test("the app splits into two layers on a phone viewport", () => {
+test("the app splits into two sliding layers on a phone viewport", () => {
   // On a phone the list and the editor are two full-window layers, not two
-  // columns. `data-layer` on `.app` picks which one is visible; the back button
-  // is the only way out of the editor.
+  // columns. `data-layer` on `.app` picks which one is visible; both stay
+  // mounted so the switch can slide instead of popping.
   const phone = mediaBlock("max-width: 640px");
   assert.ok(phone, "no max-width: 640px media block found");
 
@@ -248,18 +276,31 @@ test("the app splits into two layers on a phone viewport", () => {
   assert.ok(listLayer.length > 0, "the list layer must hide the editor");
   assert.ok(
     listLayer.some((rule) =>
-      declarations(rule.body, "display").includes("none")
+      declarations(rule.body, "visibility").includes("hidden")
     ),
-    '.app[data-layer="list"] .editor must be display: none'
+    '.app[data-layer="list"] .editor must be visibility: hidden'
   );
 
   const editorLayer = rulesFor('.app[data-layer="editor"] .sidebar', phone);
   assert.ok(editorLayer.length > 0, "the editor layer must hide the sidebar");
   assert.ok(
     editorLayer.some((rule) =>
-      declarations(rule.body, "display").includes("none")
+      declarations(rule.body, "visibility").includes("hidden")
     ),
-    '.app[data-layer="editor"] .sidebar must be display: none'
+    '.app[data-layer="editor"] .sidebar must be visibility: hidden'
+  );
+
+  assert.ok(
+    rulesFor('.app[data-layer="list"] .editor', phone).some((rule) =>
+      declarations(rule.body, "transform").includes("translateX(100%)")
+    ),
+    "the editor must slide in from the right"
+  );
+  assert.ok(
+    rulesFor('.app[data-layer="editor"] .sidebar', phone).some((rule) =>
+      declarations(rule.body, "transform").includes("translateX(-100%)")
+    ),
+    "the sidebar must slide out to the left"
   );
 
   const back = rulesFor(".btn-back", phone);
@@ -432,5 +473,95 @@ test("pointer focus does not fall back to the UA outline", () => {
       declarations(rule.body, "outline").includes("none")
     ),
     "pointer focus must set outline: none"
+  );
+});
+
+test("the unlock hand-off animates both layers", () => {
+  const leaving = rulesFor(".lock-screen.is-leaving");
+  assert.equal(leaving.length, 1, "lock-screen leave rule is missing");
+  assert.ok(
+    declarations(leaving[0].body, "animation").some((value) =>
+      value.startsWith("lock-screen-leave")
+    ),
+    "the lock screen must use its leave animation"
+  );
+  assert.ok(
+    declarations(leaving[0].body, "pointer-events").includes("none"),
+    "the leaving lock screen must not swallow clicks"
+  );
+
+  const entering = rulesFor(".app.is-entering");
+  assert.equal(entering.length, 1, "app enter rule is missing");
+  assert.ok(
+    declarations(entering[0].body, "animation").some((value) =>
+      value.startsWith("app-enter")
+    ),
+    "the app must use its enter animation"
+  );
+});
+
+test("the unlock button shows a spinner while busy", () => {
+  const spinner = rulesFor(".lock-submit.is-busy::before");
+  assert.equal(spinner.length, 1, "busy spinner rule is missing");
+  assert.ok(
+    declarations(spinner[0].body, "animation").some((value) =>
+      value.startsWith("lock-submit-spin")
+    ),
+    "the busy spinner must animate"
+  );
+  assert.ok(
+    declarations(spinner[0].body, "border-radius").includes("50%"),
+    "the busy indicator must be round"
+  );
+});
+
+test("micro-interactions are declared", () => {
+  const animations = [
+    [".overlay-exit", "overlay-exit"],
+    [".entry-list.is-swapping", "list-swap"],
+    [".attachment-item.is-new", "attachment-enter"],
+    [".status-text.is-pulsing", "status-pulse"],
+    [".btn-favourite.is-popping .star", "favourite-pop"],
+  ];
+
+  for (const [selector, name] of animations) {
+    const rules = rulesFor(selector);
+    assert.ok(rules.length > 0, `${selector} rule is missing`);
+    assert.ok(
+      rules.some((rule) =>
+        declarations(rule.body, "animation").some((value) =>
+          value.startsWith(name)
+        )
+      ),
+      `${selector} must use the ${name} animation`
+    );
+  }
+
+  const theme = rulesFor("html.theme-changing body *");
+  assert.ok(theme.length > 0, "theme transition rule is missing");
+  assert.ok(
+    declarations(theme[0].body, "transition-property").some((value) =>
+      value.includes("background-color")
+    ),
+    "theme transitions must include background-color"
+  );
+});
+
+test("reduced motion is honoured globally", () => {
+  const blocks = mediaBlocks("prefers-reduced-motion: reduce");
+  assert.ok(blocks.length > 0, "reduced-motion media block is missing");
+  assert.ok(
+    blocks.some((rule) =>
+      declarations(rule.body, "animation-duration").includes("0.01ms !important")
+    ),
+    "animations must be effectively disabled for reduced motion"
+  );
+  assert.ok(
+    blocks.some(
+      (rule) =>
+        rule.selector === ".lock-submit.is-busy::before" &&
+        declarations(rule.body, "display").includes("none")
+    ),
+    "the busy spinner must be hidden for reduced motion"
   );
 });

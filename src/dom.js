@@ -65,6 +65,7 @@ export const els = {
   brokenExportBtn: $("broken-export-btn"),
   brokenDeleteBtn: $("broken-delete-btn"),
   editor: document.querySelector(".editor"),
+  sidebar: document.querySelector(".sidebar"),
   backToList: $("back-to-list"),
   editBtn: $("edit-btn"),
   favouriteBtn: $("favourite-btn"),

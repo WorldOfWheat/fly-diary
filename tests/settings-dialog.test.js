@@ -57,7 +57,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "0.1.7",
+      version: "0.1.8",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -159,7 +159,7 @@ test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "0.1.7");
+    assert.equal(els.settingsAppVersion.textContent, "0.1.8");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
@@ -596,14 +596,8 @@ test("openSettings reports an enabled recovery phrase and offers replacement", a
     async ({ settings, els }) => {
       await settings.openSettings();
 
-      assert.equal(
-        els.recoveryStatus.textContent,
-        "recovery.statusEnabled",
-      );
-      assert.equal(
-        els.recoveryGenerateBtn.textContent,
-        "recovery.regenerate",
-      );
+      assert.equal(els.recoveryStatus.textContent, "recovery.statusEnabled");
+      assert.equal(els.recoveryGenerateBtn.textContent, "recovery.regenerate");
       assert.equal(els.recoveryRemoveBtn.hidden, false);
     },
     {

@@ -27,6 +27,7 @@ import {
   yearsOf,
   firstRowForYear,
 } from "./lib/list-rows.js";
+import { prefersReducedMotion, setExitAnimationsEnabled } from "./lib/motion.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -202,9 +203,24 @@ let nativeFileDrop;
 // Status / word count
 // ---------------------------------------------------------------------------
 
+let statusPulseTimer = null;
+
 function setStatus(text, saved = false) {
+  const changed = els.status.textContent !== text;
   els.status.textContent = text;
   els.status.classList.toggle("saved", saved);
+  if (saved && changed && !prefersReducedMotion()) {
+    // Restart the short confirmation pulse only when the message actually
+    // changed; repeated autosaves of the same "Saved" text should not blink.
+    els.status.classList.remove("is-pulsing");
+    void els.status.offsetWidth;
+    els.status.classList.add("is-pulsing");
+    clearTimeout(statusPulseTimer);
+    statusPulseTimer = setTimeout(
+      () => els.status.classList.remove("is-pulsing"),
+      220
+    );
+  }
 }
 
 function updateWordCount() {
@@ -243,6 +259,8 @@ let displayRows = [];
 let entryRowByDate = new Map();
 /** Last year chosen in the jump select. */
 let selectedYear = "";
+/** Set just before a filter/view render that should cross-fade. */
+let animateNextList = false;
 
 /** Read a rem-valued CSS custom property and return it in CSS pixels. */
 function measureRem(property, fallback) {
@@ -506,9 +524,29 @@ function resolveTheme(mode) {
 }
 
 /** Paint the resolved theme and refresh the button's icon and tooltip. */
+let themeTransitionTimer = null;
+
 function applyTheme() {
   const resolved = resolveTheme(themeMode);
-  document.documentElement.dataset.theme = resolved;
+  const root = document.documentElement;
+  const previous = root.dataset.theme;
+
+  // Only animate a real switch after first paint. `previous` is empty during
+  // startup, and an unchanged resolution (for example a locale refresh) should
+  // not flash the whole interface.
+  if (previous && previous !== resolved && !prefersReducedMotion()) {
+    root.classList.add("theme-changing");
+    // Flush the transition class before the palette changes so the browser
+    // paints an interpolated path instead of swapping instantly.
+    void root.offsetWidth;
+    clearTimeout(themeTransitionTimer);
+    themeTransitionTimer = setTimeout(
+      () => root.classList.remove("theme-changing"),
+      200
+    );
+  }
+
+  root.dataset.theme = resolved;
 
   if (!els.themeToggle) return;
   els.themeToggle.dataset.themeMode = themeMode;
@@ -870,6 +908,24 @@ function renderBrokenList() {
   els.list.replaceChildren(frag);
 }
 
+function animateListSwap() {
+  if (!els.list || prefersReducedMotion()) return;
+  els.list.classList.remove("is-swapping");
+  void els.list.offsetWidth;
+  els.list.classList.add("is-swapping");
+}
+
+/** Mark the next render as a filter/view change worth animating. */
+function requestListSwap() {
+  animateNextList = true;
+}
+
+function finishListRender() {
+  if (!animateNextList) return;
+  animateNextList = false;
+  animateListSwap();
+}
+
 /** Full re-render: refilter, resize the spacer, then draw the viewport. */
 function renderList() {
   // The calendar marks days that already have an entry, so it has to follow
@@ -878,6 +934,7 @@ function renderList() {
 
   if (currentView === "broken") {
     renderBrokenList();
+    finishListRender();
     return;
   }
 
@@ -905,6 +962,7 @@ function renderList() {
           : t("sidebar.empty");
     }
     els.list.appendChild(li);
+    finishListRender();
     return;
   }
 
@@ -914,6 +972,7 @@ function renderList() {
   els.listSpacer.style.height = `${model.height}px`;
   renderYearJump();
   renderVisibleRows(true);
+  finishListRender();
 }
 
 /** Drop every rendered row and forget the viewport window (used on lock). */
@@ -1283,6 +1342,14 @@ function renderFavouriteButton() {
   }
 }
 
+/** A small pop on the bookmark button; the icon itself is CSS-filled. */
+function popFavourite() {
+  if (!els.favouriteBtn || prefersReducedMotion()) return;
+  els.favouriteBtn.classList.remove("is-popping");
+  void els.favouriteBtn.offsetWidth;
+  els.favouriteBtn.classList.add("is-popping");
+}
+
 /**
  * Paint the active state on the three sidebar tabs.
  *
@@ -1316,6 +1383,7 @@ function setView(view) {
 
   // The row count changes, so the old scroll offset is meaningless.
   els.listScroll.scrollTop = 0;
+  requestListSwap();
   if (searchQuery.trim()) {
     // The favourites view changes which documents match, so the backend has to
     // run the query again with `favouritesOnly`.
@@ -1363,6 +1431,7 @@ async function toggleFavourite() {
     });
     currentFavourite = stored;
     renderFavouriteButton();
+    popFavourite();
     setStatus(stored ? t("status.favourited") : t("status.unfavourited"), true);
 
     // Keep the cached metadata in step so the star and the favourites view
@@ -1378,9 +1447,11 @@ async function toggleFavourite() {
     // step.
     if (searchQuery.trim()) {
       searchResults = null;
+      requestListSwap();
       renderList();
       scheduleSearch({ immediate: true });
     } else if (currentView === "favourites") {
+      requestListSwap();
       renderList();
     } else {
       renderVisibleRows(true);
@@ -1497,14 +1568,31 @@ function brokenEntryFor(date) {
 // The CSS keys off `data-layer` on `.app`; these helpers are the only writers.
 // On wider viewports the attribute is ignored, so both panes stay visible.
 
+const phoneLayout = window.matchMedia?.("(max-width: 640px)") ?? null;
+
+/** Keep the off-screen phone layer out of the tab order immediately. */
+function syncLayerInert() {
+  if (!els.sidebar || !els.editor) return;
+  if (!phoneLayout?.matches) {
+    els.sidebar.inert = false;
+    els.editor.inert = false;
+    return;
+  }
+  const editorActive = els.app?.dataset.layer === "editor";
+  els.sidebar.inert = editorActive;
+  els.editor.inert = !editorActive;
+}
+
 /** Show the list layer. The editor is hidden until a date is picked. */
 function showListLayer() {
   if (els.app) els.app.dataset.layer = "list";
+  syncLayerInert();
 }
 
 /** Show the editor layer, filling the window on a phone. */
 function showEditorLayer() {
   if (els.app) els.app.dataset.layer = "editor";
+  syncLayerInert();
 }
 
 async function selectDate(date) {
@@ -1774,6 +1862,7 @@ async function deleteBrokenFile(date) {
  * Called after the session key is gone, so nothing here may touch the backend.
  */
 function resetEditorState() {
+  cancelUnlockTransition();
   currentDate = "";
   savedTitle = "";
   savedContent = "";
@@ -1812,6 +1901,9 @@ function resetEditorState() {
  * keystrokes would be lost when the key is dropped.
  */
 async function lockAndFlush() {
+  // No fading overlay ghosts above the lock screen: their z-index is higher
+  // than the lock layer, and even a title or thumbnail must not linger there.
+  setExitAnimationsEnabled(false);
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -1821,6 +1913,8 @@ async function lockAndFlush() {
     await invoke("lock");
   } catch (err) {
     console.error("lock failed:", err);
+    // The session is still unlocked, so animation is safe again.
+    setExitAnimationsEnabled(true);
   }
 }
 
@@ -2083,6 +2177,60 @@ function createControllers() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Unlock hand-off
+// ---------------------------------------------------------------------------
+
+/** Must match the `lock-screen-leave` animation in lock.css. */
+const UNLOCK_TRANSITION_MS = 260;
+/** Bumped to cancel a transition when the app locks again mid-animation. */
+let unlockTransitionToken = 0;
+
+/** Abort a pending unlock animation, leaving the layers in a safe state. */
+function cancelUnlockTransition() {
+  unlockTransitionToken += 1;
+  els.app?.classList.remove("is-entering");
+  els.lockScreen?.classList.remove("is-leaving");
+}
+
+/**
+ * Fade the lock screen out and the diary in.
+ *
+ * Resolves `true` when the lock layer is hidden, or `false` when a lock or a
+ * second enter interrupted the hand-off. The data scan runs in parallel, so
+ * the animation does not delay the first paint of the diary.
+ */
+function playUnlockTransition() {
+  const token = ++unlockTransitionToken;
+  setExitAnimationsEnabled(true);
+
+  if (prefersReducedMotion()) {
+    els.app.classList.remove("is-entering");
+    els.lockScreen.classList.remove("is-leaving");
+    els.lockScreen.hidden = true;
+    return Promise.resolve(true);
+  }
+
+  els.lockScreen.classList.add("is-leaving");
+  // Force a style flush so the app's entry animation starts from the `from`
+  // frame even though `hidden` was just removed in the same task.
+  void els.app.offsetWidth;
+  els.app.classList.add("is-entering");
+
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (token !== unlockTransitionToken) {
+        resolve(false);
+        return;
+      }
+      els.lockScreen.hidden = true;
+      els.lockScreen.classList.remove("is-leaving");
+      els.app.classList.remove("is-entering");
+      resolve(true);
+    }, UNLOCK_TRANSITION_MS);
+  });
+}
+
 /**
  * Enter the diary after a successful unlock.
  *
@@ -2092,8 +2240,10 @@ function createControllers() {
  * so this is the single implementation of the unlock hand-off.
  */
 async function enterApp() {
-  els.lockScreen.hidden = true;
   els.app.hidden = false;
+
+  // Kick the cross-fade off first; the scan below runs underneath it.
+  const transition = playUnlockTransition();
 
   // On a phone the first screen is the list: the user picks a date or searches,
   // and only then does the editor take over. On a wide viewport this attribute
@@ -2119,6 +2269,11 @@ async function enterApp() {
   if (brokenEntries.length > 0) {
     setStatus(t("broken.notify", { n: brokenEntries.length }));
   }
+
+  // If the user locked the diary while that scan was running, stop here rather
+  // than pulling focus back into an app that is already behind the lock screen.
+  if (!(await transition)) return;
+  if (!els.lockScreen.hidden || els.app.hidden) return;
 
   const today = await invoke("today");
   await selectDate(today);
@@ -2241,6 +2396,9 @@ function wireEvents() {
       // Show the local date/title filter at once; the debounced backend query
       // replaces it with full-text hits when it returns.
       searchResults = null;
+      // The wiring calls `renderList()` immediately after this, so the next
+      // render is the filter swap worth cross-fading.
+      requestListSwap();
       scheduleSearch();
     },
     renderList,
@@ -2295,6 +2453,14 @@ async function init() {
   // flashes light before switching to dark.
   initTheme();
   initHistoryDisclosure();
+  if (phoneLayout) {
+    if (typeof phoneLayout.addEventListener === "function") {
+      phoneLayout.addEventListener("change", syncLayerInert);
+    } else if (typeof phoneLayout.addListener === "function") {
+      phoneLayout.addListener(syncLayerInert);
+    }
+  }
+  syncLayerInert();
 
   // Idle auto-lock listens globally; the duration arrives with the settings.
   initAutoLock();

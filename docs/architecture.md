@@ -30,6 +30,7 @@ fly-diary/
 │   │   ├── highlight.js    # 搜尋摘要的 UTF-16 標記切段（可單獨測試）
 │   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
 │   │   ├── list-rows.js    # 虛擬清單的列模型：月份分隔、列位移、年份跳轉
+│   │   ├── motion.js       # 減少動態偵測與 overlay 關閉殘影
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
@@ -54,6 +55,7 @@ fly-diary/
 │   ├── highlight.test.js   # 搜尋摘要標記：範圍切段、重疊、UTF-16、越界
 │   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏
 │   ├── list-rows.test.js   # 列模型：月份分隔、位移、二分搜尋、年份跳轉
+│   ├── motion.test.js      # 減少動態與 overlay 殘影的 no-op 條件
 │   ├── stats.test.js
 │   ├── i18n.test.js
 │   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕

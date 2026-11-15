@@ -489,6 +489,23 @@ export function createLockScreen(deps) {
     els.passphrase.focus();
   }
 
+  /** Show the busy state immediately, before the slow Argon2 call starts. */
+  function setLockSubmitBusy(busy, creating = false) {
+    els.lockSubmit.disabled = busy;
+    els.lockSubmit.classList.toggle("is-busy", busy);
+    els.lockSubmit.setAttribute("aria-busy", busy ? "true" : "false");
+    els.lockForm?.setAttribute("aria-busy", busy ? "true" : "false");
+    if (busy) {
+      els.lockSubmit.textContent = deps.t(
+        creating ? "lock.submitCreating" : "lock.submitUnlocking"
+      );
+    } else {
+      els.lockSubmit.textContent = deps.t(
+        vaultInitialized ? "lock.submitUnlock" : "lock.submitCreate"
+      );
+    }
+  }
+
   async function handleUnlockSubmit(event) {
     event.preventDefault();
     els.lockError.textContent = "";
@@ -512,7 +529,9 @@ export function createLockScreen(deps) {
       }
     }
 
-    els.lockSubmit.disabled = true;
+    // The button paints its spinner before the first await, so the Argon2id
+    // stretch never looks like a frozen UI.
+    setLockSubmitBusy(true, creating);
     try {
       // The path is persisted when the app is unconfigured (first run) *or*
       // when the user opened the workspace picker to point at another folder.
@@ -532,6 +551,9 @@ export function createLockScreen(deps) {
         // `detectVault` also refreshed `recoveryAvailable`; repaint so the
         // "Use recovery phrase" button matches the folder just committed.
         renderLockScreen();
+        // `renderLockScreen` restores the idle label; keep the busy state (and
+        // the create/unlock wording) on top of it.
+        setLockSubmitBusy(true, !vaultInitialized);
       }
 
       if (vaultInitialized) {
@@ -556,7 +578,7 @@ export function createLockScreen(deps) {
         typeof err === "string" ? err : deps.t("lock.errUnlockFailed");
       els.passphrase.select();
     } finally {
-      els.lockSubmit.disabled = false;
+      setLockSubmitBusy(false);
     }
   }
 

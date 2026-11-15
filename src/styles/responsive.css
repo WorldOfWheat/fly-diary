@@ -60,11 +60,36 @@
   .app {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Both panes share the same cell; the inactive one is slid off-screen instead
+     of `display: none`, so the hand-off can animate. Visibility is delayed until
+     the slide finishes, which also keeps the hidden pane out of the tab order. */
+  .sidebar,
+  .editor {
+    grid-area: 1 / 1;
+    min-height: 0;
+    transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1),
+      opacity 160ms ease;
   }
 
   .app[data-layer="list"] .editor,
   .app[data-layer="editor"] .sidebar {
-    display: none;
+    visibility: hidden;
+    pointer-events: none;
+    opacity: 0;
+    transition: transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1),
+      opacity 160ms ease, visibility 0s linear 200ms;
+  }
+
+  .app[data-layer="list"] .editor {
+    transform: translateX(100%);
+  }
+
+  .app[data-layer="editor"] .sidebar {
+    transform: translateX(-100%);
   }
 
   /* The back button only exists in the layered layout. */
@@ -582,6 +607,13 @@
 
   .import-progress-bar {
     transition: none;
+  }
+
+  .sidebar,
+  .editor,
+  .app[data-layer="list"] .editor,
+  .app[data-layer="editor"] .sidebar {
+    transition: none !important;
   }
 }
 

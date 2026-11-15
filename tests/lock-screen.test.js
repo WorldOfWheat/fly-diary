@@ -754,10 +754,16 @@ test("handleUnlockSubmit disables the button while it runs", async () => {
     lock.setVaultInitialized(true);
     els.passphrase.value = "correct horse";
     let disabledDuring = null;
+    let labelDuring = null;
+    let busyClassDuring = null;
+    let ariaBusyDuring = null;
 
     const invoke = fakeInvoke({
       unlock: () => {
         disabledDuring = els.lockSubmit.disabled;
+        labelDuring = els.lockSubmit.textContent;
+        busyClassDuring = els.lockSubmit.classList.contains("is-busy");
+        ariaBusyDuring = els.lockSubmit.getAttribute("aria-busy");
         return null;
       },
     });
@@ -768,7 +774,12 @@ test("handleUnlockSubmit disables the button while it runs", async () => {
     await local.handleUnlockSubmit(submitEvent());
 
     assert.equal(disabledDuring, true);
+    assert.equal(labelDuring, "lock.submitUnlocking");
+    assert.equal(busyClassDuring, true);
+    assert.equal(ariaBusyDuring, "true");
     assert.equal(els.lockSubmit.disabled, false);
+    assert.equal(els.lockSubmit.textContent, "lock.submitUnlock");
+    assert.equal(els.lockSubmit.getAttribute("aria-busy"), "false");
   });
 });
 

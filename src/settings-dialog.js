@@ -1,4 +1,5 @@
 import { createFocusTrap } from "./focus-trap.js";
+import { animateOverlayExit } from "./lib/motion.js";
 
 // ---------------------------------------------------------------------------
 // Settings dialog
@@ -249,6 +250,7 @@ export function createSettingsDialog(deps) {
 
   /** Close the settings dialog without saving. */
   function closeSettings() {
+    animateOverlayExit(els.settingsOverlay, { redactInputs: true });
     els.settingsOverlay.hidden = true;
     focusTrap.deactivate();
     els.settingsError.textContent = "";
