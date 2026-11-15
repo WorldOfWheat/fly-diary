@@ -28,6 +28,8 @@ fly-diary/
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
 │   │   ├── highlight.js    # 搜尋摘要的 UTF-16 標記切段（可單獨測試）
+│   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
+│   │   ├── list-rows.js    # 虛擬清單的列模型：月份分隔、列位移、年份跳轉
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
@@ -50,6 +52,8 @@ fly-diary/
 │   │   └── css.js          # 展開 styles.css 的 @import，供 CSS invariant 測試
 │   ├── dates.test.js
 │   ├── highlight.test.js   # 搜尋摘要標記：範圍切段、重疊、UTF-16、越界
+│   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏
+│   ├── list-rows.test.js   # 列模型：月份分隔、位移、二分搜尋、年份跳轉
 │   ├── stats.test.js
 │   ├── i18n.test.js
 │   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕
@@ -123,7 +127,8 @@ fly-diary/
 - **固定順序是資料，不是檔名**：manifest 內 `<attachment>` 的元素順序就是顯示順序。新增 append、拖曳只重寫 manifest；不依賴 mtime、檔名或 `added-at`，所以重開、換裝置、同步後都不會亂。
 - **每張圖獨立加密**：圖片各自有 IV 與 AAD（綁日期、id、版本），單張損壞不會影響其他圖片；manifest 用不同 AAD label，不能和 index 或日記密文互換。
 - **附件刪除方向固定**：新增是「圖片 → manifest」，刪除是「圖片 → manifest 移除」；crash 只會留下未引用圖片（會被補回）或遺失佔位，不會讓已刪除的圖片復活。刪除日記則是 index → XML → 附件資料夾。
-- **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan），捲動時以 `index * 列高` 絕對定位。列高由 CSS 的 `--row-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高會跟著變，不會出現捲動錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
+- **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan）。列高不再一律相同：`lib/list-rows.js` 先建立「月份標題列 + 日記列」的平面模型並算出每列絕對位移，`main.js` 再用二分搜尋找出視窗內的區段。兩個高度都由 CSS 的 `--row-h`／`--month-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高與月份標題會一起縮放，捲動不會錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
+- **年份跳轉**：`entry-scroll` 頂端有一個 sticky 年份選單，選項只包含目前可見清單（全部／收藏／搜尋結果）實際存在的年份；跳轉時直接定位到該年第一篇前面的月份標題列。它是捲動容器內的元素，JS 會把它的高度從可見視窗扣除，因此 sticky 列不會遮住第一筆資料。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
 - **CSS 用原生 `@import` 拆分**：入口 `src/styles.css` 只負責載入 `src/styles/*.css`，順序就是 cascade 順序；沒有 PostCSS／Sass／打包步驟，Tauri 與測試都直接讀同一組檔案。`tests/helpers/css.js` 會展開 `@import`，讓 CSS invariant 測試仍然看到完整規則。
 - **手機版只換版面、不改資料流**：`data-layer` 只決定哪一層可見；選日期、存檔、鎖定、壞檔處理都走與桌面版相同的函式。返回鈕只是 `showListLayer()`，不會卸載編輯器，也不會丟棄尚未儲存的內容。

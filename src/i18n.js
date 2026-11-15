@@ -91,6 +91,7 @@ const zhHant = {
   "sidebar.search": "搜尋日期、標題或內容…",
   "sidebar.searchLabel": "搜尋日期、標題或內容",
   "sidebar.searchFailed": "搜尋失敗",
+  "sidebar.yearJump": "年份",
   "sidebar.pathTitle": "日記儲存位置",
   "sidebar.import": "匯入",
   "sidebar.importTitle": "從資料夾匯入日記",
@@ -279,6 +280,17 @@ const zhHant = {
   "editor.contentPlaceholder": "今天過得如何？",
   "editor.wordCount": "{chars} 字 · {lines} 行",
 
+  // --- On this day ---------------------------------------------------------
+  "history.title": "這一天的回顧",
+  "history.titleToday": "歷史上的今天",
+  "history.oneMonth": "1 個月前",
+  "history.sixMonths": "6 個月前",
+  "history.oneYear": "1 年前",
+  "history.threeYears": "3 年前",
+  "history.fiveYears": "5 年前",
+  "history.broken": "無法解密的日記",
+  "history.open": "開啟{offset}（{date}）的日記：{title}",
+
   // --- Image attachments ---------------------------------------------------
   "attachments.title": "圖片",
   "attachments.add": "加入圖片",
@@ -447,6 +459,7 @@ const en = {
   "sidebar.search": "Search date, title or content…",
   "sidebar.searchLabel": "Search date, title or content",
   "sidebar.searchFailed": "Search failed",
+  "sidebar.yearJump": "Year",
   "sidebar.pathTitle": "Diary location",
   "sidebar.import": "Import",
   "sidebar.importTitle": "Import diaries from a folder",
@@ -641,6 +654,17 @@ const en = {
   "editor.contentLabel": "Diary content",
   "editor.contentPlaceholder": "How was your day?",
   "editor.wordCount": "{chars} words · {lines} lines",
+
+  // --- On this day ---------------------------------------------------------
+  "history.title": "Looking back",
+  "history.titleToday": "On this day",
+  "history.oneMonth": "1 month ago",
+  "history.sixMonths": "6 months ago",
+  "history.oneYear": "1 year ago",
+  "history.threeYears": "3 years ago",
+  "history.fiveYears": "5 years ago",
+  "history.broken": "Unreadable entry",
+  "history.open": "Open the entry from {offset} ({date}): {title}",
 
   // --- Image attachments ---------------------------------------------------
   "attachments.title": "Images",
