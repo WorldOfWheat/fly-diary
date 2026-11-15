@@ -1,3 +1,5 @@
+import { animateOverlayExit, prefersReducedMotion } from "./lib/motion.js";
+
 // ---------------------------------------------------------------------------
 // Image attachments
 // ---------------------------------------------------------------------------
@@ -27,6 +29,8 @@ export const MAX_LONG_EDGE = 1000;
 export const WEBP_QUALITY = 0.8;
 /** Largest input file accepted before decoding. */
 export const MAX_INPUT_BYTES = 64 * 1024 * 1024;
+/** Images compressed concurrently before they are saved in selection order. */
+const ATTACHMENT_PREPARE_CONCURRENCY = 3;
 
 // Keeps an unloaded thumbnail visually empty instead of making the browser
 // render the `alt` text as an "IMAGE" placeholder.
@@ -270,6 +274,8 @@ export function createAttachmentGallery(deps) {
 
   /** Metadata in display order. */
   let items = [];
+  /** IDs appended by the current upload batch, for the entry animation. */
+  let newItemIds = new Set();
   /** Date whose gallery is loaded. */
   let currentDate = "";
   /** In-flight upload/delete/reorder operation. */
@@ -411,6 +417,7 @@ export function createAttachmentGallery(deps) {
     items.forEach((item, index) => {
       const row = document.createElement("div");
       row.className = "attachment-item";
+      if (newItemIds.has(item.id)) row.classList.add("is-new");
       row.dataset.attachmentId = item.id;
       row.dataset.index = String(index);
       row.draggable = editable();
@@ -484,6 +491,7 @@ export function createAttachmentGallery(deps) {
     });
 
     els.attachmentList.replaceChildren(fragment);
+    newItemIds.clear();
     if (has("attachmentEmpty")) els.attachmentEmpty.hidden = items.length > 0;
     if (has("attachmentAdd")) {
       els.attachmentAdd.hidden = !editable();
@@ -512,10 +520,58 @@ export function createAttachmentGallery(deps) {
     }
   }
 
+  /** Snapshot thumbnail positions so a reorder can be FLIP-animated. */
+  function captureRects() {
+    const rects = new Map();
+    els.attachmentList
+      ?.querySelectorAll?.(".attachment-item")
+      ?.forEach((node) => {
+        if (typeof node.getBoundingClientRect === "function") {
+          rects.set(node.dataset.attachmentId, node.getBoundingClientRect());
+        }
+      });
+    return rects;
+  }
+
+  /** Play the last-rendered thumbnails from their old positions. */
+  function animateFromRects(rects) {
+    if (rects.size === 0 || prefersReducedMotion()) return;
+    els.attachmentList
+      ?.querySelectorAll?.(".attachment-item")
+      ?.forEach((node) => {
+        const first = rects.get(node.dataset.attachmentId);
+        if (
+          !first ||
+          typeof node.getBoundingClientRect !== "function" ||
+          typeof node.animate !== "function"
+        ) {
+          return;
+        }
+        const last = node.getBoundingClientRect();
+        const dx = first.left - last.left;
+        const dy = first.top - last.top;
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) return;
+        node.animate(
+          [
+            { transform: `translate(${dx}px, ${dy}px)` },
+            { transform: "none" },
+          ],
+          { duration: 180, easing: "ease-out" }
+        );
+      });
+  }
+
+  function renderWithFlip() {
+    const rects = captureRects();
+    render();
+    animateFromRects(rects);
+  }
+
   /** Load the gallery for `date`, replacing whatever was on screen. */
   async function load(date) {
     currentDate = date || "";
     items = [];
+    newItemIds.clear();
     imageCache.clear();
     loadToken += 1;
     resetImageLoading();
@@ -586,12 +642,16 @@ export function createAttachmentGallery(deps) {
     els.attachmentInput.click();
   }
 
-  async function uploadOne(file, date) {
+  async function prepareOne(file) {
     const prepare = deps.prepareFile || prepareImageFile;
     const prepared = await prepare(file);
     if (!prepared || !prepared.data || !prepared.mime) {
       throw new Error("Image preparation failed");
     }
+    return prepared;
+  }
+
+  async function savePrepared(prepared, date) {
     const meta = await deps.invoke("save_attachment", {
       date,
       mime: prepared.mime,
@@ -607,39 +667,68 @@ export function createAttachmentGallery(deps) {
     };
   }
 
-  /** Add every selected file, reporting per-file failures. */
+  /**
+   * Add every selected file, reporting per-file failures.
+   *
+   * Image decoding/resizing/encoding is the expensive part and happens in the
+   * webview, so a small chunk is prepared in parallel. Saves stay sequential:
+   * the backend serialises manifest writes anyway, and keeping the save order
+   * means the new images are appended in the order the user selected them.
+   */
   async function addFiles(fileList) {
     if (!editable()) return 0;
     const files = Array.from(fileList || []);
     if (files.length === 0) return 0;
 
     const date = currentDate;
+    const total = files.length;
     busy = true;
     render();
-    setLocalStatus(deps.t("attachments.uploading", { done: 0, total: files.length }));
-    deps.setStatus?.(deps.t("attachments.uploading", { done: 0, total: files.length }));
-
     let done = 0;
     let failed = 0;
+    const showProgress = () =>
+      setLocalStatus(deps.t("attachments.uploading", { done, total }));
+    showProgress();
+    deps.setStatus?.(deps.t("attachments.uploading", { done, total }));
+
     try {
       await deps.flushText?.();
-      for (const file of files) {
+      for (let start = 0; start < total; start += ATTACHMENT_PREPARE_CONCURRENCY) {
         if (currentDate !== date) break;
-        try {
-          const { meta, previewUrl } = await uploadOne(file, date);
-          if (currentDate === date) {
-            imageCache.set(meta.id, previewUrl);
-            items.push(meta);
-            render();
-          }
-          done += 1;
-        } catch (err) {
-          console.error("save_attachment failed:", err);
-          failed += 1;
-        }
-        setLocalStatus(
-          deps.t("attachments.uploading", { done, total: files.length })
+        const chunk = files.slice(start, start + ATTACHMENT_PREPARE_CONCURRENCY);
+        const prepared = await Promise.all(
+          chunk.map(async (file) => {
+            try {
+              return { prepared: await prepareOne(file) };
+            } catch (err) {
+              console.error("prepare attachment failed:", err);
+              return { error: err };
+            }
+          })
         );
+
+        for (const result of prepared) {
+          if (currentDate !== date) break;
+          if (result.error) {
+            failed += 1;
+            showProgress();
+            continue;
+          }
+          try {
+            const { meta, previewUrl } = await savePrepared(result.prepared, date);
+            if (currentDate === date) {
+              imageCache.set(meta.id, previewUrl);
+              newItemIds.add(meta.id);
+              items.push(meta);
+              render();
+            }
+            done += 1;
+          } catch (err) {
+            console.error("save_attachment failed:", err);
+            failed += 1;
+          }
+          showProgress();
+        }
       }
     } finally {
       busy = false;
@@ -770,7 +859,7 @@ export function createAttachmentGallery(deps) {
     } catch (err) {
       console.error("reorder_attachments failed:", err);
       items = previous;
-      render();
+      renderWithFlip();
       deps.setStatus?.(deps.t("attachments.reorderFailed"));
     }
   }
@@ -784,7 +873,7 @@ export function createAttachmentGallery(deps) {
     const previous = items.slice();
     const [moved] = items.splice(from, 1);
     items.splice(to, 0, moved);
-    render();
+    renderWithFlip();
     await persistOrder(previous);
   }
 
@@ -812,7 +901,7 @@ export function createAttachmentGallery(deps) {
       deps.setStatus?.(deps.t("attachments.deleteFailed"));
     } finally {
       busy = false;
-      render();
+      renderWithFlip();
     }
   }
 
@@ -890,6 +979,7 @@ export function createAttachmentGallery(deps) {
 
   function closeViewer() {
     if (!has("attachmentViewer")) return;
+    animateOverlayExit(els.attachmentViewer);
     els.attachmentViewer.hidden = true;
     if (els.attachmentViewerImage) els.attachmentViewerImage.src = "";
   }

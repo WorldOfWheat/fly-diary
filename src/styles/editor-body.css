@@ -19,6 +19,22 @@
   color: var(--accent);
 }
 
+@keyframes status-pulse {
+  from {
+    opacity: 0.45;
+    transform: translateY(0.15rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.status-text.is-pulsing {
+  animation: status-pulse 180ms ease-out;
+}
+
 /* Unlock control in the editor header. It only exists while an existing entry
    is open read-only, so it is styled as the one obvious action rather than as
    another quiet icon button. */
@@ -86,6 +102,24 @@ html[data-input-modality="keyboard"] .btn-edit:focus {
   opacity: 0.35;
   cursor: default;
   border-color: transparent;
+}
+
+@keyframes favourite-pop {
+  0% {
+    transform: scale(1);
+  }
+
+  45% {
+    transform: scale(1.22) rotate(-6deg);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.btn-favourite.is-popping .star {
+  animation: favourite-pop 180ms ease-out;
 }
 
 /* Shown when the current entry file cannot be decrypted. It sits between the

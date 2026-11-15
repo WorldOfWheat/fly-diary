@@ -17,6 +17,9 @@
 //!
 //! ## Versions
 //!
+//! * **5** — the payload is bound to a [`VaultContext`] (random vault id + key
+//!   id), the object kind, the date, and the document version. This detects
+//!   ciphertexts copied between vaults, not just between dates.
 //! * **4** — `payload` is encrypted with [`entry_aad`] as AES-GCM associated
 //!   data: the entry's date *and* the document version. Binding the version
 //!   means the `version` attribute cannot be edited to talk a reader into
@@ -27,7 +30,7 @@
 //! * **2** — `payload` is encrypted without associated data.
 //! * **1** — `<title>` in the clear, body in `<content>`.
 //!
-//! [`from_xml`] accepts all four so existing diaries keep working; the next
+//! [`from_xml`] accepts all five so existing diaries keep working; the next
 //! save rewrites the file in the current layout.
 
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -38,9 +41,43 @@ use quick_xml::{Reader, Writer};
 /// Version 4 means the payload was encrypted with [`entry_aad`] — the entry's
 /// date plus the version byte — as associated data. Readers use this to decide
 /// which AAD (if any) to pass when decrypting.
-pub const CURRENT_VERSION: u8 = 4;
+pub const CURRENT_VERSION: u8 = 5;
 
-/// Separator between the date and the version inside the AAD.
+/// Stable per-vault identifiers that are bound into every v5 ciphertext.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultContext {
+    pub vault_id: [u8; 16],
+    pub key_id: [u8; 16],
+}
+
+/// Object kinds used in v5 associated data.
+pub const KIND_ENTRY: u8 = 1;
+pub const KIND_INDEX: u8 = 2;
+pub const KIND_MANIFEST: u8 = 3;
+pub const KIND_ATTACHMENT: u8 = 4;
+pub const KIND_RECOVERY: u8 = 5;
+pub const KIND_VAULT_WRAP: u8 = 6;
+
+const CONTEXT_AAD_LABEL: &[u8] = b"fly-diary/aad/v5";
+
+/// Canonical, length-prefixed associated data.
+///
+/// Length prefixes matter: without them, fields such as `("a", "bc")` and
+/// `("ab", "c")` would produce the same byte string.
+pub fn context_aad(kind: u8, context: &VaultContext, fields: &[&[u8]]) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(64);
+    aad.extend_from_slice(CONTEXT_AAD_LABEL);
+    aad.push(kind);
+    aad.extend_from_slice(&context.vault_id);
+    aad.extend_from_slice(&context.key_id);
+    for field in fields {
+        aad.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        aad.extend_from_slice(field);
+    }
+    aad
+}
+
+/// Separator between the date and the version inside the legacy AAD.
 ///
 /// A byte that cannot appear in an ISO date, so `("2026-10-23", 4)` and
 /// `("2026-10-2", 34)` can never produce the same associated data.
@@ -59,6 +96,30 @@ pub fn entry_aad(date: &str, version: u8) -> Vec<u8> {
     aad.push(AAD_SEPARATOR);
     aad.push(version);
     aad
+}
+
+/// Associated data for a v5 entry.
+pub fn entry_aad_v5(date: &str, version: u8, context: &VaultContext) -> Vec<u8> {
+    context_aad(KIND_ENTRY, context, &[date.as_bytes(), &[version]])
+}
+
+/// Associated data for a v5 sidebar index.
+pub fn index_aad_v5(version: u8, context: &VaultContext) -> Vec<u8> {
+    context_aad(KIND_INDEX, context, &[&[version]])
+}
+
+/// Associated data for a v5 attachment manifest.
+pub fn manifest_aad_v5(date: &str, version: u8, context: &VaultContext) -> Vec<u8> {
+    context_aad(KIND_MANIFEST, context, &[date.as_bytes(), &[version]])
+}
+
+/// Associated data for one v5 attachment payload.
+pub fn attachment_aad_v5(date: &str, id: &str, version: u8, context: &VaultContext) -> Vec<u8> {
+    context_aad(
+        KIND_ATTACHMENT,
+        context,
+        &[date.as_bytes(), id.as_bytes(), &[version]],
+    )
 }
 
 /// An encrypted diary entry as it lives on disk.
@@ -119,6 +180,11 @@ impl EncryptedEntry {
         self.version >= 4
     }
 
+    /// Whether the payload is bound to a vault/key context (version 5 and up).
+    pub fn uses_context_aad(&self) -> bool {
+        self.version >= 5
+    }
+
     /// The associated data this entry's payload must be decrypted with.
     ///
     /// Returns `None` for versions 1 and 2, which carry no AAD.
@@ -129,6 +195,16 @@ impl EncryptedEntry {
             Some(date.as_bytes().to_vec())
         } else {
             None
+        }
+    }
+
+    /// Associated data for this document, taking the v5 vault context into
+    /// account. Returns `None` for versions 1 and 2.
+    pub fn aad_with_context(&self, date: &str, context: Option<&VaultContext>) -> Option<Vec<u8>> {
+        if self.uses_context_aad() {
+            context.map(|context| entry_aad_v5(date, self.version, context))
+        } else {
+            self.aad(date)
         }
     }
 }
@@ -350,9 +426,7 @@ mod tests {
         // Build the expected escaped form from character codes so this test
         // file never contains raw entity literals.
         let amp = '\u{26}'.to_string();
-        let expected = format!(
-            "a {amp}amp; b {amp}lt; c {amp}gt; d {amp}quot; e {amp}apos; f"
-        );
+        let expected = format!("a {amp}amp; b {amp}lt; c {amp}gt; d {amp}quot; e {amp}apos; f");
         assert!(xml.contains(&expected), "xml was: {xml}");
 
         // No unescaped markup may leak into the document.
@@ -430,7 +504,7 @@ mod tests {
     fn output_declares_utf8_and_version() {
         let xml = to_xml(&entry("c")).unwrap();
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-        assert!(xml.contains("<diary version=\"4\">"), "xml was: {xml}");
+        assert!(xml.contains("<diary version=\"5\">"), "xml was: {xml}");
     }
 
     #[test]
@@ -456,6 +530,23 @@ mod tests {
         assert!(!entry("c").with_version(3).uses_version_aad());
         assert!(entry("c").with_version(4).uses_version_aad());
         assert!(entry("c").uses_version_aad());
+    }
+
+    #[test]
+    fn v5_aad_binds_vault_key_and_object_kind() {
+        let a = VaultContext {
+            vault_id: [1; 16],
+            key_id: [2; 16],
+        };
+        let b = VaultContext {
+            vault_id: [3; 16],
+            key_id: [2; 16],
+        };
+        let entry = entry_aad_v5("2026-10-23", 5, &a);
+        let index = index_aad_v5(5, &a);
+        assert_ne!(entry, index);
+        assert_ne!(entry, entry_aad_v5("2026-10-23", 5, &b));
+        assert_ne!(entry, entry_aad_v5("2026-10-24", 5, &a));
     }
 
     #[test]

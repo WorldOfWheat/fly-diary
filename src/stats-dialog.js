@@ -18,6 +18,7 @@
 //   weekdayName    — (dayIndex: number) => string
 
 import { createFocusTrap } from "./focus-trap.js";
+import { animateOverlayExit } from "./lib/motion.js";
 import {
   barFractions,
   computeStreaks,
@@ -135,6 +136,7 @@ export function createStatsDialog(deps) {
 
   /** Close the statistics dialog. */
   function closeStats() {
+    animateOverlayExit(els.statsOverlay);
     els.statsOverlay.hidden = true;
     focusTrap.deactivate();
   }

@@ -10,7 +10,7 @@
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diary version="4">
+<diary version="5">
   <date>2026-10-23</date>
   <iv>BASE64(12 bytes)</iv>
   <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
@@ -24,29 +24,22 @@
 
 ### 版本與 AAD
 
-`version="4"` 的 payload 以 AES-GCM 的 **associated data（AAD）** 綁定到它所屬的日期**與版本號**：
+`version="5"` 的 payload 使用 AES-GCM 的 **associated data（AAD）**，綁定：
 
-```
-AAD = date || 0x00 || version
-```
+- domain label `fly-diary/aad/v5`
+- object kind（entry／index／manifest／attachment／recovery／vault-wrap）
+- `vault-id` 與 `key-id`（各 16 bytes）
+- 日期、附件 id（依 object 而定）
+- 文件版本
 
-加密時把這段位元組當成 AAD 傳入，解密時再傳一次。AAD 會被 GCM 的驗證標籤涵蓋但不被加密，
-所以只要日期或版本對不上，解密就會失敗。中間的 `0x00` 是分隔符，確保
-`("2026-10-2", 34)` 與 `("2026-10-23", 4)` 不會拼出同一段 AAD。
+所有欄位都以長度前綴串接，避免欄位邊界歧義。這擋掉：
 
-這擋掉兩種攻擊：
+1. **搬檔**：把日記複製成另一個日期會解密失敗。
+2. **降級**：把 `version="5"` 改寫成 4／3／2 會讓 AAD 不符。
+3. **跨 vault 搬移**：把密文搬到另一個日記本，即使日期相同也會失敗。
+4. **物件互換**：entry、index、manifest、attachment、recovery 的 kind 不同。
 
-1. **搬檔**：把 `2026-10-23.xml` 複製成 `2026-10-24.xml`。在沒有 AAD 的舊格式下會安靜地顯示
-   10/23 的內容（因為 `read_entry` 回傳的是**被要求的**日期），現在會直接解密失敗。
-2. **降級**：把 `<diary version="4">` 改寫成 `version="3"` 或 `version="2"`，誘導讀取端改用
-   較弱（或完全沒有）的 AAD 來解密，再搭配搬檔把別天的密文塞進來。因為版本號本身也在 AAD 裡，
-   改寫版本屬性會讓驗證標籤失效，該篇日記會被歸類為**損壞**而不是被安靜地解開。
-
-同理，`index.xml` 用 `b"fly-diary/index"` 當 AAD，所以索引密文與日記密文即使使用同一把
-diary key 也**不能互換**。附件也各自使用獨立 label：圖片是
-`fly-diary/attachment || 0x00 || 日期 || 0x00 || id || 0x00 || 版本`，manifest 是
-`fly-diary/attachment-manifest || 0x00 || 日期`；因此圖片、manifest、索引與日記四種密文
-彼此都不能互換，附件搬到別的日期也會解密失敗。
+舊格式仍可讀：
 
 | 版本 | payload 內容                              | AAD                                                           |
 | ---- | ----------------------------------------- | ------------------------------------------------------------- |
@@ -55,22 +48,19 @@ diary key 也**不能互換**。附件也各自使用獨立 label：圖片是
 | `2`  | 標題 + `\n` + 內容（無旗標，視為未收藏）  | 無                                                            |
 | `1`  | `<title>` 明文、`<content>` 密文          | 無                                                            |
 
-> 舊版（`version="2"`）payload 是 `標題 + "\n" + 內容`，沒有收藏旗標，讀取時視為「未收藏」；
-> 更舊的 `version="1"` 把 `<title>` 存成明文、`<content>` 存密文。`version="3"` 只綁日期、
-> 沒有把版本號納入 AAD，因此仍可被降級改寫。三者都仍可讀取，讀取時依文件上的 `version`
-> 決定要帶哪一種 AAD，下次儲存該篇日記就會自動改寫成 `version="4"`。
-> 舊 vault 遷移時也會一併把日記改寫成版本綁定的格式。
+> 舊版 `version="2"` 沒有收藏旗標；`version="1"` 把 `<title>` 存成明文。`version="3"` 只綁日期、
+> 沒有把版本號納入 AAD。三者都仍可讀取，下次儲存或背景升級時會改寫成 `version="5"`。
 
 #### 解鎖後自動升級格式
 
 除了「寫到哪篇就升級哪篇」的懶惰升級，每次解鎖成功後都會在**背景**跑一次全庫升級，
-把還停在 `version="1"` / `version="2"` / `version="3"` 的日記一次改寫成 `version="4"`：
+把還停在 `version="1"` / `version="2"` / `version="3"` / `version="4"` 的日記一次改寫成 `version="5"`：
 
 - 由 `enterApp()` 觸發，**不 await**：日記立刻可用，升級在 `spawn_blocking` 裡跑，
   不會讓使用者盯著編輯器等整個資料夾改寫完。
 - 進度透過 `upgrade-progress` 事件回報 `(done, total)`，狀態列顯示「正在升級日記格式… 12/340」；
   結束後顯示「已升級 N 篇」或「已升級 X 篇，Y 篇失敗（原檔未更動）」。
-- **冪等**：已經是 `version="4"` 的檔案直接跳過，所以中斷後下次解鎖會自動續跑，
+- **冪等**：已經是 `version="5"` 的檔案直接跳過，所以中斷後下次解鎖會自動續跑，
   也不會每次解鎖都重寫整個資料夾。
 - **原子替換**：先寫到 `YYYY-MM-DD.xml.upgrade`（同樣 `0600`），再 `rename` 覆蓋原檔。
   POSIX 的 `rename` 是原子的，中途斷電只會留下舊檔或新檔，不會有半截檔案。
@@ -86,18 +76,20 @@ Vault 檔（`vault.xml`）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<vault version="2">
+<vault version="3">
   <kdf>argon2id</kdf>
-  <kdf-memory>19456</kdf-memory>
-  <kdf-iterations>2</kdf-iterations>
+  <kdf-memory>65536</kdf-memory>
+  <kdf-iterations>3</kdf-iterations>
   <kdf-parallelism>1</kdf-parallelism>
+  <vault-id>BASE64(16 bytes)</vault-id>
+  <key-id>BASE64(16 bytes)</key-id>
   <salt>BASE64(16 bytes)</salt>
   <wrapped-key-iv>BASE64(12 bytes)</wrapped-key-iv>
   <wrapped-key>BASE64(AES-256-GCM ciphertext + tag)</wrapped-key>
 </vault>
 ```
 
-`wrapped-key` 解密後就是 diary key。檔案內沒有任何明文密碼或未包裝的金鑰。
+`wrapped-key` 解密後就是 diary key；v3 的包裝 AAD 另外綁定 `vault-id`、`key-id`、salt 與 KDF 參數。檔案內沒有任何明文密碼或未包裝的金鑰。v2 vault 沒有兩個 id，首次解鎖時會原子升級成 v3；舊 entry 仍可透過 v4 AAD 讀取，下次儲存再改寫成 v5。
 
 ### 回復短語檔（`recovery.xml`）
 
@@ -105,17 +97,17 @@ Vault 檔（`vault.xml`）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<recovery version="1">
+<recovery version="2">
   <iv>BASE64(12 bytes)</iv>
   <wrapped-key>BASE64(AES-256-GCM ciphertext + tag)</wrapped-key>
 </recovery>
 ```
 
 - `wrapped-key` 是用 recovery key 包裝的 diary key；recovery key 由 12 個 BIP39 英文單字解碼出的 128-bit 熵，經 domain-separated SHA-256 展成 32 bytes。
-- AAD 是 `"fly-diary/recovery" || 0x00 || version`，把 recovery 密文移作其他用途會解密失敗。把 blob 搬到別的日記本時，解出的金鑰會再經 `diary_key_matches` 驗證，不符合就拒絕並保持 vault 不變。
+- v2 AAD 綁定 `vault-id`、`key-id`、object kind 與版本；把 blob 搬到別的日記本會直接解密失敗。舊 v1 仍可讀，但沒有 id；復原成功後會自動改寫成 v2。
 - **刻意放在 `vault.xml` 之外**：舊版 App 改密碼或 KDF 參數時，會用固定欄位重建 `vault.xml`，不認識的欄位會被丟掉。獨立檔案不會被舊版覆寫；而 diary key 在改密碼時不變，所以短語持續有效。
 - 寫入同樣走 `write_private`（`0600`、先寫暫存檔再 rename），失敗不會留下半截檔案。
-- 重新產生短語會覆寫此檔並換新的 `id`；停用短語會刪除此檔。兩者都不會重新加密日記。
+- 重新產生短語會用新短語覆寫此檔；停用短語會刪除此檔。兩者都不會重新加密日記。
 - 用短語復原時只改寫 `vault.xml`（新 salt、新 master key 包裝同一把 diary key），此檔保持不變，所以短語仍然有效。
 - 備份必須包含這個檔案；只複製 `vault.xml` 與日記檔會讓短語失效。
 
@@ -123,15 +115,15 @@ Vault 檔（`vault.xml`）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
-<diary version="4">
+<diary version="5">
   <date>index</date>
   <iv>BASE64(12 bytes)</iv>
   <payload>BASE64(AES-256-GCM ciphertext + tag)</payload>
 </diary>
 ```
 
-`payload` 解密後是每行一筆的 `日期 \t 標題 \t 收藏旗標`，用同一把 diary key 加密，
-但 AAD 是 `b"fly-diary/index"` 而不是日期，因此索引密文與日記密文不能互換。
+`payload` 解密後是每行一筆的 `日期 \t 標題 \t 收藏旗標`，用同一把 diary key 加密。
+v5 索引的 AAD 使用 `index` object kind 加上 `vault-id`／`key-id`；舊索引仍用 `b"fly-diary/index"`，因此索引密文與日記密文不能互換。
 側邊欄列出日記時只要解密這一個檔案，不必逐一解密所有日記檔。
 
 > 索引只是**快取**：`index.xml` 遺失或損毀時，會改為掃描所有日記檔重建。
@@ -202,19 +194,18 @@ diary/
 - **檔名**：16 bytes 隨機 → 32 個小寫 hex + `.bin`，由後端產生。不使用原始檔名、標題、
   日期或 SHA-256，避免洩漏與路徑問題。
 - **每張圖獨立加密**：AES-256-GCM，新的隨機 12-byte IV。檔案格式為
-  `FDAT | version | IV | ciphertext`，AAD 是
-  `"fly-diary/attachment" || 0x00 || date || 0x00 || id || 0x00 || version`。
-- **manifest.xml**：外層沿用日記的 `<diary version="4">` envelope，payload 解密後是內層 XML：
+  `FDAT | version | IV | ciphertext`；v2 AAD 綁定 `vault-id`／`key-id`／日期／id／版本，舊 v1 使用舊 label。
+- **manifest.xml**：外層沿用日記的 `<diary version="5">` envelope，payload 解密後是內層 XML：
 
   ```xml
-  <manifest version="1" date="2026-10-23">
+  <manifest version="2" date="2026-10-23">
     <attachment id="9f2c..." mime="image/webp" width="1000" height="750"/>
     <attachment id="4d8e..." mime="image/jpeg" width="800" height="1000"/>
   </manifest>
   ```
 
   **元素順序就是顯示順序**。沒有 `added-at`，也不依賴檔名或 mtime。
-  manifest 的 AAD 是 `"fly-diary/attachment-manifest" || 0x00 || date`，
+  v5 manifest 的 AAD 綁定 `vault-id`／`key-id`／日期／版本；舊 manifest 使用 `"fly-diary/attachment-manifest" || 0x00 || date`，
   所以搬到別天會失敗，也不能和 `index.xml` 或日記密文互換。
 - **上傳前壓縮**：前端用 canvas 將長邊縮到 1000px、WebP quality 0.8；若 WebView 不支援
   WebP 編碼時，PNG／WebP 來源會 fallback PNG 以保留透明，其他來源 fallback JPEG（透明區填白）。

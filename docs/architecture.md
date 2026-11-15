@@ -27,6 +27,10 @@ fly-diary/
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
+│   │   ├── highlight.js    # 搜尋摘要的 UTF-16 標記切段（可單獨測試）
+│   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
+│   │   ├── list-rows.js    # 虛擬清單的列模型：月份分隔、列位移、年份跳轉
+│   │   ├── motion.js       # 減少動態偵測與 overlay 關閉殘影
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
@@ -48,6 +52,10 @@ fly-diary/
 │   │   ├── dom.js          # 極簡 DOM stub（fakeElement / installDom / fakeInvoke）
 │   │   └── css.js          # 展開 styles.css 的 @import，供 CSS invariant 測試
 │   ├── dates.test.js
+│   ├── highlight.test.js   # 搜尋摘要標記：範圍切段、重疊、UTF-16、越界
+│   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏
+│   ├── list-rows.test.js   # 列模型：月份分隔、位移、二分搜尋、年份跳轉
+│   ├── motion.test.js      # 減少動態與 overlay 殘影的 no-op 條件
 │   ├── stats.test.js
 │   ├── i18n.test.js
 │   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕
@@ -86,6 +94,8 @@ fly-diary/
 │       ├── xml.rs          # XML 序列化 / 解析
 │       ├── attachments.rs  # 圖片附件：加密檔、manifest、順序、孤兒掃描
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
+│       ├── pool.rs         # 受限的 Rayon vault I/O pool（最多 4 執行緒）
+│       ├── search.rs       # 解鎖期間的記憶體全文索引（不落盤，鎖定即清除）
 │       └── storage.rs      # vault、recovery.xml 與加密日記的檔案儲存層
 ├── docs/                   # 文件（security / file-format / ui / accessibility / architecture / development / reference）
 ├── .github/
@@ -107,16 +117,20 @@ fly-diary/
 - **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`），檔名由日期推導，天然保證一天一篇。
 - **標題也加密**：標題與內容打包成同一段明文再加密，`list_entries` 必須持有金鑰才能解出標題；鎖定時側邊欄會清空，避免殘留任何標題。
 - **加密索引**：`index.xml` 以同一把 diary key 加密存放所有 `{日期, 標題, 收藏}`。列出日記時只解密這一個檔案，不必逐一解密上千篇日記；索引缺失或損毀時會自動回退掃描並重建。
+- **全文搜尋不落盤**：搜尋需要解密所有內容，所以 `scan_vault` 在解鎖後的那一趟掃描順便建立記憶體索引（原文 + 小寫副本），只回傳命中摘要。索引是衍生狀態，`lock()`、切換 workspace 或重新解鎖時直接清除並 zeroize；不新增任何明文檔案，也不改動日記或 `index.xml`。儲存與刪除由 `save_entry` / `delete_entry` 同步更新索引。
 - **收藏旗標放在密文裡**：索引只是快取，重建時是從日記檔重新掃出來的，所以收藏狀態若只存在索引就會在重建後消失。旗標因此寫進 payload 開頭（`\x01` + `1`/`0`），索引只是鏡射一份以便快速列出收藏頁；`save_entry` 自動儲存時會保留既有旗標，不會把使用者的收藏洗掉。
 - **壞檔不進索引**：`scan_entries` 遇到無法解讀的檔案時，記下原因後跳過，而不是回傳錯誤。索引因此永遠只包含可讀的日記，側邊欄的「全部」與「收藏」都不會混進壞檔；壞檔改由 `list_broken_entries` 單獨列出。這也讓「一篇壞檔」不會拖垮整個資料夾的載入。
-- **壞檔掃描只在必要時跑**：索引是一份「健康檔案清單」，壞檔對它而言是隱形的，所以「這天沒寫」與「這天的日記壞了」只能靠走訪目錄分辨——`list_broken_entries` 因此必須讀取、解析並解密**每一個**日記檔，成本隨篇數線性成長。但存檔不可能產生壞檔（檔案是程式自己剛用手中的金鑰寫的），所以 `refreshList({ scanBroken: false })` 讓自動儲存跳過這次掃描；掃描只保留在解鎖後首次載入、開啟「損壞」分頁、以及 `get_entry` 讀取失敗時。這是自動儲存不再「卡一下」的關鍵。
+- **壞檔掃描只在必要時跑**：索引是一份「健康檔案清單」，壞檔對它而言是隱形的，所以「這天沒寫」與「這天的日記壞了」只能靠走訪目錄分辨——掃描因此必須讀取、解析並解密**每一個**日記檔，成本隨篇數線性成長。但存檔不可能產生壞檔（檔案是程式自己剛用手中的金鑰寫的），所以 `refreshList({ scanBroken: false })` 讓自動儲存跳過這次掃描；掃描只保留在解鎖後首次載入（`scan_vault`，同時建立全文索引）、開啟「損壞」分頁、以及 `get_entry` 讀取失敗時。這是自動儲存不再「卡一下」的關鍵。
+- **受限的平行 I/O**：日記檔彼此獨立，掃描、損壞清單、索引重建、舊 vault 遷移、升級、匯入與搜尋查詢都會解密多個檔案，因此走 `pool.rs` 的專用 Rayon pool，上限 `min(4, cores)`。不用 global pool 的預設執行緒數，是因為單檔最大 16 MiB，核心全開會讓暫存明文同時放大；四條執行緒足以隱藏 SSD 延遲，又不會把 HDD／網路磁碟變成 seek storm。平行結果最後才合併：`BTreeMap` 依日期排序、broken 清單重新排序、升級／匯入報告依計畫順序折回，因此輸出穩定。
+- **搜尋查詢的平行門檻**：`SearchIndex` 記錄原始文字總量，低於 2 MiB 時循序掃描（避免 Rayon 喚醒成本），超過才把文件分給同一個 I/O pool；收集後一律依日期新到舊排序。
 - **壞檔唯讀鎖定**：`selectDate` 在載入前先查壞檔清單，命中就直接鎖定、完全不呼叫 `get_entry`；`saveNow` 與 `scheduleSave` 也都在 `lockedDate` 有值時提早返回。三層防線確保空白編輯器不可能覆蓋掉一個只是暫時解不開的檔案——這是壞檔處理裡唯一會造成永久資料損失的路徑。
 - **匯出不重新序列化**：`export_broken_entry` 用 `fsutil::copy_private` 逐位元組複製原始檔案，不經過 XML 解析再輸出。壞檔的價值就在於它「壞掉的部分」，重新序列化會丟掉未知元素與屬性，反而讓人工搶救更困難。複製同樣走「暫存檔 → `sync_all()` → `rename`」，所以匯出中途失敗只會留下原本的目標檔，不會產生一份看起來成功、其實被截斷的搶救檔。
 - **圖片不改日記格式**：附件放在 `attachments/YYYY-MM-DD/`，以日期資料夾當關聯，日記 XML 完全不動。舊日記沒有這個資料夾，`list_attachments` 回空清單；舊版 App 也會忽略它。這是 sidecar 設計的核心。
 - **固定順序是資料，不是檔名**：manifest 內 `<attachment>` 的元素順序就是顯示順序。新增 append、拖曳只重寫 manifest；不依賴 mtime、檔名或 `added-at`，所以重開、換裝置、同步後都不會亂。
 - **每張圖獨立加密**：圖片各自有 IV 與 AAD（綁日期、id、版本），單張損壞不會影響其他圖片；manifest 用不同 AAD label，不能和 index 或日記密文互換。
 - **附件刪除方向固定**：新增是「圖片 → manifest」，刪除是「圖片 → manifest 移除」；crash 只會留下未引用圖片（會被補回）或遺失佔位，不會讓已刪除的圖片復活。刪除日記則是 index → XML → 附件資料夾。
-- **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan），捲動時以 `index * 列高` 絕對定位。列高由 CSS 的 `--row-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高會跟著變，不會出現捲動錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
+- **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan）。列高不再一律相同：`lib/list-rows.js` 先建立「月份標題列 + 日記列」的平面模型並算出每列絕對位移，`main.js` 再用二分搜尋找出視窗內的區段。兩個高度都由 CSS 的 `--row-h`／`--month-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高與月份標題會一起縮放，捲動不會錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
+- **年份跳轉**：`entry-scroll` 頂端有一個 sticky 年份選單，選項只包含目前可見清單（全部／收藏／搜尋結果）實際存在的年份；跳轉時直接定位到該年第一篇前面的月份標題列。它是捲動容器內的元素，JS 會把它的高度從可見視窗扣除，因此 sticky 列不會遮住第一筆資料。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
 - **CSS 用原生 `@import` 拆分**：入口 `src/styles.css` 只負責載入 `src/styles/*.css`，順序就是 cascade 順序；沒有 PostCSS／Sass／打包步驟，Tauri 與測試都直接讀同一組檔案。`tests/helpers/css.js` 會展開 `@import`，讓 CSS invariant 測試仍然看到完整規則。
 - **手機版只換版面、不改資料流**：`data-layer` 只決定哪一層可見；選日期、存檔、鎖定、壞檔處理都走與桌面版相同的函式。返回鈕只是 `showListLayer()`，不會卸載編輯器，也不會丟棄尚未儲存的內容。
@@ -146,7 +160,7 @@ fly-diary/
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
-- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案或做真正加密的命令都會凍住 webview。`async fn` 本身不夠——函式體沒有 `.await` 就會在第一次 poll 一路跑到完成，仍然佔住一條 runtime worker。因此 `lib.rs` 提供一個 `blocking()` 輔助函式包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_import`、`export_broken_entry`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
+- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案或做真正加密的命令都會凍住 webview。`async fn` 本身不夠——函式體沒有 `.await` 就會在第一次 poll 一路跑到完成，仍然佔住一條 runtime worker。因此 `lib.rs` 提供一個 `blocking()` 輔助函式包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
 - **Argon2id 一定離開主執行緒**：`unlock`、`create_vault`、`change_passphrase` 各要跑一到兩次刻意放慢的 Argon2id 派生（單次約一秒），是最容易讓人感覺到凍結的地方。三者都改為 `async` 並把派生交給 `blocking()`；session 只在工作回傳後才寫入，因為 `tauri::State` 無法 move 進 `spawn_blocking`。
 - **金鑰先複製再交給背景執行緒**：`MutexGuard` 不是 `Send`，也不能讓鎖跨越整個寫入過程（會擋住 `lock` 與其他命令）。所有需要金鑰的命令都先用 `session_key()` 把 `[u8; 32]` 複製出來，再 move 進閉包；鎖只持有到複製完成為止。
 - **存檔的四次往返**：寫入一篇日記包含讀取舊檔（取回收藏旗標）、加密寫入、解密索引、重新加密寫入索引。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，這也是它必須離開主執行緒的原因。

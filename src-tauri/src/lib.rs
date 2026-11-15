@@ -5,13 +5,15 @@ mod bip39;
 mod clipboard;
 pub mod crypto;
 mod fsutil;
+mod pool;
+mod search;
 mod secure_memory;
 mod settings;
 pub mod storage;
 mod xml;
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use attachments::{AttachmentData, AttachmentMeta, DroppedImage, OrphanAttachment};
 use clipboard::ClipboardImage;
@@ -72,6 +74,27 @@ struct SettingsView {
     autosave_delay_choices: Vec<u32>,
 }
 
+/// Build information shown in the settings dialog.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppInfo {
+    version: &'static str,
+    commit: &'static str,
+    author: &'static str,
+    repository: &'static str,
+}
+
+/// Build metadata embedded at compile time.
+#[tauri::command]
+fn app_info() -> AppInfo {
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        commit: env!("GIT_COMMIT_HASH"),
+        author: env!("CARGO_PKG_AUTHORS"),
+        repository: env!("CARGO_PKG_REPOSITORY"),
+    }
+}
+
 /// In-memory session state: the derived AES key while the vault is unlocked.
 ///
 /// The key lives in `LockedKey`, which keeps it on a dedicated page that is
@@ -92,6 +115,38 @@ impl Session {
 }
 
 type SharedSession = Mutex<Session>;
+
+/// Session-scoped full-text index.
+///
+/// `None` means the index has not been built yet (locked, switching workspace,
+/// or the initial scan failed). The index holds decrypted titles and bodies, so
+/// it is cleared whenever the session key is dropped. It is never persisted.
+#[derive(Default)]
+struct SearchState {
+    index: Option<search::SearchIndex>,
+    /// Bumped whenever the session/workspace changes. A scan captures this
+    /// before it starts and refuses to install its result if it has moved on,
+    /// so a slow scan from a previous vault cannot leak into the next one.
+    generation: u64,
+}
+
+type SharedSearch = Arc<Mutex<SearchState>>;
+
+/// Clone the search-state handle out of the Tauri manager.
+///
+/// The handle is an `Arc`, so callers can drop the `State` borrow and move it
+/// into a blocking task.
+fn search_state(app: &tauri::AppHandle) -> SharedSearch {
+    app.state::<SharedSearch>().inner().clone()
+}
+
+/// Drop the decrypted index without disturbing the session key.
+fn clear_search(app: &tauri::AppHandle) {
+    let search = search_state(app);
+    let mut state = search.lock().unwrap();
+    state.index = None;
+    state.generation = state.generation.wrapping_add(1);
+}
 
 /// Run blocking work off the main thread.
 ///
@@ -125,6 +180,15 @@ where
 fn session_key(session: &tauri::State<'_, SharedSession>) -> Result<Zeroizing<[u8; 32]>, String> {
     let guard = session.lock().unwrap();
     Ok(Zeroizing::new(*guard.key()?))
+}
+
+/// Reject commands that only make sense while the diary is unlocked.
+///
+/// Several metadata-only commands used to be callable from the lock screen.
+/// Requiring a session does not copy the key, so it is cheap.
+fn require_unlocked(session: &tauri::State<'_, SharedSession>) -> Result<(), String> {
+    let guard = session.lock().unwrap();
+    guard.key().map(|_| ())
 }
 
 // ---------------------------------------------------------------------------
@@ -187,6 +251,9 @@ async fn set_diary_dir(
 
     let dir = PathBuf::from(path.trim());
     settings::validate_diary_dir(&dir)?;
+    // The index belongs to the old workspace even when the session was already
+    // locked, so it must not survive the switch.
+    clear_search(&app);
 
     let config = config_dir(&app)?;
     blocking("Set diary dir", move || {
@@ -202,10 +269,16 @@ async fn set_diary_dir(
 
 /// Persist the auto-lock preference.
 ///
-/// Allowed while unlocked: it is a UI preference, not key material.
+/// This is security-relevant (it can disable auto-lock), so it requires an
+/// unlocked session even though it does not touch key material.
 /// `minutes == 0` ([`settings::AUTO_LOCK_NEVER`]) disables auto-lock.
 #[tauri::command]
-async fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String> {
+async fn set_auto_lock(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    minutes: u32,
+) -> Result<(), String> {
+    require_unlocked(&session)?;
     settings::validate_auto_lock(minutes)?;
 
     let config = config_dir(&app)?;
@@ -224,7 +297,12 @@ async fn set_auto_lock(app: tauri::AppHandle, minutes: u32) -> Result<(), String
 /// writes, never what is written. The value must be one of
 /// [`settings::AUTOSAVE_DELAY_CHOICES`], so autosave cannot be switched off.
 #[tauri::command]
-async fn set_autosave_delay(app: tauri::AppHandle, ms: u32) -> Result<(), String> {
+async fn set_autosave_delay(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    ms: u32,
+) -> Result<(), String> {
+    require_unlocked(&session)?;
     settings::validate_autosave_delay(ms)?;
 
     let config = config_dir(&app)?;
@@ -257,6 +335,15 @@ async fn pick_diary_dir(app: tauri::AppHandle) -> Result<Option<String>, String>
     {
         use tauri_plugin_dialog::DialogExt;
 
+        // The picker only displays a filesystem path. Relax capture protection
+        // for its lifetime so the user can share their screen while choosing a
+        // folder, and always restore it afterwards. This lives in Rust so the
+        // frontend cannot disable protection at an arbitrary time.
+        let window = app.get_webview_window("main");
+        if let Some(window) = &window {
+            let _ = window.set_content_protected(false);
+        }
+
         let (tx, rx) = std::sync::mpsc::channel();
         app.dialog()
             .file()
@@ -265,11 +352,13 @@ async fn pick_diary_dir(app: tauri::AppHandle) -> Result<Option<String>, String>
                 let _ = tx.send(folder);
             });
 
-        let picked = rx
-            .recv()
-            .map_err(|e| format!("Folder picker failed: {e}"))?;
+        let picked = rx.recv().map_err(|e| format!("Folder picker failed: {e}"));
 
-        Ok(picked.map(|p| p.to_string()))
+        if let Some(window) = &window {
+            let _ = window.set_content_protected(true);
+        }
+
+        Ok(picked?.map(|p| p.to_string()))
     }
 }
 
@@ -428,6 +517,9 @@ async fn create_vault(
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
+    // A new vault has no index yet; discard anything left over from a previous
+    // workspace or session.
+    clear_search(&app);
     Ok(())
 }
 
@@ -445,13 +537,17 @@ async fn unlock(
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
+    // The index is rebuilt by `scan_vault`; never let one session's plaintext
+    // index leak into the next.
+    clear_search(&app);
     Ok(())
 }
 
-/// Forget the in-memory key.
+/// Forget the in-memory key and the decrypted search index.
 #[tauri::command]
-fn lock(session: tauri::State<'_, SharedSession>) {
+fn lock(app: tauri::AppHandle, session: tauri::State<'_, SharedSession>) {
     *session.lock().unwrap() = Session::default();
+    clear_search(&app);
 }
 
 /// The Argon2id parameters currently recorded in the vault.
@@ -544,7 +640,10 @@ struct RecoveryPhraseView {
 /// so closing the dialog or crashing before confirmation cannot leave the diary
 /// with a recovery phrase nobody recorded.
 #[tauri::command]
-fn generate_recovery_phrase() -> Result<RecoveryPhraseView, String> {
+fn generate_recovery_phrase(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<RecoveryPhraseView, String> {
+    require_unlocked(&session)?;
     let entropy = bip39::generate_entropy();
     Ok(RecoveryPhraseView {
         words: bip39::entropy_to_words(&entropy)?,
@@ -579,7 +678,7 @@ async fn confirm_recovery_phrase(
     let dir = diary_dir(&app)?;
 
     blocking("Confirm recovery phrase", move || {
-        storage::confirm_recovery_phrase(&dir, &*key, &phrase, &indices, &answers)
+        storage::confirm_recovery_phrase(&dir, &key, &phrase, &indices, &answers)
     })
     .await
 }
@@ -620,9 +719,7 @@ async fn recover_vault(
     new_passphrase: String,
     kdf: Option<KdfView>,
 ) -> Result<(), String> {
-    if new_passphrase.chars().count() < 6 {
-        return Err("New passphrase must be at least 6 characters".to_string());
-    }
+    storage::validate_new_passphrase(&new_passphrase)?;
 
     let dir = diary_dir(&app)?;
     let params = match kdf {
@@ -636,7 +733,10 @@ async fn recover_vault(
 
     let key = blocking("Recover vault", move || {
         let diary_key = storage::recover_diary_key(&dir, &phrase)?;
-        storage::reset_passphrase(&dir, &*diary_key, &new_passphrase, params)?;
+        storage::reset_passphrase(&dir, &diary_key, &new_passphrase, params)?;
+        // Opportunistically upgrade a legacy recovery sidecar now that both
+        // the phrase and the diary key are available.
+        let _ = storage::rewrite_recovery(&dir, &diary_key, &phrase);
         Ok(diary_key)
     })
     .await?;
@@ -644,6 +744,9 @@ async fn recover_vault(
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
+    // Recovery keeps the same diary key, but rebuilding is cheap compared with
+    // risking a stale index from a different vault.
+    clear_search(&app);
     Ok(())
 }
 
@@ -685,8 +788,15 @@ async fn save_entry(
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
+    let search = search_state(&app);
     blocking("Save entry", move || {
-        storage::write_entry(&dir, &key, &date, &title, &content)
+        storage::write_entry(&dir, &key, &date, &title, &content)?;
+        // Keep the session index in step without re-reading the file. The
+        // favourite flag is preserved by `upsert`.
+        if let Some(index) = search.lock().unwrap().index.as_mut() {
+            index.upsert(&date, &title, &content);
+        }
+        Ok(())
     })
     .await
 }
@@ -699,8 +809,13 @@ async fn delete_entry(
 ) -> Result<(), String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
+    let search = search_state(&app);
     blocking("Delete entry", move || {
-        storage::delete_entry(&dir, &key, &date)
+        storage::delete_entry(&dir, &key, &date)?;
+        if let Some(index) = search.lock().unwrap().index.as_mut() {
+            index.remove(&date);
+        }
+        Ok(())
     })
     .await
 }
@@ -768,7 +883,11 @@ async fn get_attachment(
 /// and returns base64 that the gallery feeds through its normal resize and
 /// encryption pipeline.
 #[tauri::command]
-async fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, String> {
+async fn read_dropped_images(
+    session: tauri::State<'_, SharedSession>,
+    paths: Vec<String>,
+) -> Result<Vec<DroppedImage>, String> {
+    require_unlocked(&session)?;
     blocking("Read dropped images", move || {
         attachments::read_dropped_images(&paths)
     })
@@ -781,13 +900,19 @@ async fn read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, St
 /// command is only a fallback: `None` means "no image", so normal text paste is
 /// never intercepted.
 #[tauri::command]
-async fn read_clipboard_image() -> Result<Option<ClipboardImage>, String> {
+async fn read_clipboard_image(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Option<ClipboardImage>, String> {
+    require_unlocked(&session)?;
     blocking("Read clipboard image", clipboard::read_image).await
 }
 
 /// Return image files copied in a file manager, before trying to read a bitmap.
 #[tauri::command]
-async fn read_clipboard_paths() -> Result<Vec<String>, String> {
+async fn read_clipboard_paths(
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Vec<String>, String> {
+    require_unlocked(&session)?;
     blocking("Read clipboard paths", || Ok(clipboard::read_file_paths())).await
 }
 
@@ -888,8 +1013,19 @@ async fn set_favourite(
 ) -> Result<bool, String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
+    let search = search_state(&app);
     blocking("Set favourite", move || {
-        storage::set_favourite(&dir, &key, &date, favourite)
+        let stored = storage::set_favourite(&dir, &key, &date, favourite)?;
+        if let Some(index) = search.lock().unwrap().index.as_mut() {
+            if stored {
+                index.set_favourite(&date, favourite);
+            } else {
+                // `set_favourite` is a no-op for a missing entry; make sure a
+                // stale document does not keep it searchable.
+                index.remove(&date);
+            }
+        }
+        Ok(stored)
     })
     .await
 }
@@ -932,6 +1068,79 @@ async fn list_broken_entries(
     .await
 }
 
+/// Snapshot returned by [`scan_vault`].
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct VaultScan {
+    entries: Vec<EntryMeta>,
+    broken: Vec<BrokenEntry>,
+}
+
+/// Scan the vault once, returning the sidebar metadata, the broken files and a
+/// freshly built full-text index.
+///
+/// The unlock path already has to read and decrypt every entry to find broken
+/// files. Folding the search-index build into that pass keeps the two from
+/// multiplying the startup cost. The index is installed only after the scan
+/// succeeds; until then `search_entries` reports `ready: false`.
+#[tauri::command]
+async fn scan_vault(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<VaultScan, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    let search = search_state(&app);
+    blocking("Scan vault", move || {
+        let generation = search.lock().unwrap().generation;
+        let (index, broken) = search::build(&dir, &key)?;
+        {
+            let mut state = search.lock().unwrap();
+            // Locking, switching workspace or a second scan supersedes this
+            // one. Dropping `index` here also zeroizes the plaintext we no
+            // longer need.
+            if state.generation != generation {
+                return Err("Vault changed while the search index was being built".to_string());
+            }
+            state.index = Some(index);
+        }
+        // The sidebar index is a cheap read; install the content index first so
+        // a save that lands during this step updates the fresh copy instead of
+        // being overwritten by the scan.
+        let entries = storage::list_entries(&dir, &key)?;
+        Ok(VaultScan { entries, broken })
+    })
+    .await
+}
+
+/// Search titles and bodies of every entry.
+///
+/// The query runs against the session index in memory; only the matching
+/// snippets are returned, so the whole decrypted corpus never crosses into the
+/// webview. When the index has not been built the response has `ready: false`
+/// and the frontend falls back to its local date/title filter.
+#[tauri::command]
+async fn search_entries(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    query: String,
+    limit: Option<usize>,
+    favourites_only: Option<bool>,
+) -> Result<search::SearchResponse, String> {
+    require_unlocked(&session)?;
+    let search = search_state(&app);
+    let limit = limit.unwrap_or(search::DEFAULT_LIMIT);
+    let favourites_only = favourites_only.unwrap_or(false);
+    blocking("Search entries", move || {
+        let state = search.lock().unwrap();
+        Ok(match state.index.as_ref() {
+            Some(index) => index.query(&query, limit, favourites_only),
+            None => search::SearchResponse::not_ready(),
+        })
+    })
+    .await
+}
+
 /// Copy a broken entry file to a location the user picks.
 ///
 /// The bytes are copied verbatim, so whatever is in the file survives even if
@@ -942,10 +1151,12 @@ async fn list_broken_entries(
 #[tauri::command]
 async fn export_broken_entry(
     app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
     date: String,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
+    require_unlocked(&session)?;
     let dir = diary_dir(&app)?;
     let (tx, rx) = std::sync::mpsc::channel();
     app.dialog()
@@ -956,9 +1167,7 @@ async fn export_broken_entry(
             let _ = tx.send(path);
         });
 
-    let picked = rx
-        .recv()
-        .map_err(|e| format!("Save dialog failed: {e}"))?;
+    let picked = rx.recv().map_err(|e| format!("Save dialog failed: {e}"))?;
 
     let Some(dest) = picked else {
         return Ok(None);
@@ -986,7 +1195,12 @@ async fn export_broken_entry(
 /// Importing from a folder is a desktop-only feature: mobile has no folder
 /// picker, so the command reports that instead of silently returning `None`.
 #[tauri::command]
-async fn pick_import_dir(app: tauri::AppHandle) -> Result<Option<String>, String> {
+async fn pick_import_dir(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Option<String>, String> {
+    require_unlocked(&session)?;
+
     #[cfg(mobile)]
     {
         let _ = app;
@@ -1128,29 +1342,6 @@ fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
-/// Enable or disable screenshot / screen-recording protection for the window.
-///
-/// Tauri maps this to `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` on
-/// Windows and `NSWindow.setSharingType(.none)` on macOS. Linux has no
-/// equivalent in `tao`, so the call is a no-op there.
-///
-/// The window is created with `contentProtected: true` in `tauri.conf.json` so
-/// the lock screen is covered too; the frontend flips it off only while the
-/// workspace picker is open, where the user may want to share their screen.
-///
-/// The command is named `set_screenshot_protection` rather than
-/// `set_content_protected` because Tauri already exports a built-in command of
-/// the latter name, and the generated macro names would collide.
-#[tauri::command]
-fn set_screenshot_protection(
-    window: tauri::WebviewWindow,
-    protected: bool,
-) -> Result<(), String> {
-    window
-        .set_content_protected(protected)
-        .map_err(|e| e.to_string())
-}
-
 /// Absolute path of the diary directory, shown in the UI for transparency.
 #[tauri::command]
 async fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
@@ -1193,11 +1384,36 @@ fn build_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
     MenuBuilder::new(app).item(&edit).build()
 }
 
+/// Reject navigation away from the app bundle.
+///
+/// CSP already blocks remote scripts and connections, but it does not stop a
+/// top-level `location.href` navigation. This guard keeps a compromised
+/// renderer from sending data to a remote URL that way.
+fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("navigation-guard")
+        .on_navigation(|_webview, url| {
+            if url.scheme() == "tauri" || url.scheme() == "about" {
+                return true;
+            }
+            // Windows uses http(s)://tauri.localhost for the bundled assets.
+            if url.host_str() == Some("tauri.localhost") {
+                return true;
+            }
+            // `tauri dev` serves the frontend from a local HTTP server.
+            cfg!(dev)
+                && matches!(url.scheme(), "http" | "https")
+                && matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
+        })
+        .build()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(navigation_guard())
         .plugin(tauri_plugin_dialog::init())
-        .manage(SharedSession::default());
+        .manage(SharedSession::default())
+        .manage(SharedSearch::default());
 
     // The menu is desktop-only: `tauri::menu` does not exist on mobile, and
     // there is no menu bar to attach it to.
@@ -1206,6 +1422,7 @@ pub fn run() {
 
     builder
         .invoke_handler(tauri::generate_handler![
+            app_info,
             get_settings,
             set_diary_dir,
             set_auto_lock,
@@ -1245,14 +1462,15 @@ pub fn run() {
             set_favourite,
             rebuild_index,
             list_broken_entries,
+            scan_vault,
+            search_entries,
             export_broken_entry,
             pick_import_dir,
             scan_import,
             run_import,
             upgrade_entries,
             today,
-            diary_path,
-            set_screenshot_protection
+            diary_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1410,11 +1628,7 @@ mod tests {
         // Mirrors the branch in `change_passphrase`.
         let current = "correct horse".to_string();
         let new = String::new();
-        let effective = if new.is_empty() {
-            current.clone()
-        } else {
-            new
-        };
+        let effective = if new.is_empty() { current.clone() } else { new };
         assert_eq!(effective, current);
     }
 
@@ -1422,11 +1636,7 @@ mod tests {
     fn a_non_empty_new_passphrase_replaces_the_current_one() {
         let current = "old".to_string();
         let new = "new".to_string();
-        let effective = if new.is_empty() {
-            current.clone()
-        } else {
-            new
-        };
+        let effective = if new.is_empty() { current.clone() } else { new };
         assert_eq!(effective, "new");
     }
 

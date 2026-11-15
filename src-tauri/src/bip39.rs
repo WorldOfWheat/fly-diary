@@ -134,8 +134,8 @@ pub fn words_to_entropy(words: &[String]) -> Result<Zeroizing<[u8; ENTROPY_BYTES
         }
     }
 
-    let expected_checksum = ((Sha256::digest(&entropy[..])[0] >> (8 - CHECKSUM_BITS)) as u8)
-        & ((1 << CHECKSUM_BITS) - 1);
+    let expected_checksum =
+        (Sha256::digest(&entropy[..])[0] >> (8 - CHECKSUM_BITS)) & ((1 << CHECKSUM_BITS) - 1);
     let mut actual_checksum = 0u8;
     for (offset, bit) in bits.iter().skip(ENTROPY_BYTES * 8).enumerate() {
         actual_checksum |= *bit << (CHECKSUM_BITS - 1 - offset);
@@ -301,8 +301,8 @@ mod tests {
     #[test]
     fn confirmation_rejects_duplicate_or_out_of_range_positions() {
         let words = entropy_to_words(&[9u8; ENTROPY_BYTES]).unwrap();
-        assert!(verify_answers(&words, &[0, 0, 1], &words[..3].to_vec()).is_err());
-        assert!(verify_answers(&words, &[0, 1, 12], &words[..3].to_vec()).is_err());
+        assert!(verify_answers(&words, &[0, 0, 1], &words[..3]).is_err());
+        assert!(verify_answers(&words, &[0, 1, 12], &words[..3]).is_err());
     }
 
     #[test]

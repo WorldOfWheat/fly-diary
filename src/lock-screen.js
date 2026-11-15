@@ -42,7 +42,6 @@
 //   closeRecovery      — (options?: { force?: boolean }) => void
 //   renderDateLabel    — () => void
 //   lockAndFlush       — () => Promise<void>
-//   setScreenshotProtection — (protected: boolean) => Promise<void>
 //
 // `enterApp` is *not* implemented here: revealing the app and picking today's
 // entry is the hand-off into the editor, which `main.js` owns. This module only
@@ -214,7 +213,7 @@ export function createLockScreen(deps) {
 
     const next = els.recoveryNewPass.value;
     const confirm = els.recoveryNewPassConfirm.value;
-    if (next.length < 6) {
+    if (next.length < 12) {
       els.recoveryUnlockError.textContent = deps.t("lock.errTooShort");
       els.recoveryNewPass.focus();
       return;
@@ -459,10 +458,8 @@ export function createLockScreen(deps) {
   async function openWorkspacePicker() {
     els.lockError.textContent = "";
     pickingWorkspace = true;
-    // The picker shows a filesystem path, not diary content, and the user may
-    // want to share their screen while choosing a folder. Relax the capture
-    // protection for the duration of the picker; `enterApp` restores it.
-    await deps.setScreenshotProtection(false);
+    // The native picker itself relaxes capture protection for its lifetime and
+    // restores it before returning.
     renderLockScreen();
     els.diaryDir.focus();
     els.diaryDir.select();
@@ -480,7 +477,6 @@ export function createLockScreen(deps) {
     if (!configured) return;
     els.lockError.textContent = "";
     pickingWorkspace = false;
-    await deps.setScreenshotProtection(true);
     try {
       const settings = await deps.invoke("get_settings");
       els.diaryDir.value = settings.diaryDir ?? "";
@@ -491,6 +487,23 @@ export function createLockScreen(deps) {
     await refreshVaultState();
     renderLockScreen();
     els.passphrase.focus();
+  }
+
+  /** Show the busy state immediately, before the slow Argon2 call starts. */
+  function setLockSubmitBusy(busy, creating = false) {
+    els.lockSubmit.disabled = busy;
+    els.lockSubmit.classList.toggle("is-busy", busy);
+    els.lockSubmit.setAttribute("aria-busy", busy ? "true" : "false");
+    els.lockForm?.setAttribute("aria-busy", busy ? "true" : "false");
+    if (busy) {
+      els.lockSubmit.textContent = deps.t(
+        creating ? "lock.submitCreating" : "lock.submitUnlocking"
+      );
+    } else {
+      els.lockSubmit.textContent = deps.t(
+        vaultInitialized ? "lock.submitUnlock" : "lock.submitCreate"
+      );
+    }
   }
 
   async function handleUnlockSubmit(event) {
@@ -506,17 +519,19 @@ export function createLockScreen(deps) {
     const creating = !vaultInitialized;
     if (creating) {
       const confirmValue = els.passphraseConfirm.value;
-      if (passphrase.length < 6) {
-        els.lockError.textContent = deps.t("lock.errTooShort");
-        return;
-      }
       if (passphrase !== confirmValue) {
         els.lockError.textContent = deps.t("lock.errMismatch");
         return;
       }
+      if (passphrase.length < 12) {
+        els.lockError.textContent = deps.t("lock.errTooShort");
+        return;
+      }
     }
 
-    els.lockSubmit.disabled = true;
+    // The button paints its spinner before the first await, so the Argon2id
+    // stretch never looks like a frozen UI.
+    setLockSubmitBusy(true, creating);
     try {
       // The path is persisted when the app is unconfigured (first run) *or*
       // when the user opened the workspace picker to point at another folder.
@@ -536,6 +551,9 @@ export function createLockScreen(deps) {
         // `detectVault` also refreshed `recoveryAvailable`; repaint so the
         // "Use recovery phrase" button matches the folder just committed.
         renderLockScreen();
+        // `renderLockScreen` restores the idle label; keep the busy state (and
+        // the create/unlock wording) on top of it.
+        setLockSubmitBusy(true, !vaultInitialized);
       }
 
       if (vaultInitialized) {
@@ -560,7 +578,7 @@ export function createLockScreen(deps) {
         typeof err === "string" ? err : deps.t("lock.errUnlockFailed");
       els.passphrase.select();
     } finally {
-      els.lockSubmit.disabled = false;
+      setLockSubmitBusy(false);
     }
   }
 

@@ -25,8 +25,13 @@ use std::path::{Path, PathBuf};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 
+use crate::fsutil;
+
 /// Name of the settings file inside the config directory.
 const SETTINGS_FILE: &str = "settings.xml";
+
+/// Settings only contain a path and two numbers; a huge file is malformed.
+const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 
 /// Idle minutes before the diary locks itself, used when the settings file
 /// predates the auto-lock feature.
@@ -113,6 +118,8 @@ pub fn settings_path(config_dir: &Path) -> PathBuf {
 /// The path must be absolute so the diary does not silently move when the
 /// process working directory changes, and it must not be the filesystem root.
 pub fn validate_diary_dir(dir: &Path) -> Result<(), String> {
+    use std::path::Component;
+
     if !dir.is_absolute() {
         return Err(format!(
             "Diary path must be absolute: {}",
@@ -121,6 +128,26 @@ pub fn validate_diary_dir(dir: &Path) -> Result<(), String> {
     }
     if dir.parent().is_none() {
         return Err("Diary path must not be the filesystem root".to_string());
+    }
+    // A path such as `/tmp/..` is absolute and has a parent, but resolves to
+    // the root. Reject parent components rather than trying to canonicalize a
+    // directory that may not exist yet.
+    if dir
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("Diary path must not contain '..'".to_string());
+    }
+    match fs::symlink_metadata(dir) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("Diary path must not be a symbolic link".to_string())
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err("Diary path must be a directory".to_string())
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Could not inspect diary path: {error}")),
     }
     Ok(())
 }
@@ -136,7 +163,7 @@ fn append(target: &mut Option<String>, value: &str) {
 /// Read the settings file, returning `None` when it does not exist yet.
 pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
     let path = settings_path(config_dir);
-    let text = match fs::read_to_string(&path) {
+    let text = match fsutil::read_string_limited(&path, MAX_SETTINGS_BYTES) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("Failed to read settings: {e}")),
@@ -226,9 +253,10 @@ pub fn read_settings(config_dir: &Path) -> Result<Option<Settings>, String> {
     let autosave_delay_ms = match autosave_delay {
         None => DEFAULT_AUTOSAVE_DELAY_MS,
         Some(text) => {
-            let ms: u32 = text.trim().parse().map_err(|_| {
-                format!("Settings file has an invalid <autosave-delay-ms>: {text}")
-            })?;
+            let ms: u32 = text
+                .trim()
+                .parse()
+                .map_err(|_| format!("Settings file has an invalid <autosave-delay-ms>: {text}"))?;
             validate_autosave_delay(ms)?;
             ms
         }
@@ -271,7 +299,9 @@ pub fn to_xml(settings: &Settings) -> Result<String, String> {
         .write_event(Event::Start(BytesStart::new("auto-lock-minutes")))
         .map_err(|e| format!("Failed to write <auto-lock-minutes>: {e}"))?;
     writer
-        .write_event(Event::Text(BytesText::new(&settings.auto_lock_minutes.to_string())))
+        .write_event(Event::Text(BytesText::new(
+            &settings.auto_lock_minutes.to_string(),
+        )))
         .map_err(|e| format!("Failed to write auto-lock value: {e}"))?;
     writer
         .write_event(Event::End(BytesEnd::new("auto-lock-minutes")))
@@ -369,6 +399,12 @@ mod tests {
     fn rejects_filesystem_root() {
         let err = validate_diary_dir(Path::new("/")).unwrap_err();
         assert!(err.contains("root"), "got: {err}");
+    }
+
+    #[test]
+    fn rejects_parent_components() {
+        let err = validate_diary_dir(Path::new("/tmp/..")).unwrap_err();
+        assert!(err.contains(".."), "got: {err}");
     }
 
     #[test]

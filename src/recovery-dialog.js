@@ -22,6 +22,7 @@
 // webview.
 
 import { createFocusTrap } from "./focus-trap.js";
+import { animateOverlayExit } from "./lib/motion.js";
 import {
   createWordFields,
   loadBip39Words,
@@ -260,6 +261,14 @@ export function createRecoveryDialog(deps) {
   function close({ force = false } = {}) {
     if (!isOpen()) return;
     if (busy && !force) return;
+    // Never clone the phrase itself into an exit ghost: the backdrop alone is
+    // enough of an exit cue, and the words must not survive in the DOM.
+    if (!els.recoveryOverlay.hidden) {
+      animateOverlayExit(els.recoveryOverlay, { backdropOnly: true });
+    }
+    if (!els.recoveryConfirmOverlay.hidden) {
+      animateOverlayExit(els.recoveryConfirmOverlay, { backdropOnly: true });
+    }
     stage = null;
     els.recoveryOverlay.hidden = true;
     els.recoveryConfirmOverlay.hidden = true;

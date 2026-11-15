@@ -533,6 +533,10 @@ export function initEventWiring(deps) {
     deps.renderList();
   });
 
+  if (els.yearJump) {
+    on(els.yearJump, "change", () => deps.jumpToYear(els.yearJump.value));
+  }
+
   // Virtual scrolling: redraw the window as the user scrolls. `passive` keeps
   // the scroll smooth because the handler never calls `preventDefault()`.
   on(els.listScroll, "scroll", () => deps.renderVisibleRows(), {

@@ -143,6 +143,7 @@ const ELEMENT_IDS = [
   "brokenExportBtn",
   "brokenDeleteBtn",
   "search",
+  "yearJump",
   "listScroll",
 ];
 
@@ -159,6 +160,7 @@ function harness(overrides = {}) {
   // Elements the wiring reads beyond event handling.
   els.app = fakeTarget({ hidden: false });
   els.search.value = "";
+  els.yearJump.value = "";
   els.listScroll.scrollTop = 0;
   els.calendar.contains = () => false;
   els.dateLabel.contains = () => false;
@@ -244,6 +246,7 @@ function harness(overrides = {}) {
     isImportOpen: () => false,
     isImportDone: () => false,
     setSearchQuery: spy("setSearchQuery"),
+    jumpToYear: spy("jumpToYear"),
     renderList: spy("renderList"),
     renderVisibleRows: spy("renderVisibleRows"),
     saveNow: spy("saveNow"),
@@ -952,6 +955,15 @@ test("the search box resets the scroll position and re-renders", () => {
     assert.deepEqual(h.argsOf("setSearchQuery"), ["trip"]);
     assert.equal(h.els.listScroll.scrollTop, 0);
     assert.deepEqual(h.names(), ["setSearchQuery", "renderList"]);
+  });
+});
+
+test("the year jump reports the selected year", () => {
+  withHarness((h) => {
+    h.els.yearJump.value = "2023";
+    h.els.yearJump.dispatch("change");
+
+    assert.deepEqual(h.argsOf("jumpToYear"), ["2023"]);
   });
 });
 

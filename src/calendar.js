@@ -1,4 +1,5 @@
 import { createFocusTrap } from "./focus-trap.js";
+import { animateOverlayExit } from "./lib/motion.js";
 
 // ---------------------------------------------------------------------------
 // Calendar overlay
@@ -181,6 +182,7 @@ export function createCalendar(deps) {
 
   function closeCalendar({ restoreFocus = false } = {}) {
     if (!isCalendarOpen()) return;
+    animateOverlayExit(els.calendar);
     els.calendar.hidden = true;
     focusTrap.deactivate({ restore: false });
     els.dateLabel.setAttribute("aria-expanded", "false");

@@ -104,6 +104,10 @@
      the gap lives inside the pitch and the scroll math stays exact. */
   --row-gap: 0.25rem;
 
+  /* Month separator row in the entry list. Read by main.js alongside `--row-h`
+     so the virtual list can mix entry rows and month headers. */
+  --month-h: 1.75rem;
+
   /* Editor measure: long lines are hard to read, so cap the text column and
      centre it once the window gets wide. */
   --measure: 46rem;

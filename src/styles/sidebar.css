@@ -114,6 +114,44 @@ html[data-input-modality="keyboard"] #search:focus {
   overflow-y: auto;
 }
 
+/* Year jump stays at the top of the scroll viewport. It is part of the scroll
+   container's flow, so the spacer below starts after it; main.js subtracts its
+   height from the viewport when computing which rows to render. */
+.entry-year-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem 0.45rem;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.year-jump-label {
+  flex: none;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.year-jump {
+  flex: 1;
+  min-width: 0;
+  min-height: 1.75rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.75rem;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+}
+
+html[data-input-modality="keyboard"] .year-jump:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .entry-spacer {
   position: relative;
   width: 100%;
@@ -129,6 +167,24 @@ html[data-input-modality="keyboard"] #search:focus {
   list-style: none;
 }
 
+/* Applied only when the view/filter changes, never while scrolling the
+   virtual list. */
+@keyframes list-swap {
+  from {
+    opacity: 0.55;
+    transform: translateY(0.125rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.entry-list.is-swapping {
+  animation: list-swap 140ms ease-out;
+}
+
 /* Rows are absolutely positioned by `renderList()` at `index * --row-h`. The
    painted box is one gap shorter than that pitch, which is what separates the
    rows visually without breaking the scroll math. The `<li>` wrapper carries
@@ -138,6 +194,42 @@ html[data-input-modality="keyboard"] #search:focus {
   left: 0.5rem;
   right: 0.5rem;
   height: calc(var(--row-h) - var(--row-gap));
+}
+
+/* Month separator: a rule with a centred label between entry groups. */
+.entry-month {
+  position: absolute;
+  left: 0.5rem;
+  right: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: var(--month-h);
+  pointer-events: none;
+}
+
+.entry-month::before,
+.entry-month::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.entry-month-label {
+  flex: none;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* The broken view is a normal flow list, so its separators are not positioned
+   by the virtual-list offsets. */
+.entry-month-static {
+  position: static;
+  height: var(--month-h);
 }
 
 .entry-item {
@@ -218,6 +310,20 @@ html[data-input-modality="keyboard"] .entry-item:focus {
 
 .entry-item .entry-preview.empty {
   font-style: italic;
+}
+
+/* Full-text results: the title is a strong lead-in, the snippet follows on the
+   same ellipsised line so the virtual list keeps its fixed row height. */
+.entry-item .entry-preview.search-preview .search-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.entry-item .entry-preview mark {
+  background: var(--accent-wash-strong);
+  color: inherit;
+  border-radius: 0.125rem;
+  padding: 0 0.0625rem;
 }
 
 /* The dark favourite background is too close to the muted text token; use the

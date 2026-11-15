@@ -19,6 +19,15 @@ import {
   weekdayName,
 } from "./i18n.js";
 import { toISODate, shiftDate, monthStartOf } from "./lib/dates.js";
+import { historyItems } from "./lib/history.js";
+import { highlightedSegments } from "./lib/highlight.js";
+import {
+  buildDisplayRows,
+  rowIndexAt,
+  yearsOf,
+  firstRowForYear,
+} from "./lib/list-rows.js";
+import { prefersReducedMotion, setExitAnimationsEnabled } from "./lib/motion.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -45,8 +54,24 @@ let savedContent = "";
 let saveTimer = null;
 /** All entry metadata, newest first. */
 let allEntries = [];
+/** Date → metadata and date → broken reason, for the review strip. */
+let entriesByDate = new Map();
+let brokenByDate = new Map();
 /** Search filter string. */
 let searchQuery = "";
+/**
+ * Full-text hits for `searchQuery`, or `null` while the query is empty (or the
+ * backend index is not ready) and the local date/title filter is in charge.
+ */
+let searchResults = null;
+/** Debounce timer for full-text search. */
+let searchTimer = null;
+/** Monotonic id so an out-of-order response can be discarded. */
+let searchSeq = 0;
+/** Milliseconds between the last keystroke and a backend search. */
+const SEARCH_DEBOUNCE_MS = 200;
+/** LocalStorage key for the "Looking back" collapsed state. */
+const HISTORY_COLLAPSED_KEY = "fly-diary:history-collapsed";
 /**
  * Which sidebar view is showing: `"all"`, `"favourites"` or `"broken"`.
  *
@@ -178,9 +203,24 @@ let nativeFileDrop;
 // Status / word count
 // ---------------------------------------------------------------------------
 
+let statusPulseTimer = null;
+
 function setStatus(text, saved = false) {
+  const changed = els.status.textContent !== text;
   els.status.textContent = text;
   els.status.classList.toggle("saved", saved);
+  if (saved && changed && !prefersReducedMotion()) {
+    // Restart the short confirmation pulse only when the message actually
+    // changed; repeated autosaves of the same "Saved" text should not blink.
+    els.status.classList.remove("is-pulsing");
+    void els.status.offsetWidth;
+    els.status.classList.add("is-pulsing");
+    clearTimeout(statusPulseTimer);
+    statusPulseTimer = setTimeout(
+      () => els.status.classList.remove("is-pulsing"),
+      220
+    );
+  }
 }
 
 function updateWordCount() {
@@ -209,36 +249,59 @@ function updateWordCount() {
  * silently drift out of sync with the CSS.
  */
 let ROW_HEIGHT = 52;
+/** Height of a month separator row, measured from `--month-h`. */
+let MONTH_HEIGHT = 28;
 /** Extra rows rendered above and below the viewport to hide scroll seams. */
 const OVERSCAN = 6;
+/** Flat row model: entry rows and month separators, each with an absolute top. */
+let displayRows = [];
+/** Date → entry row, used for jumps without scanning the model. */
+let entryRowByDate = new Map();
+/** Last year chosen in the jump select. */
+let selectedYear = "";
+/** Set just before a filter/view render that should cross-fade. */
+let animateNextList = false;
 
-/** Read `--row-h` from the document and return it in CSS pixels. */
-function measureRowHeight() {
+/** Read a rem-valued CSS custom property and return it in CSS pixels. */
+function measureRem(property, fallback) {
   const raw = getComputedStyle(document.documentElement)
-    .getPropertyValue("--row-h")
+    .getPropertyValue(property)
     .trim();
-  if (!raw) return ROW_HEIGHT;
+  if (!raw) return fallback;
 
-  // `--row-h` is authored in rem, so resolve it against the root font size.
+  // The tokens are authored in rem, so resolve against the root font size.
   const rem =
     parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const value = raw.endsWith("rem") ? parseFloat(raw) * rem : parseFloat(raw);
 
-  return Number.isFinite(value) && value > 0 ? value : ROW_HEIGHT;
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/** Read `--row-h` from the document and return it in CSS pixels. */
+function measureRowHeight() {
+  return measureRem("--row-h", ROW_HEIGHT);
+}
+
+function measureMonthHeight() {
+  return measureRem("--month-h", MONTH_HEIGHT);
 }
 
 /**
- * Keep `ROW_HEIGHT` in sync with the stylesheet.
+ * Keep the measured heights in sync with the stylesheet.
  *
  * The root font size is a `clamp()` over the viewport width, so resizing the
- * window changes the row height. When that happens the spacer and every
- * rendered row are stale, so we re-measure and redraw.
+ * window changes both heights. When that happens the spacer and every rendered
+ * row are stale, so we re-measure and redraw.
  */
 function watchRowHeight() {
   const sync = () => {
-    const next = measureRowHeight();
-    if (Math.abs(next - ROW_HEIGHT) < 0.5) return;
-    ROW_HEIGHT = next;
+    const nextRow = measureRowHeight();
+    const nextMonth = measureMonthHeight();
+    const rowChanged = Math.abs(nextRow - ROW_HEIGHT) >= 0.5;
+    const monthChanged = Math.abs(nextMonth - MONTH_HEIGHT) >= 0.5;
+    if (!rowChanged && !monthChanged) return;
+    ROW_HEIGHT = nextRow;
+    MONTH_HEIGHT = nextMonth;
     if (visibleEntries.length > 0) renderList();
   };
 
@@ -284,11 +347,15 @@ function applyFontScale() {
     els.fontLarger.disabled = fontScale >= FONT_SCALE_MAX;
   }
 
-  // The row height is derived from the root font size, so the virtual-scroll
-  // spacer and the rendered rows have to be recomputed.
-  const next = measureRowHeight();
-  if (Math.abs(next - ROW_HEIGHT) >= 0.5) {
-    ROW_HEIGHT = next;
+  // The row and month heights are derived from the root font size, so the
+  // virtual-scroll spacer and the rendered rows have to be recomputed.
+  const nextRow = measureRowHeight();
+  const nextMonth = measureMonthHeight();
+  const rowChanged = Math.abs(nextRow - ROW_HEIGHT) >= 0.5;
+  const monthChanged = Math.abs(nextMonth - MONTH_HEIGHT) >= 0.5;
+  if (rowChanged || monthChanged) {
+    ROW_HEIGHT = nextRow;
+    MONTH_HEIGHT = nextMonth;
     if (visibleEntries.length > 0) renderList();
   }
 }
@@ -393,6 +460,7 @@ function refreshForLocale() {
   calendar.renderWeekdayHeaders();
   renderDateLabel();
   renderFavouriteButton();
+  renderHistory();
   applyTheme();
   updateWordCount();
   if (calendar.isCalendarOpen()) calendar.renderCalendar();
@@ -456,9 +524,29 @@ function resolveTheme(mode) {
 }
 
 /** Paint the resolved theme and refresh the button's icon and tooltip. */
+let themeTransitionTimer = null;
+
 function applyTheme() {
   const resolved = resolveTheme(themeMode);
-  document.documentElement.dataset.theme = resolved;
+  const root = document.documentElement;
+  const previous = root.dataset.theme;
+
+  // Only animate a real switch after first paint. `previous` is empty during
+  // startup, and an unchanged resolution (for example a locale refresh) should
+  // not flash the whole interface.
+  if (previous && previous !== resolved && !prefersReducedMotion()) {
+    root.classList.add("theme-changing");
+    // Flush the transition class before the palette changes so the browser
+    // paints an interpolated path instead of swapping instantly.
+    void root.offsetWidth;
+    clearTimeout(themeTransitionTimer);
+    themeTransitionTimer = setTimeout(
+      () => root.classList.remove("theme-changing"),
+      200
+    );
+  }
+
+  root.dataset.theme = resolved;
 
   if (!els.themeToggle) return;
   els.themeToggle.dataset.themeMode = themeMode;
@@ -526,9 +614,18 @@ let renderedEnd = -1;
  *
  * The view filter runs first: the favourites page is a subset of the same
  * list, and searching inside it should only ever narrow that subset.
+ *
+ * A non-empty query normally comes back from the backend as `searchResults`.
+ * `null` means the index is not ready (or the query was just cleared), so the
+ * cheap local date/title filter runs instead and the user still sees something
+ * useful while typing.
  */
 function applyFilter() {
   const q = searchQuery.trim().toLowerCase();
+  if (q && searchResults !== null) {
+    visibleEntries = searchResults;
+    return;
+  }
   const base =
     currentView === "favourites"
       ? allEntries.filter((e) => e.favourite)
@@ -538,6 +635,66 @@ function applyFilter() {
         (e) => e.date.includes(q) || (e.title || "").toLowerCase().includes(q)
       )
     : base;
+}
+
+/** Cancel a pending debounced search. */
+function cancelPendingSearch() {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+    searchTimer = null;
+  }
+}
+
+/**
+ * Schedule a full-text search for the current query.
+ *
+ * The input handler already re-renders the local date/title filter, so this
+ * only has to debounce the expensive request. Every request carries a sequence
+ * number: typing while a search is in flight must not let the older response
+ * overwrite the newer one.
+ */
+function scheduleSearch({ immediate = false } = {}) {
+  cancelPendingSearch();
+  const query = searchQuery.trim();
+  if (!query) {
+    searchSeq += 1;
+    searchResults = null;
+    renderList();
+    return;
+  }
+  if (immediate) {
+    void runSearch(query);
+    return;
+  }
+  searchTimer = setTimeout(() => {
+    searchTimer = null;
+    void runSearch(query);
+  }, SEARCH_DEBOUNCE_MS);
+}
+
+async function runSearch(query) {
+  const seq = ++searchSeq;
+  try {
+    const response = await invoke("search_entries", {
+      query,
+      favouritesOnly: currentView === "favourites",
+    });
+    // A newer keystroke or a view switch invalidates this response.
+    if (seq !== searchSeq || query !== searchQuery.trim()) return;
+    if (!response?.ready) {
+      searchResults = null;
+      renderList();
+      return;
+    }
+    searchResults = response.hits ?? [];
+    renderList();
+  } catch (err) {
+    if (seq !== searchSeq || query !== searchQuery.trim()) return;
+    console.error("search_entries failed:", err);
+    searchResults = null;
+    renderList();
+    setStatus(t("sidebar.searchFailed"));
+  }
 }
 
 /** Broken rows matching the current search, newest first. */
@@ -564,11 +721,30 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Append `text` to `container`, wrapping the UTF-16 ranges in `<mark>`.
+ *
+ * Ranges come from the backend as `[start, end]` pairs so the frontend never
+ * has to re-implement case folding. Everything is inserted as text nodes: entry
+ * content must never be interpreted as HTML.
+ */
+function appendHighlighted(container, text, ranges) {
+  for (const segment of highlightedSegments(text, ranges)) {
+    if (!segment.marked) {
+      container.append(document.createTextNode(segment.text));
+      continue;
+    }
+    const mark = document.createElement("mark");
+    mark.textContent = segment.text;
+    container.append(mark);
+  }
+}
+
 /** Build the DOM node for one entry row. */
-function createRow(entry, index) {
+function createRow(entry, top) {
   const li = document.createElement("li");
   li.className = "entry-row";
-  li.style.top = `${index * ROW_HEIGHT}px`;
+  li.style.top = `${top}px`;
 
   // The row itself is the interactive element: a real button gives keyboard
   // users Enter/Space and screen readers an unambiguous "button" role.
@@ -591,8 +767,20 @@ function createRow(entry, index) {
   dateRow.append(dateText, weekday);
 
   const preview = document.createElement("div");
-  preview.className = "entry-preview" + (entry.title ? "" : " empty");
-  preview.textContent = entry.title || t("common.untitled");
+  if (Array.isArray(entry.matches) && typeof entry.snippet === "string") {
+    preview.className = "entry-preview search-preview";
+    const title = document.createElement("span");
+    title.className = "search-title";
+    title.textContent = entry.title || t("common.untitled");
+    preview.append(title);
+    if (entry.snippet) {
+      preview.append(document.createTextNode(" · "));
+      appendHighlighted(preview, entry.snippet, entry.matches);
+    }
+  } else {
+    preview.className = "entry-preview" + (entry.title ? "" : " empty");
+    preview.textContent = entry.title || t("common.untitled");
+  }
 
   button.append(dateRow, preview);
   button.addEventListener("click", () => selectDate(entry.date));
@@ -600,15 +788,45 @@ function createRow(entry, index) {
   return li;
 }
 
+/** Month separator: a horizontal rule with the localised month label. */
+function createMonthRow(month, top = null) {
+  const li = document.createElement("li");
+  li.className = "entry-month" + (top === null ? " entry-month-static" : "");
+  if (top !== null) li.style.top = `${top}px`;
+
+  const label = document.createElement("span");
+  label.className = "entry-month-label";
+  label.textContent = formatMonth(`${month}-01`);
+  li.appendChild(label);
+  return li;
+}
+
+/** Render one row from the mixed entry/month display model. */
+function createDisplayRow(row) {
+  return row.type === "month"
+    ? createMonthRow(row.month, row.top)
+    : createRow(row.entry, row.top);
+}
+
+/** Visible height of the list viewport, excluding the sticky year bar. */
+function listViewportHeight() {
+  const barHeight =
+    els.yearBar && !els.yearBar.hidden ? els.yearBar.offsetHeight : 0;
+  return Math.max(0, (els.listScroll.clientHeight || 0) - barHeight);
+}
+
 /** Render only the rows that intersect the viewport. */
 function renderVisibleRows(force = false) {
-  const total = visibleEntries.length;
-  const viewport = els.listScroll.clientHeight || 0;
+  const total = displayRows.length;
+  if (total === 0) return;
+
+  const viewport = listViewportHeight();
   const scrollTop = els.listScroll.scrollTop;
 
-  let start = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
+  let start = rowIndexAt(displayRows, scrollTop) - OVERSCAN;
   if (start < 0) start = 0;
-  let end = Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN;
+  let end =
+    rowIndexAt(displayRows, scrollTop + viewport) + 1 + OVERSCAN;
   if (end > total) end = total;
 
   if (!force && start === renderedStart && end === renderedEnd) return;
@@ -617,7 +835,7 @@ function renderVisibleRows(force = false) {
 
   const frag = document.createDocumentFragment();
   for (let i = start; i < end; i += 1) {
-    frag.appendChild(createRow(visibleEntries[i], i));
+    frag.appendChild(createDisplayRow(displayRows[i]));
   }
   els.list.replaceChildren(frag);
 }
@@ -634,6 +852,9 @@ function renderBrokenList() {
   els.listSpacer.style.height = "0px";
   renderedStart = -1;
   renderedEnd = -1;
+  displayRows = [];
+  entryRowByDate = new Map();
+  hideYearJump();
 
   if (rows.length === 0) {
     els.list.replaceChildren();
@@ -647,7 +868,14 @@ function renderBrokenList() {
   }
 
   const frag = document.createDocumentFragment();
+  let month = "";
   for (const broken of rows) {
+    const brokenMonth = broken.date.slice(0, 7);
+    if (brokenMonth !== month) {
+      frag.appendChild(createMonthRow(brokenMonth));
+      month = brokenMonth;
+    }
+
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
@@ -680,6 +908,24 @@ function renderBrokenList() {
   els.list.replaceChildren(frag);
 }
 
+function animateListSwap() {
+  if (!els.list || prefersReducedMotion()) return;
+  els.list.classList.remove("is-swapping");
+  void els.list.offsetWidth;
+  els.list.classList.add("is-swapping");
+}
+
+/** Mark the next render as a filter/view change worth animating. */
+function requestListSwap() {
+  animateNextList = true;
+}
+
+function finishListRender() {
+  if (!animateNextList) return;
+  animateNextList = false;
+  animateListSwap();
+}
+
 /** Full re-render: refilter, resize the spacer, then draw the viewport. */
 function renderList() {
   // The calendar marks days that already have an entry, so it has to follow
@@ -688,6 +934,7 @@ function renderList() {
 
   if (currentView === "broken") {
     renderBrokenList();
+    finishListRender();
     return;
   }
 
@@ -698,6 +945,9 @@ function renderList() {
     els.list.replaceChildren();
     renderedStart = -1;
     renderedEnd = -1;
+    displayRows = [];
+    entryRowByDate = new Map();
+    hideYearJump();
     const li = document.createElement("li");
     li.className = "list-empty";
     if (searchQuery.trim()) {
@@ -712,21 +962,30 @@ function renderList() {
           : t("sidebar.empty");
     }
     els.list.appendChild(li);
+    finishListRender();
     return;
   }
 
-  els.listSpacer.style.height = `${visibleEntries.length * ROW_HEIGHT}px`;
+  const model = buildDisplayRows(visibleEntries, ROW_HEIGHT, MONTH_HEIGHT);
+  displayRows = model.rows;
+  entryRowByDate = model.byDate;
+  els.listSpacer.style.height = `${model.height}px`;
+  renderYearJump();
   renderVisibleRows(true);
+  finishListRender();
 }
 
 /** Drop every rendered row and forget the viewport window (used on lock). */
 function resetList() {
   visibleEntries = [];
+  displayRows = [];
+  entryRowByDate = new Map();
   renderedStart = -1;
   renderedEnd = -1;
   els.listSpacer.style.height = "0px";
   els.list.replaceChildren();
   els.listScroll.scrollTop = 0;
+  hideYearJump();
 }
 
 /** Update the active highlight without rebuilding the list. */
@@ -739,20 +998,74 @@ function highlightActive() {
   }
 }
 
+/** Hide the year jump bar when there is nothing to jump through. */
+function hideYearJump() {
+  selectedYear = "";
+  if (els.yearBar) els.yearBar.hidden = true;
+  if (els.yearJump) els.yearJump.replaceChildren();
+}
+
+/** Rebuild the year options from the currently visible entries. */
+function renderYearJump() {
+  if (!els.yearBar || !els.yearJump) return;
+  if (currentView === "broken") {
+    hideYearJump();
+    return;
+  }
+  const years = yearsOf(visibleEntries);
+  if (years.length === 0) {
+    hideYearJump();
+    return;
+  }
+
+  const currentYear = currentDate ? currentDate.slice(0, 4) : "";
+  if (!years.includes(selectedYear)) {
+    selectedYear = years.includes(currentYear) ? currentYear : years[0];
+  }
+
+  const existing = [...els.yearJump.options].map((option) => option.value);
+  if (existing.join("\u0000") !== years.join("\u0000")) {
+    const options = years.map((year) => {
+      const option = document.createElement("option");
+      option.value = year;
+      option.textContent = year;
+      return option;
+    });
+    els.yearJump.replaceChildren(...options);
+  }
+  els.yearJump.value = selectedYear;
+  els.yearBar.hidden = false;
+}
+
+/** Scroll to the first entry of `year`, keeping its month label visible. */
+function jumpToYear(year) {
+  if (!year) return;
+  selectedYear = year;
+  const hit = firstRowForYear(displayRows, year);
+  if (!hit) return;
+  els.listScroll.scrollTop = hit.header ? hit.header.top : hit.row.top;
+  renderVisibleRows(true);
+}
+
 /** Scroll the sidebar so `date` is visible, rendering it if necessary. */
 function scrollDateIntoView(date) {
-  const index = visibleEntries.findIndex((e) => e.date === date);
-  if (index < 0) return;
+  const row = entryRowByDate.get(date);
+  if (!row) return;
 
-  const top = index * ROW_HEIGHT;
-  const bottom = top + ROW_HEIGHT;
+  const header =
+    row.index > 0 && displayRows[row.index - 1]?.type === "month"
+      ? displayRows[row.index - 1]
+      : null;
+  const top = header ? header.top : row.top;
+  const bottom = row.top + row.height;
   const viewTop = els.listScroll.scrollTop;
-  const viewBottom = viewTop + els.listScroll.clientHeight;
+  const viewport = listViewportHeight();
+  const viewBottom = viewTop + viewport;
 
   if (top < viewTop) {
     els.listScroll.scrollTop = top;
   } else if (bottom > viewBottom) {
-    els.listScroll.scrollTop = bottom - els.listScroll.clientHeight;
+    els.listScroll.scrollTop = bottom - viewport;
   }
   renderVisibleRows();
 }
@@ -761,21 +1074,120 @@ function scrollDateIntoView(date) {
 // Data operations
 // ---------------------------------------------------------------------------
 
+/** Rebuild the date-keyed lookup used by the review strip. */
+function reindexEntries() {
+  entriesByDate = new Map(allEntries.map((entry) => [entry.date, entry]));
+  brokenByDate = new Map(brokenEntries.map((entry) => [entry.date, entry]));
+}
+
+/** Display title for a review card, including the broken and untitled cases. */
+function historyTitle(item) {
+  if (item.broken) return t("history.broken");
+  return item.title || t("common.untitled");
+}
+
 /**
- * Refresh the broken-file list and the sidebar tab that advertises it.
+ * Draw the "on this day" cards for the date currently open.
+ *
+ * This uses only the metadata already loaded for the sidebar, so it costs no
+ * IPC or decryption. The whole section is hidden when none of the three look-back
+ * dates has an entry.
+ */
+function renderHistory() {
+  if (!els.onThisDay || !els.onThisDayList) return;
+  const items = currentDate
+    ? historyItems(currentDate, entriesByDate, brokenByDate)
+    : [];
+  els.onThisDay.hidden = items.length === 0;
+  if (items.length === 0) {
+    els.onThisDayList.replaceChildren();
+    return;
+  }
+
+  if (els.onThisDayTitle) {
+    const isToday = currentDate === toISODate(new Date());
+    els.onThisDayTitle.textContent = t(
+      isToday ? "history.titleToday" : "history.title"
+    );
+  }
+
+  const rows = items.map((item) => {
+    const li = document.createElement("li");
+    li.className = "on-this-day-item";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      "history-card" +
+      (item.favourite ? " favourite" : "") +
+      (item.broken ? " broken" : "");
+    button.dataset.date = item.date;
+
+    const offset = document.createElement("span");
+    offset.className = "history-offset";
+    offset.textContent = t(item.offsetKey);
+    const date = document.createElement("span");
+    date.className = "history-date";
+    date.textContent = item.date;
+    const title = document.createElement("span");
+    title.className = "history-title";
+    const titleText = historyTitle(item);
+    title.textContent = titleText;
+
+    button.append(offset, date, title);
+    button.setAttribute(
+      "aria-label",
+      t("history.open", {
+        offset: t(item.offsetKey),
+        date: item.date,
+        title: titleText,
+      })
+    );
+    button.addEventListener("click", () => selectDate(item.date));
+    li.appendChild(button);
+    return li;
+  });
+
+  els.onThisDayList.replaceChildren(...rows);
+}
+
+/**
+ * Restore the saved open/collapsed state of the review strip and persist it
+ * when the summary is toggled. `<details>` provides the keyboard and screen
+ * reader behaviour; only the preference needs wiring.
+ */
+function initHistoryDisclosure() {
+  if (!els.onThisDay) return;
+  try {
+    if (localStorage.getItem(HISTORY_COLLAPSED_KEY) === "1") {
+      els.onThisDay.open = false;
+    }
+  } catch {
+    // Private mode or a locked-down webview: keep the default (open).
+  }
+  els.onThisDay.addEventListener("toggle", () => {
+    try {
+      localStorage.setItem(
+        HISTORY_COLLAPSED_KEY,
+        els.onThisDay.open ? "0" : "1"
+      );
+    } catch {
+      // The state simply will not survive this session.
+    }
+  });
+}
+
+/**
+ * Apply a broken-file list to the sidebar and its tab.
  *
  * The tab is hidden entirely when nothing is broken, so a healthy diary never
  * shows a scary red badge. `announce` is only true on the first load, so the
  * user is told once per session rather than on every autosave.
  */
-async function refreshBroken(announce = false) {
+function applyBrokenState(list, announce = false) {
   const previous = brokenEntries.length;
-  try {
-    brokenEntries = await invoke("list_broken_entries");
-  } catch (err) {
-    console.error("list_broken_entries failed:", err);
-    brokenEntries = [];
-  }
+  brokenEntries = Array.isArray(list) ? list : [];
+  reindexEntries();
 
   if (els.brokenCount) {
     els.brokenCount.textContent = brokenEntries.length
@@ -794,6 +1206,17 @@ async function refreshBroken(announce = false) {
 
   if (announce && brokenEntries.length > previous) {
     setStatus(t("broken.notify", { n: brokenEntries.length }));
+  }
+  renderHistory();
+}
+
+/** Refresh the broken-file list without touching the search index. */
+async function refreshBroken(announce = false) {
+  try {
+    applyBrokenState(await invoke("list_broken_entries"), announce);
+  } catch (err) {
+    console.error("list_broken_entries failed:", err);
+    applyBrokenState([], announce);
   }
 }
 
@@ -842,10 +1265,12 @@ async function upgradeEntries() {
 /**
  * Reload the sidebar from disk.
  *
- * `scanBroken` controls whether the broken-file list is refreshed too. That
- * refresh is expensive: `list_broken_entries` reads, parses and decrypts *every*
- * entry file in the vault, because a broken file is by definition absent from
- * the index and can only be found by walking the directory.
+ * `scanBroken` controls whether the vault is scanned end to end. That scan is
+ * expensive: it reads, parses and decrypts *every* entry file, because a broken
+ * file is by definition absent from the index and can only be found by walking
+ * the directory. `scan_vault` does that work once and returns both the broken
+ * list and a freshly built full-text index, so the two features never pay for
+ * the same pass twice.
  *
  * Saving cannot create a broken file — the app just wrote it with the key it
  * holds — so the autosave path passes `false` and skips the scan entirely. The
@@ -858,16 +1283,33 @@ async function refreshList({ scanBroken = true } = {}) {
   if (!lockScreen.isVaultInitialized()) {
     allEntries = [];
     brokenEntries = [];
+    searchResults = null;
+    cancelPendingSearch();
+    reindexEntries();
     renderList();
+    renderHistory();
     return;
   }
   try {
-    allEntries = await invoke("list_entries");
-    if (scanBroken) await refreshBroken();
+    if (scanBroken) {
+      const snapshot = await invoke("scan_vault");
+      allEntries = snapshot?.entries ?? [];
+      applyBrokenState(snapshot?.broken ?? [], false);
+    } else {
+      allEntries = await invoke("list_entries");
+    }
+    reindexEntries();
+    renderHistory();
     renderList();
+    // The scan may have changed an entry the user is currently searching for.
+    if (scanBroken && searchQuery.trim()) {
+      await runSearch(searchQuery.trim());
+    }
   } catch (err) {
-    console.error("list_entries failed:", err);
+    console.error(scanBroken ? "scan_vault failed:" : "list_entries failed:", err);
     allEntries = [];
+    reindexEntries();
+    renderHistory();
     renderList();
     setStatus(t("status.listFailed"));
   }
@@ -898,6 +1340,14 @@ function renderFavouriteButton() {
       ? t("editor.favouriteOn")
       : t("editor.favourite");
   }
+}
+
+/** A small pop on the bookmark button; the icon itself is CSS-filled. */
+function popFavourite() {
+  if (!els.favouriteBtn || prefersReducedMotion()) return;
+  els.favouriteBtn.classList.remove("is-popping");
+  void els.favouriteBtn.offsetWidth;
+  els.favouriteBtn.classList.add("is-popping");
 }
 
 /**
@@ -933,7 +1383,16 @@ function setView(view) {
 
   // The row count changes, so the old scroll offset is meaningless.
   els.listScroll.scrollTop = 0;
-  renderList();
+  requestListSwap();
+  if (searchQuery.trim()) {
+    // The favourites view changes which documents match, so the backend has to
+    // run the query again with `favouritesOnly`.
+    searchResults = null;
+    renderList();
+    scheduleSearch({ immediate: true });
+  } else {
+    renderList();
+  }
 }
 
 /**
@@ -972,17 +1431,31 @@ async function toggleFavourite() {
     });
     currentFavourite = stored;
     renderFavouriteButton();
+    popFavourite();
     setStatus(stored ? t("status.favourited") : t("status.unfavourited"), true);
 
     // Keep the cached metadata in step so the star and the favourites view
     // update without a round trip.
     const meta = allEntries.find((e) => e.date === currentDate);
     if (meta) meta.favourite = stored;
+    reindexEntries();
+    renderHistory();
 
     // Un-favouriting while looking at the favourites page removes the row the
-    // user is reading, so the list has to be rebuilt.
-    if (currentView === "favourites") renderList();
-    else renderVisibleRows(true);
+    // user is reading, so the list has to be rebuilt. With an active search the
+    // backend index gained the new flag too, so rerun it to keep both views in
+    // step.
+    if (searchQuery.trim()) {
+      searchResults = null;
+      requestListSwap();
+      renderList();
+      scheduleSearch({ immediate: true });
+    } else if (currentView === "favourites") {
+      requestListSwap();
+      renderList();
+    } else {
+      renderVisibleRows(true);
+    }
   } catch (err) {
     console.error("set_favourite failed:", err);
     setStatus(t("status.favouriteFailed"));
@@ -1095,14 +1568,31 @@ function brokenEntryFor(date) {
 // The CSS keys off `data-layer` on `.app`; these helpers are the only writers.
 // On wider viewports the attribute is ignored, so both panes stay visible.
 
+const phoneLayout = window.matchMedia?.("(max-width: 640px)") ?? null;
+
+/** Keep the off-screen phone layer out of the tab order immediately. */
+function syncLayerInert() {
+  if (!els.sidebar || !els.editor) return;
+  if (!phoneLayout?.matches) {
+    els.sidebar.inert = false;
+    els.editor.inert = false;
+    return;
+  }
+  const editorActive = els.app?.dataset.layer === "editor";
+  els.sidebar.inert = editorActive;
+  els.editor.inert = !editorActive;
+}
+
 /** Show the list layer. The editor is hidden until a date is picked. */
 function showListLayer() {
   if (els.app) els.app.dataset.layer = "list";
+  syncLayerInert();
 }
 
 /** Show the editor layer, filling the window on a phone. */
 function showEditorLayer() {
   if (els.app) els.app.dataset.layer = "editor";
+  syncLayerInert();
 }
 
 async function selectDate(date) {
@@ -1125,6 +1615,9 @@ async function selectDate(date) {
   currentDate = date;
   els.datePicker.value = date;
   renderDateLabel();
+  renderHistory();
+  selectedYear = date.slice(0, 4);
+  renderYearJump();
 
   // A known-broken file is never even read: `get_entry` would fail anyway, and
   // going straight to the locked state avoids a blank editor that looks
@@ -1369,11 +1862,19 @@ async function deleteBrokenFile(date) {
  * Called after the session key is gone, so nothing here may touch the backend.
  */
 function resetEditorState() {
+  cancelUnlockTransition();
   currentDate = "";
   savedTitle = "";
   savedContent = "";
   allEntries = [];
   brokenEntries = [];
+  reindexEntries();
+  // Drop the decrypted result metadata before the backend clears its index, so
+  // no title or snippet survives on the lock screen.
+  searchResults = null;
+  cancelPendingSearch();
+  searchSeq += 1;
+  renderHistory();
   unlockEditor();
   // The read-only gate belongs to the entry that was open, so it goes with it.
   readOnlyEntry = false;
@@ -1394,29 +1895,15 @@ function resetEditorState() {
 }
 
 /**
- * Turn screenshot / screen-recording protection on or off.
- *
- * The window starts protected (`contentProtected: true` in `tauri.conf.json`),
- * so this only ever needs to *relax* it — while the workspace picker is open,
- * where the user may legitimately want to share their screen — and then restore
- * it. Failures are logged, never surfaced: on Linux the backend call is a no-op
- * and the app must keep working.
- */
-async function setScreenshotProtection(protected_) {
-  try {
-    await invoke("set_screenshot_protection", { protected: protected_ });
-  } catch (err) {
-    console.error("set_screenshot_protection failed:", err);
-  }
-}
-
-/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
  * keystrokes would be lost when the key is dropped.
  */
 async function lockAndFlush() {
+  // No fading overlay ghosts above the lock screen: their z-index is higher
+  // than the lock layer, and even a title or thumbnail must not linger there.
+  setExitAnimationsEnabled(false);
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -1426,6 +1913,8 @@ async function lockAndFlush() {
     await invoke("lock");
   } catch (err) {
     console.error("lock failed:", err);
+    // The session is still unlocked, so animation is safe again.
+    setExitAnimationsEnabled(true);
   }
 }
 
@@ -1480,6 +1969,25 @@ function stopAutoLockTimer() {
 function setAutoLockMinutes(minutes) {
   autoLockMinutes = Number(minutes) || 0;
   resetAutoLockTimer();
+}
+
+/**
+ * Lock on OS suspend, app backgrounding, or resume.
+ *
+ * Tauri emits `tauri://suspended` / `tauri://resumed` on platforms that support
+ * it; `visibilitychange` covers webview backgrounding, including Android. Going
+ * through `lockNow()` saves first, so a pending keystroke is not lost.
+ */
+function initSuspendLock() {
+  const lockIfUnlocked = () => {
+    if (!els.app.hidden) lockScreen.lockNow();
+  };
+  listen("tauri://suspended", lockIfUnlocked);
+  listen("tauri://resumed", lockIfUnlocked);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") lockIfUnlocked();
+  });
+  window.addEventListener("pagehide", lockIfUnlocked);
 }
 
 /** Wire the global activity listeners once, at startup. */
@@ -1666,7 +2174,60 @@ function createControllers() {
     closeRecovery: (options) => recoveryDialog.close(options),
     renderDateLabel,
     lockAndFlush,
-    setScreenshotProtection,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Unlock hand-off
+// ---------------------------------------------------------------------------
+
+/** Must match the `lock-screen-leave` animation in lock.css. */
+const UNLOCK_TRANSITION_MS = 260;
+/** Bumped to cancel a transition when the app locks again mid-animation. */
+let unlockTransitionToken = 0;
+
+/** Abort a pending unlock animation, leaving the layers in a safe state. */
+function cancelUnlockTransition() {
+  unlockTransitionToken += 1;
+  els.app?.classList.remove("is-entering");
+  els.lockScreen?.classList.remove("is-leaving");
+}
+
+/**
+ * Fade the lock screen out and the diary in.
+ *
+ * Resolves `true` when the lock layer is hidden, or `false` when a lock or a
+ * second enter interrupted the hand-off. The data scan runs in parallel, so
+ * the animation does not delay the first paint of the diary.
+ */
+function playUnlockTransition() {
+  const token = ++unlockTransitionToken;
+  setExitAnimationsEnabled(true);
+
+  if (prefersReducedMotion()) {
+    els.app.classList.remove("is-entering");
+    els.lockScreen.classList.remove("is-leaving");
+    els.lockScreen.hidden = true;
+    return Promise.resolve(true);
+  }
+
+  els.lockScreen.classList.add("is-leaving");
+  // Force a style flush so the app's entry animation starts from the `from`
+  // frame even though `hidden` was just removed in the same task.
+  void els.app.offsetWidth;
+  els.app.classList.add("is-entering");
+
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      if (token !== unlockTransitionToken) {
+        resolve(false);
+        return;
+      }
+      els.lockScreen.hidden = true;
+      els.lockScreen.classList.remove("is-leaving");
+      els.app.classList.remove("is-entering");
+      resolve(true);
+    }, UNLOCK_TRANSITION_MS);
   });
 }
 
@@ -1679,17 +2240,15 @@ function createControllers() {
  * so this is the single implementation of the unlock hand-off.
  */
 async function enterApp() {
-  els.lockScreen.hidden = true;
   els.app.hidden = false;
+
+  // Kick the cross-fade off first; the scan below runs underneath it.
+  const transition = playUnlockTransition();
 
   // On a phone the first screen is the list: the user picks a date or searches,
   // and only then does the editor take over. On a wide viewport this attribute
   // is ignored and both panes are visible.
   showListLayer();
-
-  // The window is created with `contentProtected: true`, so the lock screen is
-  // covered too. Re-assert it here in case the workspace picker turned it off.
-  setScreenshotProtection(true);
 
   try {
     const path = await invoke("diary_path");
@@ -1710,6 +2269,11 @@ async function enterApp() {
   if (brokenEntries.length > 0) {
     setStatus(t("broken.notify", { n: brokenEntries.length }));
   }
+
+  // If the user locked the diary while that scan was running, stop here rather
+  // than pulling focus back into an app that is already behind the lock screen.
+  if (!(await transition)) return;
+  if (!els.lockScreen.hidden || els.app.hidden) return;
 
   const today = await invoke("today");
   await selectDate(today);
@@ -1829,9 +2393,17 @@ function wireEvents() {
     setView,
     setSearchQuery: (query) => {
       searchQuery = query;
+      // Show the local date/title filter at once; the debounced backend query
+      // replaces it with full-text hits when it returns.
+      searchResults = null;
+      // The wiring calls `renderList()` immediately after this, so the next
+      // render is the filter swap worth cross-fading.
+      requestListSwap();
+      scheduleSearch();
     },
     renderList,
     renderVisibleRows,
+    jumpToYear,
     // Date helpers
     today: () => invoke("today"),
     shiftDate,
@@ -1880,9 +2452,19 @@ async function init() {
   // Same for the theme: resolve it before the first paint so the app never
   // flashes light before switching to dark.
   initTheme();
+  initHistoryDisclosure();
+  if (phoneLayout) {
+    if (typeof phoneLayout.addEventListener === "function") {
+      phoneLayout.addEventListener("change", syncLayerInert);
+    } else if (typeof phoneLayout.addListener === "function") {
+      phoneLayout.addListener(syncLayerInert);
+    }
+  }
+  syncLayerInert();
 
   // Idle auto-lock listens globally; the duration arrives with the settings.
   initAutoLock();
+  initSuspendLock();
 
   // The bookmark button starts disabled: no entry is open yet.
   renderFavouriteButton();

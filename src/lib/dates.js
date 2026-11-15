@@ -42,6 +42,25 @@ export function shiftMonth(monthStart, months) {
 }
 
 /**
+ * Shift an ISO date by whole months, clamping to the end of the target month.
+ *
+ * `2026-03-31 - 1 month` is February 28 (or 29 in a leap year), not March 3.
+ * Month arithmetic with `Date.setMonth` overflows exactly like that, so the
+ * day is clamped explicitly. Used by the "on this day" review cards.
+ */
+export function shiftMonthsClamped(iso, months) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const target = new Date(y, m - 1 + months, 1);
+  const lastDay = new Date(
+    target.getFullYear(),
+    target.getMonth() + 1,
+    0
+  ).getDate();
+  target.setDate(Math.min(d, lastDay));
+  return toISODate(target);
+}
+
+/**
  * Whole days between two ISO dates (`b - a`).
  *
  * `Math.round` absorbs the one-hour drift that a daylight-saving boundary

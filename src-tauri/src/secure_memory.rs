@@ -139,7 +139,7 @@ mod imp {
         // SAFETY: `ptr`/`len` describe a valid writable mapping.
         let locked = unsafe { libc::mlock(ptr, len) } == 0;
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             // SAFETY: same mapping; failure is harmless and only means the
             // kernel does not support (or does not need) the advice.
@@ -176,11 +176,15 @@ mod imp {
         fn VirtualLock(address: *mut c_void, size: usize) -> i32;
         fn VirtualUnlock(address: *mut c_void, size: usize) -> i32;
         fn VirtualFree(address: *mut c_void, size: usize, free_type: u32) -> i32;
+        // Windows Error Reporting otherwise includes the page in a crash dump.
+        fn WerRegisterExcludedMemoryBlock(address: *const c_void, size: usize) -> i32;
+        fn WerUnregisterExcludedMemoryBlock(address: *const c_void) -> i32;
     }
 
     pub struct Inner {
         ptr: *mut u8,
         locked: bool,
+        wer_registered: bool,
         fallback: Option<Box<[u8; KEY_LEN]>>,
     }
 
@@ -206,6 +210,7 @@ mod imp {
                 return Self {
                     ptr: std::ptr::null_mut(),
                     locked: false,
+                    wer_registered: false,
                     fallback: Some(Box::new(*key)),
                 };
             }
@@ -216,10 +221,14 @@ mod imp {
             unsafe {
                 std::ptr::copy_nonoverlapping(key.as_ptr(), ptr, KEY_LEN);
             }
+            // Best effort: older Windows versions may not implement the API.
+            let wer_registered =
+                unsafe { WerRegisterExcludedMemoryBlock(ptr.cast(), KEY_LEN) } != 0;
 
             Self {
                 ptr,
                 locked,
+                wer_registered,
                 fallback: None,
             }
         }
@@ -240,6 +249,9 @@ mod imp {
                 unsafe {
                     let bytes = std::slice::from_raw_parts_mut(self.ptr, KEY_LEN);
                     bytes.zeroize();
+                    if self.wer_registered {
+                        WerUnregisterExcludedMemoryBlock(self.ptr.cast());
+                    }
                     if self.locked {
                         VirtualUnlock(self.ptr.cast(), PAGE_SIZE);
                     }

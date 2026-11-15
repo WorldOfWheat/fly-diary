@@ -175,3 +175,71 @@ html[data-input-modality="pointer"] :focus {
   display: none;
 }
 
+/* Unlock hand-off: the diary rises and fades in while the lock layer fades
+   out. Kept brief and transform-based so the first scan is not delayed. */
+@keyframes app-enter {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.995);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.app.is-entering {
+  animation: app-enter 300ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* Theme switching: a brief, whole-interface colour cross-fade. main.js adds
+   the class only when the resolved theme actually changes. */
+html.theme-changing,
+html.theme-changing body,
+html.theme-changing body * {
+  transition-property: background-color, color, border-color, fill, stroke;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+
+/* Exit ghost created by lib/motion.js after an overlay has already been
+   hidden. Its children may carry their own entrance animations, so those are
+   suppressed before the whole clone fades out. */
+@keyframes overlay-exit {
+  to {
+    opacity: 0;
+  }
+}
+
+.overlay-exit,
+.overlay-exit * {
+  animation: none !important;
+}
+
+.overlay-exit {
+  pointer-events: none;
+  animation: overlay-exit 140ms ease-in forwards !important;
+}
+
+/* Shrink the panel inside a full-screen overlay; scaling the overlay itself
+   would expose a thin strip of the app around its edges. */
+@keyframes overlay-panel-exit {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+.overlay-exit .modal,
+.overlay-exit .calendar-panel,
+.overlay-exit .attachment-viewer-panel {
+  animation: overlay-panel-exit 140ms ease-in forwards !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overlay-exit {
+    display: none;
+  }
+}
+
