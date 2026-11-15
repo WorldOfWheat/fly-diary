@@ -19,6 +19,7 @@ import {
   weekdayName,
 } from "./i18n.js";
 import { toISODate, shiftDate, monthStartOf } from "./lib/dates.js";
+import { historyItems } from "./lib/history.js";
 import { highlightedSegments } from "./lib/highlight.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
@@ -46,6 +47,9 @@ let savedContent = "";
 let saveTimer = null;
 /** All entry metadata, newest first. */
 let allEntries = [];
+/** Date → metadata and date → broken reason, for the review strip. */
+let entriesByDate = new Map();
+let brokenByDate = new Map();
 /** Search filter string. */
 let searchQuery = "";
 /**
@@ -59,6 +63,8 @@ let searchTimer = null;
 let searchSeq = 0;
 /** Milliseconds between the last keystroke and a backend search. */
 const SEARCH_DEBOUNCE_MS = 200;
+/** LocalStorage key for the "Looking back" collapsed state. */
+const HISTORY_COLLAPSED_KEY = "fly-diary:history-collapsed";
 /**
  * Which sidebar view is showing: `"all"`, `"favourites"` or `"broken"`.
  *
@@ -405,6 +411,7 @@ function refreshForLocale() {
   calendar.renderWeekdayHeaders();
   renderDateLabel();
   renderFavouriteButton();
+  renderHistory();
   applyTheme();
   updateWordCount();
   if (calendar.isCalendarOpen()) calendar.renderCalendar();
@@ -873,6 +880,109 @@ function scrollDateIntoView(date) {
 // Data operations
 // ---------------------------------------------------------------------------
 
+/** Rebuild the date-keyed lookup used by the review strip. */
+function reindexEntries() {
+  entriesByDate = new Map(allEntries.map((entry) => [entry.date, entry]));
+  brokenByDate = new Map(brokenEntries.map((entry) => [entry.date, entry]));
+}
+
+/** Display title for a review card, including the broken and untitled cases. */
+function historyTitle(item) {
+  if (item.broken) return t("history.broken");
+  return item.title || t("common.untitled");
+}
+
+/**
+ * Draw the "on this day" cards for the date currently open.
+ *
+ * This uses only the metadata already loaded for the sidebar, so it costs no
+ * IPC or decryption. The whole section is hidden when none of the three look-back
+ * dates has an entry.
+ */
+function renderHistory() {
+  if (!els.onThisDay || !els.onThisDayList) return;
+  const items = currentDate
+    ? historyItems(currentDate, entriesByDate, brokenByDate)
+    : [];
+  els.onThisDay.hidden = items.length === 0;
+  if (items.length === 0) {
+    els.onThisDayList.replaceChildren();
+    return;
+  }
+
+  if (els.onThisDayTitle) {
+    const isToday = currentDate === toISODate(new Date());
+    els.onThisDayTitle.textContent = t(
+      isToday ? "history.titleToday" : "history.title"
+    );
+  }
+
+  const rows = items.map((item) => {
+    const li = document.createElement("li");
+    li.className = "on-this-day-item";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className =
+      "history-card" +
+      (item.favourite ? " favourite" : "") +
+      (item.broken ? " broken" : "");
+    button.dataset.date = item.date;
+
+    const offset = document.createElement("span");
+    offset.className = "history-offset";
+    offset.textContent = t(item.offsetKey);
+    const date = document.createElement("span");
+    date.className = "history-date";
+    date.textContent = item.date;
+    const title = document.createElement("span");
+    title.className = "history-title";
+    const titleText = historyTitle(item);
+    title.textContent = titleText;
+
+    button.append(offset, date, title);
+    button.setAttribute(
+      "aria-label",
+      t("history.open", {
+        offset: t(item.offsetKey),
+        date: item.date,
+        title: titleText,
+      })
+    );
+    button.addEventListener("click", () => selectDate(item.date));
+    li.appendChild(button);
+    return li;
+  });
+
+  els.onThisDayList.replaceChildren(...rows);
+}
+
+/**
+ * Restore the saved open/collapsed state of the review strip and persist it
+ * when the summary is toggled. `<details>` provides the keyboard and screen
+ * reader behaviour; only the preference needs wiring.
+ */
+function initHistoryDisclosure() {
+  if (!els.onThisDay) return;
+  try {
+    if (localStorage.getItem(HISTORY_COLLAPSED_KEY) === "1") {
+      els.onThisDay.open = false;
+    }
+  } catch {
+    // Private mode or a locked-down webview: keep the default (open).
+  }
+  els.onThisDay.addEventListener("toggle", () => {
+    try {
+      localStorage.setItem(
+        HISTORY_COLLAPSED_KEY,
+        els.onThisDay.open ? "0" : "1"
+      );
+    } catch {
+      // The state simply will not survive this session.
+    }
+  });
+}
+
 /**
  * Apply a broken-file list to the sidebar and its tab.
  *
@@ -883,6 +993,7 @@ function scrollDateIntoView(date) {
 function applyBrokenState(list, announce = false) {
   const previous = brokenEntries.length;
   brokenEntries = Array.isArray(list) ? list : [];
+  reindexEntries();
 
   if (els.brokenCount) {
     els.brokenCount.textContent = brokenEntries.length
@@ -902,6 +1013,7 @@ function applyBrokenState(list, announce = false) {
   if (announce && brokenEntries.length > previous) {
     setStatus(t("broken.notify", { n: brokenEntries.length }));
   }
+  renderHistory();
 }
 
 /** Refresh the broken-file list without touching the search index. */
@@ -979,7 +1091,9 @@ async function refreshList({ scanBroken = true } = {}) {
     brokenEntries = [];
     searchResults = null;
     cancelPendingSearch();
+    reindexEntries();
     renderList();
+    renderHistory();
     return;
   }
   try {
@@ -990,6 +1104,8 @@ async function refreshList({ scanBroken = true } = {}) {
     } else {
       allEntries = await invoke("list_entries");
     }
+    reindexEntries();
+    renderHistory();
     renderList();
     // The scan may have changed an entry the user is currently searching for.
     if (scanBroken && searchQuery.trim()) {
@@ -998,6 +1114,8 @@ async function refreshList({ scanBroken = true } = {}) {
   } catch (err) {
     console.error(scanBroken ? "scan_vault failed:" : "list_entries failed:", err);
     allEntries = [];
+    reindexEntries();
+    renderHistory();
     renderList();
     setStatus(t("status.listFailed"));
   }
@@ -1116,6 +1234,8 @@ async function toggleFavourite() {
     // update without a round trip.
     const meta = allEntries.find((e) => e.date === currentDate);
     if (meta) meta.favourite = stored;
+    reindexEntries();
+    renderHistory();
 
     // Un-favouriting while looking at the favourites page removes the row the
     // user is reading, so the list has to be rebuilt. With an active search the
@@ -1272,6 +1392,7 @@ async function selectDate(date) {
   currentDate = date;
   els.datePicker.value = date;
   renderDateLabel();
+  renderHistory();
 
   // A known-broken file is never even read: `get_entry` would fail anyway, and
   // going straight to the locked state avoids a blank editor that looks
@@ -1521,11 +1642,13 @@ function resetEditorState() {
   savedContent = "";
   allEntries = [];
   brokenEntries = [];
+  reindexEntries();
   // Drop the decrypted result metadata before the backend clears its index, so
   // no title or snippet survives on the lock screen.
   searchResults = null;
   cancelPendingSearch();
   searchSeq += 1;
+  renderHistory();
   unlockEditor();
   // The read-only gate belongs to the entry that was open, so it goes with it.
   readOnlyEntry = false;
@@ -2033,6 +2156,7 @@ async function init() {
   // Same for the theme: resolve it before the first paint so the app never
   // flashes light before switching to dark.
   initTheme();
+  initHistoryDisclosure();
 
   // Idle auto-lock listens globally; the duration arrives with the settings.
   initAutoLock();

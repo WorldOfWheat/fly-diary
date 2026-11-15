@@ -7,6 +7,7 @@ import {
   shiftDate,
   monthStartOf,
   shiftMonth,
+  shiftMonthsClamped,
   daysBetween,
   calendarGrid,
 } from "../src/lib/dates.js";
@@ -130,4 +131,20 @@ test("calendarGrid handles February in a leap year", () => {
   const inMonth = cells.filter((iso) => iso.startsWith("2024-02"));
   assert.equal(inMonth.length, 29);
   assert.ok(inMonth.includes("2024-02-29"));
+});
+
+test("shiftMonthsClamped crosses months and years", () => {
+  assert.equal(shiftMonthsClamped("2026-11-15", -1), "2026-10-15");
+  assert.equal(shiftMonthsClamped("2026-05-15", -6), "2025-11-15");
+  assert.equal(shiftMonthsClamped("2026-01-15", -6), "2025-07-15");
+});
+
+test("shiftMonthsClamped clamps the day to the target month", () => {
+  assert.equal(shiftMonthsClamped("2026-03-31", -1), "2026-02-28");
+  assert.equal(shiftMonthsClamped("2024-03-31", -1), "2024-02-29");
+  assert.equal(shiftMonthsClamped("2026-01-31", -6), "2025-07-31");
+});
+
+test("shiftMonthsClamped handles a leap day one year back", () => {
+  assert.equal(shiftMonthsClamped("2024-02-29", -12), "2023-02-28");
 });

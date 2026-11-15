@@ -75,6 +75,131 @@ html[data-input-modality="keyboard"] .btn-back:focus {
   stroke-linejoin: round;
 }
 
+/* ---------- On this day ---------- */
+
+.on-this-day {
+  padding: 0.55rem 1.25rem 0.7rem;
+  padding-left: max(1.25rem, env(safe-area-inset-left));
+  padding-right: max(1.25rem, env(safe-area-inset-right));
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.on-this-day-title {
+  margin: 0;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.on-this-day-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.on-this-day-summary::-webkit-details-marker {
+  display: none;
+}
+
+html[data-input-modality="keyboard"] .on-this-day-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.history-chevron {
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-left: auto;
+  fill: none;
+  stroke: var(--text-muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.12s ease;
+}
+
+.on-this-day[open] .history-chevron {
+  transform: rotate(180deg);
+}
+
+.on-this-day-list {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.4rem 0 0;
+  padding: 0 0 0.15rem;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.on-this-day-item {
+  flex: 0 0 auto;
+}
+
+.history-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 11rem;
+  max-width: 14rem;
+  padding: 0.45rem 0.6rem;
+  color: var(--text);
+  text-align: left;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.12s ease;
+}
+
+.history-card:hover {
+  border-color: var(--accent);
+}
+
+html[data-input-modality="keyboard"] .history-card:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.history-offset {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.history-date {
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.history-title {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 0.78rem;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-card.favourite {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.history-card.broken {
+  background: var(--danger-wash);
+  border-color: var(--danger);
+}
+
+.history-card.broken .history-title {
+  color: var(--danger);
+}
+
 /* ---------- Date navigator ---------- */
 
 /* `flex: none` keeps the navigator at its natural width. Without it the

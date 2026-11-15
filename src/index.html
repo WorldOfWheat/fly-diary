@@ -242,6 +242,19 @@
                 </div>
             </header>
 
+            <!-- Quick links to the same date in the previous five years. The
+                 whole section is hidden when none exist; the summary toggles
+                 the list, and the open state is persisted by main.js. -->
+            <details id="on-this-day" class="on-this-day" open hidden>
+                <summary class="on-this-day-summary">
+                    <span id="on-this-day-title" class="on-this-day-title" data-i18n="history.title">這一天的回顧</span>
+                    <svg class="history-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M6 9l6 6 6-6" />
+                    </svg>
+                </summary>
+                <ul id="on-this-day-list" class="on-this-day-list"></ul>
+            </details>
+
             <!-- Shown only when the current entry file cannot be decrypted. The
                  editor stays visible but read-only, so the user can see the date
                  and decide whether to export or delete. -->

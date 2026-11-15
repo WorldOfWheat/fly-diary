@@ -81,6 +81,16 @@
     gap: 0.5rem;
   }
 
+  .on-this-day {
+    padding: 0.45rem 0.75rem 0.55rem;
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+  }
+
+  .history-card {
+    width: 10rem;
+  }
+
   .status {
     flex: 1 1 auto;
     flex-wrap: wrap;

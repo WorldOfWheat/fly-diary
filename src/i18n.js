@@ -279,6 +279,17 @@ const zhHant = {
   "editor.contentPlaceholder": "今天過得如何？",
   "editor.wordCount": "{chars} 字 · {lines} 行",
 
+  // --- On this day ---------------------------------------------------------
+  "history.title": "這一天的回顧",
+  "history.titleToday": "歷史上的今天",
+  "history.oneMonth": "1 個月前",
+  "history.sixMonths": "6 個月前",
+  "history.oneYear": "1 年前",
+  "history.threeYears": "3 年前",
+  "history.fiveYears": "5 年前",
+  "history.broken": "無法解密的日記",
+  "history.open": "開啟{offset}（{date}）的日記：{title}",
+
   // --- Image attachments ---------------------------------------------------
   "attachments.title": "圖片",
   "attachments.add": "加入圖片",
@@ -641,6 +652,17 @@ const en = {
   "editor.contentLabel": "Diary content",
   "editor.contentPlaceholder": "How was your day?",
   "editor.wordCount": "{chars} words · {lines} lines",
+
+  // --- On this day ---------------------------------------------------------
+  "history.title": "Looking back",
+  "history.titleToday": "On this day",
+  "history.oneMonth": "1 month ago",
+  "history.sixMonths": "6 months ago",
+  "history.oneYear": "1 year ago",
+  "history.threeYears": "3 years ago",
+  "history.fiveYears": "5 years ago",
+  "history.broken": "Unreadable entry",
+  "history.open": "Open the entry from {offset} ({date}): {title}",
 
   // --- Image attachments ---------------------------------------------------
   "attachments.title": "Images",

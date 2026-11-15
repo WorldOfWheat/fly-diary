@@ -28,6 +28,7 @@ fly-diary/
 │   ├── lib/
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
 │   │   ├── highlight.js    # 搜尋摘要的 UTF-16 標記切段（可單獨測試）
+│   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
@@ -50,6 +51,7 @@ fly-diary/
 │   │   └── css.js          # 展開 styles.css 的 @import，供 CSS invariant 測試
 │   ├── dates.test.js
 │   ├── highlight.test.js   # 搜尋摘要標記：範圍切段、重疊、UTF-16、越界
+│   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏
 │   ├── stats.test.js
 │   ├── i18n.test.js
 │   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕
