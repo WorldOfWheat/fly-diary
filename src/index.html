@@ -170,6 +170,10 @@
                  the DOM. `entry-spacer` reserves the full scroll height and
                  `entry-list` is absolutely positioned inside it. -->
             <div id="entry-scroll" class="entry-scroll">
+                <div id="entry-year-bar" class="entry-year-bar" hidden>
+                    <label class="year-jump-label" for="year-jump" data-i18n="sidebar.yearJump">年份</label>
+                    <select id="year-jump" class="year-jump"></select>
+                </div>
                 <div id="entry-spacer" class="entry-spacer">
                     <ul id="entry-list" class="entry-list"></ul>
                 </div>

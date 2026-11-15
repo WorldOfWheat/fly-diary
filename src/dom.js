@@ -50,6 +50,8 @@ export const els = {
   list: $("entry-list"),
   listScroll: $("entry-scroll"),
   listSpacer: $("entry-spacer"),
+  yearBar: $("entry-year-bar"),
+  yearJump: $("year-jump"),
   search: $("search"),
   viewAll: $("view-all"),
   viewFavourites: $("view-favourites"),

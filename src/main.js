@@ -21,6 +21,12 @@ import {
 import { toISODate, shiftDate, monthStartOf } from "./lib/dates.js";
 import { historyItems } from "./lib/history.js";
 import { highlightedSegments } from "./lib/highlight.js";
+import {
+  buildDisplayRows,
+  rowIndexAt,
+  yearsOf,
+  firstRowForYear,
+} from "./lib/list-rows.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -227,36 +233,57 @@ function updateWordCount() {
  * silently drift out of sync with the CSS.
  */
 let ROW_HEIGHT = 52;
+/** Height of a month separator row, measured from `--month-h`. */
+let MONTH_HEIGHT = 28;
 /** Extra rows rendered above and below the viewport to hide scroll seams. */
 const OVERSCAN = 6;
+/** Flat row model: entry rows and month separators, each with an absolute top. */
+let displayRows = [];
+/** Date → entry row, used for jumps without scanning the model. */
+let entryRowByDate = new Map();
+/** Last year chosen in the jump select. */
+let selectedYear = "";
 
-/** Read `--row-h` from the document and return it in CSS pixels. */
-function measureRowHeight() {
+/** Read a rem-valued CSS custom property and return it in CSS pixels. */
+function measureRem(property, fallback) {
   const raw = getComputedStyle(document.documentElement)
-    .getPropertyValue("--row-h")
+    .getPropertyValue(property)
     .trim();
-  if (!raw) return ROW_HEIGHT;
+  if (!raw) return fallback;
 
-  // `--row-h` is authored in rem, so resolve it against the root font size.
+  // The tokens are authored in rem, so resolve against the root font size.
   const rem =
     parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
   const value = raw.endsWith("rem") ? parseFloat(raw) * rem : parseFloat(raw);
 
-  return Number.isFinite(value) && value > 0 ? value : ROW_HEIGHT;
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+/** Read `--row-h` from the document and return it in CSS pixels. */
+function measureRowHeight() {
+  return measureRem("--row-h", ROW_HEIGHT);
+}
+
+function measureMonthHeight() {
+  return measureRem("--month-h", MONTH_HEIGHT);
 }
 
 /**
- * Keep `ROW_HEIGHT` in sync with the stylesheet.
+ * Keep the measured heights in sync with the stylesheet.
  *
  * The root font size is a `clamp()` over the viewport width, so resizing the
- * window changes the row height. When that happens the spacer and every
- * rendered row are stale, so we re-measure and redraw.
+ * window changes both heights. When that happens the spacer and every rendered
+ * row are stale, so we re-measure and redraw.
  */
 function watchRowHeight() {
   const sync = () => {
-    const next = measureRowHeight();
-    if (Math.abs(next - ROW_HEIGHT) < 0.5) return;
-    ROW_HEIGHT = next;
+    const nextRow = measureRowHeight();
+    const nextMonth = measureMonthHeight();
+    const rowChanged = Math.abs(nextRow - ROW_HEIGHT) >= 0.5;
+    const monthChanged = Math.abs(nextMonth - MONTH_HEIGHT) >= 0.5;
+    if (!rowChanged && !monthChanged) return;
+    ROW_HEIGHT = nextRow;
+    MONTH_HEIGHT = nextMonth;
     if (visibleEntries.length > 0) renderList();
   };
 
@@ -302,11 +329,15 @@ function applyFontScale() {
     els.fontLarger.disabled = fontScale >= FONT_SCALE_MAX;
   }
 
-  // The row height is derived from the root font size, so the virtual-scroll
-  // spacer and the rendered rows have to be recomputed.
-  const next = measureRowHeight();
-  if (Math.abs(next - ROW_HEIGHT) >= 0.5) {
-    ROW_HEIGHT = next;
+  // The row and month heights are derived from the root font size, so the
+  // virtual-scroll spacer and the rendered rows have to be recomputed.
+  const nextRow = measureRowHeight();
+  const nextMonth = measureMonthHeight();
+  const rowChanged = Math.abs(nextRow - ROW_HEIGHT) >= 0.5;
+  const monthChanged = Math.abs(nextMonth - MONTH_HEIGHT) >= 0.5;
+  if (rowChanged || monthChanged) {
+    ROW_HEIGHT = nextRow;
+    MONTH_HEIGHT = nextMonth;
     if (visibleEntries.length > 0) renderList();
   }
 }
@@ -672,10 +703,10 @@ function appendHighlighted(container, text, ranges) {
 }
 
 /** Build the DOM node for one entry row. */
-function createRow(entry, index) {
+function createRow(entry, top) {
   const li = document.createElement("li");
   li.className = "entry-row";
-  li.style.top = `${index * ROW_HEIGHT}px`;
+  li.style.top = `${top}px`;
 
   // The row itself is the interactive element: a real button gives keyboard
   // users Enter/Space and screen readers an unambiguous "button" role.
@@ -719,15 +750,45 @@ function createRow(entry, index) {
   return li;
 }
 
+/** Month separator: a horizontal rule with the localised month label. */
+function createMonthRow(month, top = null) {
+  const li = document.createElement("li");
+  li.className = "entry-month" + (top === null ? " entry-month-static" : "");
+  if (top !== null) li.style.top = `${top}px`;
+
+  const label = document.createElement("span");
+  label.className = "entry-month-label";
+  label.textContent = formatMonth(`${month}-01`);
+  li.appendChild(label);
+  return li;
+}
+
+/** Render one row from the mixed entry/month display model. */
+function createDisplayRow(row) {
+  return row.type === "month"
+    ? createMonthRow(row.month, row.top)
+    : createRow(row.entry, row.top);
+}
+
+/** Visible height of the list viewport, excluding the sticky year bar. */
+function listViewportHeight() {
+  const barHeight =
+    els.yearBar && !els.yearBar.hidden ? els.yearBar.offsetHeight : 0;
+  return Math.max(0, (els.listScroll.clientHeight || 0) - barHeight);
+}
+
 /** Render only the rows that intersect the viewport. */
 function renderVisibleRows(force = false) {
-  const total = visibleEntries.length;
-  const viewport = els.listScroll.clientHeight || 0;
+  const total = displayRows.length;
+  if (total === 0) return;
+
+  const viewport = listViewportHeight();
   const scrollTop = els.listScroll.scrollTop;
 
-  let start = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
+  let start = rowIndexAt(displayRows, scrollTop) - OVERSCAN;
   if (start < 0) start = 0;
-  let end = Math.ceil((scrollTop + viewport) / ROW_HEIGHT) + OVERSCAN;
+  let end =
+    rowIndexAt(displayRows, scrollTop + viewport) + 1 + OVERSCAN;
   if (end > total) end = total;
 
   if (!force && start === renderedStart && end === renderedEnd) return;
@@ -736,7 +797,7 @@ function renderVisibleRows(force = false) {
 
   const frag = document.createDocumentFragment();
   for (let i = start; i < end; i += 1) {
-    frag.appendChild(createRow(visibleEntries[i], i));
+    frag.appendChild(createDisplayRow(displayRows[i]));
   }
   els.list.replaceChildren(frag);
 }
@@ -753,6 +814,9 @@ function renderBrokenList() {
   els.listSpacer.style.height = "0px";
   renderedStart = -1;
   renderedEnd = -1;
+  displayRows = [];
+  entryRowByDate = new Map();
+  hideYearJump();
 
   if (rows.length === 0) {
     els.list.replaceChildren();
@@ -766,7 +830,14 @@ function renderBrokenList() {
   }
 
   const frag = document.createDocumentFragment();
+  let month = "";
   for (const broken of rows) {
+    const brokenMonth = broken.date.slice(0, 7);
+    if (brokenMonth !== month) {
+      frag.appendChild(createMonthRow(brokenMonth));
+      month = brokenMonth;
+    }
+
     const li = document.createElement("li");
     const button = document.createElement("button");
     button.type = "button";
@@ -817,6 +888,9 @@ function renderList() {
     els.list.replaceChildren();
     renderedStart = -1;
     renderedEnd = -1;
+    displayRows = [];
+    entryRowByDate = new Map();
+    hideYearJump();
     const li = document.createElement("li");
     li.className = "list-empty";
     if (searchQuery.trim()) {
@@ -834,18 +908,25 @@ function renderList() {
     return;
   }
 
-  els.listSpacer.style.height = `${visibleEntries.length * ROW_HEIGHT}px`;
+  const model = buildDisplayRows(visibleEntries, ROW_HEIGHT, MONTH_HEIGHT);
+  displayRows = model.rows;
+  entryRowByDate = model.byDate;
+  els.listSpacer.style.height = `${model.height}px`;
+  renderYearJump();
   renderVisibleRows(true);
 }
 
 /** Drop every rendered row and forget the viewport window (used on lock). */
 function resetList() {
   visibleEntries = [];
+  displayRows = [];
+  entryRowByDate = new Map();
   renderedStart = -1;
   renderedEnd = -1;
   els.listSpacer.style.height = "0px";
   els.list.replaceChildren();
   els.listScroll.scrollTop = 0;
+  hideYearJump();
 }
 
 /** Update the active highlight without rebuilding the list. */
@@ -858,20 +939,74 @@ function highlightActive() {
   }
 }
 
+/** Hide the year jump bar when there is nothing to jump through. */
+function hideYearJump() {
+  selectedYear = "";
+  if (els.yearBar) els.yearBar.hidden = true;
+  if (els.yearJump) els.yearJump.replaceChildren();
+}
+
+/** Rebuild the year options from the currently visible entries. */
+function renderYearJump() {
+  if (!els.yearBar || !els.yearJump) return;
+  if (currentView === "broken") {
+    hideYearJump();
+    return;
+  }
+  const years = yearsOf(visibleEntries);
+  if (years.length === 0) {
+    hideYearJump();
+    return;
+  }
+
+  const currentYear = currentDate ? currentDate.slice(0, 4) : "";
+  if (!years.includes(selectedYear)) {
+    selectedYear = years.includes(currentYear) ? currentYear : years[0];
+  }
+
+  const existing = [...els.yearJump.options].map((option) => option.value);
+  if (existing.join("\u0000") !== years.join("\u0000")) {
+    const options = years.map((year) => {
+      const option = document.createElement("option");
+      option.value = year;
+      option.textContent = year;
+      return option;
+    });
+    els.yearJump.replaceChildren(...options);
+  }
+  els.yearJump.value = selectedYear;
+  els.yearBar.hidden = false;
+}
+
+/** Scroll to the first entry of `year`, keeping its month label visible. */
+function jumpToYear(year) {
+  if (!year) return;
+  selectedYear = year;
+  const hit = firstRowForYear(displayRows, year);
+  if (!hit) return;
+  els.listScroll.scrollTop = hit.header ? hit.header.top : hit.row.top;
+  renderVisibleRows(true);
+}
+
 /** Scroll the sidebar so `date` is visible, rendering it if necessary. */
 function scrollDateIntoView(date) {
-  const index = visibleEntries.findIndex((e) => e.date === date);
-  if (index < 0) return;
+  const row = entryRowByDate.get(date);
+  if (!row) return;
 
-  const top = index * ROW_HEIGHT;
-  const bottom = top + ROW_HEIGHT;
+  const header =
+    row.index > 0 && displayRows[row.index - 1]?.type === "month"
+      ? displayRows[row.index - 1]
+      : null;
+  const top = header ? header.top : row.top;
+  const bottom = row.top + row.height;
   const viewTop = els.listScroll.scrollTop;
-  const viewBottom = viewTop + els.listScroll.clientHeight;
+  const viewport = listViewportHeight();
+  const viewBottom = viewTop + viewport;
 
   if (top < viewTop) {
     els.listScroll.scrollTop = top;
   } else if (bottom > viewBottom) {
-    els.listScroll.scrollTop = bottom - els.listScroll.clientHeight;
+    els.listScroll.scrollTop = bottom - viewport;
   }
   renderVisibleRows();
 }
@@ -1393,6 +1528,8 @@ async function selectDate(date) {
   els.datePicker.value = date;
   renderDateLabel();
   renderHistory();
+  selectedYear = date.slice(0, 4);
+  renderYearJump();
 
   // A known-broken file is never even read: `get_entry` would fail anyway, and
   // going straight to the locked state avoids a blank editor that looks
@@ -2108,6 +2245,7 @@ function wireEvents() {
     },
     renderList,
     renderVisibleRows,
+    jumpToYear,
     // Date helpers
     today: () => invoke("today"),
     shiftDate,
