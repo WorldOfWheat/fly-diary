@@ -76,6 +76,8 @@ export function createLockScreen(deps) {
   let recoveryMode = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
+  /** Guard against double-clicking recovery while the workspace is committed. */
+  let recoveryOpening = false;
   /** Tile inputs for the twelve-word recovery form. */
   let recoveryFields = [];
   let recoveryWordsRequest = null;
@@ -170,14 +172,65 @@ export function createLockScreen(deps) {
     els.passphrase.focus();
   }
 
+  /**
+   * Persist the folder currently in the path field and leave picker mode.
+   *
+   * Used by both the unlock submit and the recovery button. The caller is
+   * responsible for detecting the vault/recovery sidecar first when it matters.
+   */
+  async function commitWorkspace() {
+    const dir = els.diaryDir.value.trim();
+    if (!dir) {
+      els.lockError.textContent = deps.t("lock.errNoDir");
+      return false;
+    }
+    try {
+      await deps.invoke("set_diary_dir", { path: dir });
+      configured = true;
+      pickingWorkspace = false;
+      renderWorkspacePath();
+      renderLockScreen();
+      return true;
+    } catch (err) {
+      console.error("set_diary_dir failed:", err);
+      els.lockError.textContent = deps.t("lock.errWorkspace");
+      return false;
+    }
+  }
+
   /** Replace the passphrase form with the recovery form. */
-  function showRecoveryForm() {
-    if (!vaultInitialized || !recoveryAvailable || pickingWorkspace) return;
-    recoveryMode = true;
-    clearRecoveryFields();
-    ensureRecoveryFields();
-    renderLockScreen();
-    recoveryFields[0]?.focus();
+  async function showRecoveryForm() {
+    if (recoveryOpening) return;
+    recoveryOpening = true;
+    try {
+      // A recovery attempt made while the workspace picker is open must apply
+      // to the folder currently typed in that field. Re-check it first so the
+      // button cannot unlock a different vault than the one on screen.
+      if (pickingWorkspace) {
+        const dir = els.diaryDir.value.trim();
+        if (!dir) {
+          els.lockError.textContent = deps.t("lock.errNoDir");
+          return;
+        }
+        els.lockError.textContent = "";
+        vaultInitialized = await detectVault(dir);
+        renderLockScreen();
+        if (!vaultInitialized || !recoveryAvailable) {
+          els.lockError.textContent = deps.t("lock.errNoRecoveryHere");
+          return;
+        }
+        if (!(await commitWorkspace())) return;
+      }
+
+      if (!vaultInitialized || !recoveryAvailable) return;
+      recoveryMode = true;
+      clearRecoveryFields();
+      ensureRecoveryFields();
+      renderLockScreen();
+      recoveryFields[0]?.focus();
+    } finally {
+      recoveryOpening = false;
+    }
   }
 
   /** Return from the recovery form to the normal passphrase form. */
@@ -326,10 +379,10 @@ export function createLockScreen(deps) {
       recoveryMode = false;
     }
     if (els.recoveryOpen) {
-      // Hidden while the workspace picker is open: the path may still be
-      // changing, and a recovery attempt would target the wrong folder.
-      els.recoveryOpen.hidden =
-        !vaultInitialized || !recoveryAvailable || pickingWorkspace;
+      // While the picker is open this follows the folder currently typed in
+      // the field. Clicking it re-checks that folder and commits it before
+      // opening the recovery form, so it can never target the wrong vault.
+      els.recoveryOpen.hidden = !vaultInitialized || !recoveryAvailable;
     }
     if (els.lockForm && els.recoveryForm) {
       els.lockForm.hidden = recoveryMode;
@@ -544,13 +597,7 @@ export function createLockScreen(deps) {
           return;
         }
         vaultInitialized = await detectVault(dir);
-        await deps.invoke("set_diary_dir", { path: dir });
-        configured = true;
-        pickingWorkspace = false;
-        renderWorkspacePath();
-        // `detectVault` also refreshed `recoveryAvailable`; repaint so the
-        // "Use recovery phrase" button matches the folder just committed.
-        renderLockScreen();
+        if (!(await commitWorkspace())) return;
         // `renderLockScreen` restores the idle label; keep the busy state (and
         // the create/unlock wording) on top of it.
         setLockSubmitBusy(true, !vaultInitialized);

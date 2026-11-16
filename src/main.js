@@ -19,6 +19,7 @@ import {
   weekdayName,
 } from "./i18n.js";
 import { toISODate, shiftDate, monthStartOf } from "./lib/dates.js";
+import { createAutoLock } from "./lib/auto-lock.js";
 import { historyItems } from "./lib/history.js";
 import { highlightedSegments } from "./lib/highlight.js";
 import {
@@ -1922,10 +1923,13 @@ async function lockAndFlush() {
 // Idle auto-lock
 // ---------------------------------------------------------------------------
 
-/** Idle minutes before locking; `0` disables auto-lock. */
-let autoLockMinutes = 0;
-/** Pending idle timer, or `null` when auto-lock is off or the app is locked. */
-let autoLockTimer = null;
+/** Idle timer; the injected callback locks through the lock-screen controller. */
+const autoLock = createAutoLock({
+  // `lockScreen` is created later in this module; the callback resolves it when
+  // the timer actually fires.
+  lock: () => lockScreen.lockNow(),
+  isUnlocked: () => !els.app.hidden,
+});
 
 /** Events that count as "the user is still here". */
 const ACTIVITY_EVENTS = [
@@ -1940,35 +1944,24 @@ const ACTIVITY_EVENTS = [
 /**
  * Restart the idle countdown.
  *
- * Called on every activity event, so it must stay cheap: it only clears and
- * re-arms a single timeout. Throttling is unnecessary because `setTimeout`
- * itself is O(1) and the events are already coalesced by the browser.
+ * Called on every activity event, so it must stay cheap. It first checks the
+ * wall-clock deadline: if the webview throttled the timeout while backgrounded
+ * or the machine slept, the first event after waking locks instead of silently
+ * extending the session.
  */
 function resetAutoLockTimer() {
-  if (autoLockTimer) {
-    clearTimeout(autoLockTimer);
-    autoLockTimer = null;
-  }
-  if (!autoLockMinutes || els.app.hidden) return;
-  autoLockTimer = setTimeout(() => {
-    autoLockTimer = null;
-    // A pending keystroke must reach the disk before the key is dropped.
-    lockNow();
-  }, autoLockMinutes * 60 * 1000);
+  if (autoLock.expireIfDue()) return;
+  autoLock.reset();
 }
 
 /** Stop the countdown, e.g. while the app is locked or the setting is off. */
 function stopAutoLockTimer() {
-  if (autoLockTimer) {
-    clearTimeout(autoLockTimer);
-    autoLockTimer = null;
-  }
+  autoLock.stop();
 }
 
 /** Apply a new auto-lock duration and re-arm the timer. */
 function setAutoLockMinutes(minutes) {
-  autoLockMinutes = Number(minutes) || 0;
-  resetAutoLockTimer();
+  autoLock.setMinutes(minutes);
 }
 
 /**
@@ -1986,6 +1979,9 @@ function initSuspendLock() {
   listen("tauri://resumed", lockIfUnlocked);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") lockIfUnlocked();
+    // Timers can be suspended while hidden; check the deadline as soon as the
+    // webview is visible again.
+    else resetAutoLockTimer();
   });
   window.addEventListener("pagehide", lockIfUnlocked);
 }

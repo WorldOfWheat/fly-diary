@@ -1111,7 +1111,58 @@ test("the recovery button follows whether the vault has a sidecar", async () => 
       lock.renderLockScreen();
       assert.equal(els.recoveryOpen.hidden, true);
     },
-    { invokeTable: { recovery_exists: () => hasRecovery } },
+    { invokeTable: { recovery_exists: () => hasRecovery } }
+  );
+});
+
+test("switching to a vault with recovery offers recovery before unlocking", async () => {
+  await withLock(
+    async ({ lock, els, invoke }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      await lock.openWorkspacePicker();
+
+      els.diaryDir.value = "/home/u/other-vault";
+      await lock.refreshSetupVaultState();
+      assert.equal(els.recoveryOpen.hidden, false);
+
+      await lock.showRecoveryForm();
+
+      assert.deepEqual(invoke.argsOf("set_diary_dir"), {
+        path: "/home/u/other-vault",
+      });
+      assert.equal(lock.isPickingWorkspace(), false);
+      assert.equal(lock.isRecoveryMode(), true);
+      assert.equal(els.recoveryForm.hidden, false);
+      assert.equal(els.lockForm.hidden, true);
+    },
+    {
+      invokeTable: {
+        vault_exists: true,
+        recovery_exists: true,
+      },
+    }
+  );
+});
+
+test("a workspace without recovery does not show the recovery option", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      await lock.openWorkspacePicker();
+
+      els.diaryDir.value = "/home/u/plain-vault";
+      await lock.refreshSetupVaultState();
+
+      assert.equal(els.recoveryOpen.hidden, true);
+    },
+    {
+      invokeTable: {
+        vault_exists: true,
+        recovery_exists: false,
+      },
+    }
   );
 });
 

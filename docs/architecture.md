@@ -26,6 +26,7 @@ fly-diary/
 │   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
+│   │   ├── auto-lock.js    # 閒置計時器（可注入 lock callback，含 deadline 補鎖）
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
 │   │   ├── highlight.js    # 搜尋摘要的 UTF-16 標記切段（可單獨測試）
 │   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
@@ -51,6 +52,7 @@ fly-diary/
 │   ├── helpers/
 │   │   ├── dom.js          # 極簡 DOM stub（fakeElement / installDom / fakeInvoke）
 │   │   └── css.js          # 展開 styles.css 的 @import，供 CSS invariant 測試
+│   ├── auto-lock.test.js   # 閒置計時：注入 callback、0 分鐘、deadline 補鎖
 │   ├── dates.test.js
 │   ├── highlight.test.js   # 搜尋摘要標記：範圍切段、重疊、UTF-16、越界
 │   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏
@@ -145,7 +147,7 @@ fly-diary/
 - **可調 KDF**：首次建立 vault 時可在「進階選項」調整 Argon2id 的記憶體／迭代／平行度，參數寫入 `vault.xml`，之後解鎖沿用同一組參數；設定頁可隨時再調整。
 - **改密碼只重包金鑰**：`rewrap_vault` 用舊密碼解開 diary key、用新密碼與新 salt 重新包裝，只改寫 `vault.xml`。日記與索引完全不碰，所以不會有「改到一半壞掉」的風險，速度也不受日記數量影響。
 - **KDF 校準先高後低**：從 64 MiB 開始往下砍記憶體，第一次測量就是上限，慢機器不會先被一組過重的參數卡住；剩餘預算再換成迭代次數。平行度固定 1，讓結果可重現。
-- **閒置計時器只有一個**：所有活動事件都只是重設同一個 `setTimeout`，不累積計時器；鎖定與關閉設定頁時一併清除，避免背景殘留。
+- **閒置計時器只有一個**：`lib/auto-lock.js` 管理單一 `setTimeout`，所有活動事件都只是重設它，不累積計時器；鎖定與關閉設定頁時一併清除。除了 timeout，還會記錄 wall-clock deadline：WebView 在背景被節流或機器休眠醒來後，第一個活動事件（或視窗重新聚焦）會先檢查 deadline，已過期就立刻鎖定，不會默默重新計時。
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
 - **抹除貫穿整條金鑰路徑**：`unlock_vault` / `create_vault` / `rewrap_vault` / `migrate_legacy_vault` 都直接回傳 `Zeroizing<[u8; 32]>`，不再經過裸 `[u8; 32]` 的堆疊副本；`crypto::decrypt` / `decrypt_with_aad` 回傳 `Zeroizing<Vec<u8>>`，所以解出來的明文（包含被包裝的 diary key）在離開作用域時自動歸零。`pack` / `pack_index` 產生的明文緩衝同樣是 `Zeroizing`，`Entry` 實作 `Drop` 抹除 `title` 與 `content`。`run_import` / `upgrade_entries` 從 session 取出的金鑰副本也包在 `Zeroizing` 裡，批次結束即抹除。
