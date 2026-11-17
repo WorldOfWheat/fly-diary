@@ -550,23 +550,6 @@ pub fn remove_database(dir: &Path) -> Result<(), String> {
 // XML -> SQLCipher migration
 // ---------------------------------------------------------------------------
 
-/// Legacy sync-only folders contain `.fd` records but no `diary.db`. They were
-/// produced by the old Android folder-sync feature and can only be rebuilt by
-/// that release; creating an empty database here would hide the only copy.
-fn has_legacy_sync_records(dir: &Path) -> bool {
-    let Ok(read_dir) = fs::read_dir(dir) else {
-        return false;
-    };
-    read_dir.flatten().any(|item| {
-        let path = item.path();
-        path.extension().and_then(|ext| ext.to_str()) == Some("fd")
-            && path
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|date| storage::validate_date(date).is_ok())
-    })
-}
-
 fn list_entry_dates(dir: &Path) -> Result<Vec<String>, String> {
     storage::ensure_dir(dir)?;
     let read_dir = fs::read_dir(dir).map_err(|e| format!("Failed to read diary directory: {e}"))?;
@@ -634,13 +617,6 @@ pub fn migrate_from_xml(dir: &Path, diary_key: &[u8; 32]) -> Result<MigrationRep
             warnings,
             ..MigrationReport::default()
         });
-    }
-
-    if has_legacy_sync_records(dir) {
-        return Err(
-            "This folder contains legacy .fd sync records but no database. Rebuild or export it with Fly Diary 2.0.0 before upgrading; this version no longer reads .fd files."
-                .to_string(),
-        );
     }
 
     // A wrong key would otherwise build an empty database and report every

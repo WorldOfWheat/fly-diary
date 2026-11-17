@@ -8,7 +8,7 @@
 
 > **SQLCipher 版本的重要變更**：除了 `vault.xml` 與 `recovery.xml`，本文件描述的
 > 日記 XML 格式**只作為一次性遷移的 legacy 參考**。新版本不再產生
-> `YYYY-MM-DD.xml`、`index.xml`、`manifest.xml` 或每日 `.fd`；完整的新格式、
+> `YYYY-MM-DD.xml`、`index.xml` 或 `manifest.xml`；完整的新格式、
 > 加密備份 `.tar` 與遷移流程請見 [sqlcipher.md](sqlcipher.md)。
 
 每個 legacy 日記檔（`YYYY-MM-DD.xml`，只作為遷移輸入）：
