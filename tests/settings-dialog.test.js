@@ -12,7 +12,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createSettingsDialog } from "../src/settings-dialog.js";
-import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
+import { installDom, fakeEls, fakeT, fakeInvoke, spy, fakeElement } from "./helpers/dom.js";
 
 const SETTINGS_IDS = [
   "settingsOverlay",
@@ -125,6 +125,23 @@ async function withSettings(body, overrides) {
   }
 }
 
+/** Add two collapsible settings blocks to the fake overlay. */
+function addSettingsSections(els) {
+  const first = fakeElement("details");
+  first.className = "settings-section";
+  first.open = true;
+  const firstSummary = fakeElement("summary");
+  firstSummary.className = "settings-disclosure";
+  first.append(firstSummary);
+
+  const second = fakeElement("details");
+  second.className = "settings-section";
+  second.open = true;
+  els.settingsOverlay.append(first, second);
+
+  return firstSummary;
+}
+
 // ---------------------------------------------------------------------------
 // Open / close
 // ---------------------------------------------------------------------------
@@ -195,6 +212,45 @@ test("openSettings keeps the folder action on desktop", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
     assert.equal(els.settingsChangeDirBtn.hidden, false);
+  });
+});
+
+test("openSettings collapses the settings blocks on mobile", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      const firstSummary = addSettingsSections(els);
+      await settings.openSettings();
+
+      assert.deepEqual(
+        els.settingsOverlay.byClass("settings-section").map((section) => section.open),
+        [false, false]
+      );
+      assert.equal(document.activeElement, firstSummary);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          autoLockChoices: [0, 5, 15],
+          autoLockMinutes: 5,
+          autosaveDelayChoices: [200, 800, 3000],
+          autosaveDelayMs: 800,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("openSettings leaves the settings blocks open on desktop", async () => {
+  await withSettings(async ({ settings, els }) => {
+    addSettingsSections(els);
+    await settings.openSettings();
+
+    assert.deepEqual(
+      els.settingsOverlay.byClass("settings-section").map((section) => section.open),
+      [true, true]
+    );
+    assert.equal(document.activeElement, els.settingsCurrentPass);
   });
 });
 
@@ -845,6 +901,53 @@ test("the sync section stays hidden when the backend does not support it", async
     await settings.refreshSyncStatus();
     assert.equal(els.syncSection.hidden, true);
   }, { invokeTable: { get_sync_status: { supported: false } } });
+});
+
+test("pickSyncDir guards the suspend lock while the folder picker is open", async () => {
+  const beginNativePicker = spy();
+  const endNativePicker = spy();
+  const report = {
+    pushed: [],
+    pulled: [],
+    conflicts: [],
+    notes: [],
+    syncedAtMs: 1,
+  };
+
+  await withSettings(
+    async ({ settings }) => {
+      await settings.pickSyncDir();
+
+      assert.equal(beginNativePicker.count(), 1);
+      assert.equal(endNativePicker.count(), 1);
+    },
+    {
+      deps: { beginNativePicker, endNativePicker },
+      invokeTable: {
+        pick_sync_dir: { uri: "content://tree", name: "Diary" },
+        inspect_sync_dir: { hasVault: false, sameVault: false },
+        bind_sync_dir: report,
+      },
+    }
+  );
+});
+
+test("pickSyncDir releases the guard when the picker is cancelled", async () => {
+  const beginNativePicker = spy();
+  const endNativePicker = spy();
+
+  await withSettings(
+    async ({ settings }) => {
+      await settings.pickSyncDir();
+
+      assert.equal(beginNativePicker.count(), 1);
+      assert.equal(endNativePicker.count(), 1);
+    },
+    {
+      deps: { beginNativePicker, endNativePicker },
+      invokeTable: { pick_sync_dir: null },
+    }
+  );
 });
 
 test("the sync section renders the folder, auto flag and conflicts", async () => {

@@ -34,6 +34,8 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   afterRestore       — () => Promise<void>
 //   afterSync          — (report: object) => void | Promise<void>
 //   setSyncAutoEnabled — (enabled: boolean) => void
+//   beginNativePicker  — () => void, marks a native folder picker as open
+//   endNativePicker    — () => void, marks it as closed
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -64,6 +66,18 @@ export function createSettingsDialog(deps) {
   /** Whether the settings dialog is open. */
   function isSettingsOpen() {
     return !els.settingsOverlay.hidden;
+  }
+
+  /** Every collapsible settings block, in document order. */
+  function settingsSections() {
+    return Array.from(
+      els.settingsOverlay?.querySelectorAll?.("details.settings-section") ?? []
+    );
+  }
+
+  /** Open or close every settings block at once. */
+  function setSectionsOpen(open) {
+    for (const section of settingsSections()) section.open = open;
   }
 
   /** Fill the auto-lock dropdown from the choices the backend allows. */
@@ -374,6 +388,7 @@ export function createSettingsDialog(deps) {
    */
   async function pickSyncDir() {
     if (els.syncError) els.syncError.textContent = "";
+    deps.beginNativePicker?.();
     try {
       const picked = await deps.invoke("pick_sync_dir");
       if (!picked) return;
@@ -416,6 +431,8 @@ export function createSettingsDialog(deps) {
     } catch (err) {
       console.error("pick_sync_dir failed:", err);
       showSyncError(err);
+    } finally {
+      deps.endNativePicker?.();
     }
   }
 
@@ -493,12 +510,14 @@ export function createSettingsDialog(deps) {
     // should not wait on extra round trips before it appears.
     await Promise.all([renderDiaryPath(), renderAppInfo(), refreshSyncStatus()]);
 
+    let mobile = false;
     try {
       const settings = await deps.invoke("get_settings");
+      mobile = Boolean(settings.mobile);
       // Mobile has no folder picker, so the diary path is fixed. Hiding the
       // action is clearer than opening a picker that cannot change anything.
       if (els.settingsChangeDirBtn) {
-        els.settingsChangeDirBtn.hidden = Boolean(settings.mobile);
+        els.settingsChangeDirBtn.hidden = mobile;
       }
       renderAutoLockChoices(
         settings.autoLockChoices ?? DEFAULT_AUTO_LOCK_CHOICES,
@@ -519,9 +538,18 @@ export function createSettingsDialog(deps) {
       });
     }
 
+    // A phone has a long settings dialog on a short screen. Start with every
+    // block closed so the headings act as a menu; desktop keeps them open.
+    setSectionsOpen(!mobile);
+
     els.settingsOverlay.hidden = false;
     focusTrap.activate();
-    els.settingsCurrentPass.focus();
+    if (mobile) {
+      const first = els.settingsOverlay?.querySelector?.(".settings-disclosure");
+      (first ?? els.settingsClose)?.focus?.();
+    } else {
+      els.settingsCurrentPass.focus();
+    }
   }
 
   /** Close the settings dialog without saving. */

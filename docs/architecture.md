@@ -33,6 +33,7 @@ fly-diary/
 │   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
 │   │   ├── list-rows.js    # 虛擬清單的列模型：月份分隔、列位移、年份跳轉
 │   │   ├── motion.js       # 減少動態偵測與 overlay 關閉殘影
+│   │   ├── native-picker.js # 原生檔案／資料夾選擇器期間抑制 suspend lock
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
@@ -60,6 +61,7 @@ fly-diary/
 │   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏
 │   ├── list-rows.test.js   # 列模型：月份分隔、位移、二分搜尋、年份跳轉
 │   ├── motion.test.js      # 減少動態與 overlay 殘影的 no-op 條件
+│   ├── native-picker.test.js # 原生選擇器的 suspend-lock 抑制與上限
 │   ├── stats.test.js
 │   ├── i18n.test.js
 │   ├── wiring.test.js      # 快捷鍵分派、對話框開關、debounce、手機返回鈕

@@ -489,8 +489,10 @@
                      whole vault. These used to be footer buttons; they are
                      settings-shaped rather than writing-shaped, so they belong
                      here. -->
-                <section class="settings-section">
-                    <h3 class="settings-heading" data-i18n="settings.diary">日記本</h3>
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.diary">日記本</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="settings.diaryHint">
                         日記以加密檔案存放在這個資料夾，換資料夾需要先鎖定。
                     </p>
@@ -508,14 +510,16 @@
                             data-i18n="sidebar.changeDir" data-i18n-title="sidebar.changeDirTitle"
                             title="變更日記儲存資料夾">路徑</button>
                     </div>
-                </section>
+                </details>
 
                 <!-- Android folder sync (hidden on desktop: the backend reports
                      supported=false there). The private vault stays the source
                      of truth; this only mirrors encrypted files to a folder the
                      user picked with the system folder picker. -->
-                <section id="sync-section" class="settings-section" hidden>
-                    <h3 class="settings-heading" data-i18n="sync.heading">資料夾同步</h3>
+                <details id="sync-section" class="settings-section" hidden open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="sync.heading">資料夾同步</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="sync.hint">
                         手機版可以把加密檔案同步到一個外部資料夾（例如 Syncthing 或雲端硬碟同步的資料夾）。
                         日記本體仍留在 App 的私有空間，這裡只複製密文，不會上傳任何明文。
@@ -565,11 +569,13 @@
                     </div>
 
                     <p id="sync-error" class="import-error" role="alert"></p>
-                </section>
+                </details>
 
                 <!-- Auto-lock -->
-                <section class="settings-section">
-                    <h3 class="settings-heading" data-i18n="settings.autoLock">閒置自動鎖定</h3>
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.autoLock">閒置自動鎖定</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="settings.autoLockHint">
                         閒置超過指定時間後自動鎖定日記，需要重新輸入密碼。
                     </p>
@@ -577,11 +583,13 @@
                         <span class="settings-label" data-i18n="settings.autoLockLabel">鎖定時間</span>
                         <select id="auto-lock-select" class="settings-select"></select>
                     </label>
-                </section>
+                </details>
 
                 <!-- Autosave -->
-                <section class="settings-section">
-                    <h3 class="settings-heading" data-i18n="settings.autosave">自動儲存</h3>
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.autosave">自動儲存</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="settings.autosaveHint">
                         停止輸入後多久寫入磁碟。時間越短越不容易遺失內容，但每次寫入都會重新加密整個檔案。
                     </p>
@@ -589,11 +597,13 @@
                         <span class="settings-label" data-i18n="settings.autosaveLabel">延遲時間</span>
                         <select id="autosave-delay-select" class="settings-select"></select>
                     </label>
-                </section>
+                </details>
 
                 <!-- Passphrase / KDF -->
-                <section class="settings-section">
-                    <h3 class="settings-heading" data-i18n="settings.security">密碼與金鑰派生</h3>
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.security">密碼與金鑰派生</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="settings.securityHint">
                         變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。
                     </p>
@@ -641,13 +651,15 @@
                             data-i18n="settings.calibrate">自動量測（約 1 秒）</button>
                         <p id="settings-calibrate-note" class="settings-hint"></p>
                     </details>
-                </section>
+                </details>
 
                 <!-- About: build metadata. The commit hash is embedded at
                      compile time so a running binary can be traced back to an
                      exact source revision. -->
-                <section class="settings-section">
-                    <h3 class="settings-heading" data-i18n="settings.about">關於</h3>
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.about">關於</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="settings.aboutHint">
                         Fly Diary 是離線、零知識的加密日記。這個區塊可協助你回報問題時確認建置版本。
                     </p>
@@ -663,13 +675,15 @@
                         <span class="settings-label" data-i18n="settings.author">作者</span>
                         <span id="settings-app-author" class="settings-path"></span>
                     </div>
-                </section>
+                </details>
 
                 <!-- Recovery phrase: a second, optional way to reach the diary
                      key. It is off by default and can be regenerated or removed
                      at any time; the phrase itself is only ever shown once. -->
-                <section class="settings-section">
-                    <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
+                    </summary>
                     <p class="settings-hint" data-i18n="recovery.settingsHint">
                         啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
                         忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
@@ -681,7 +695,7 @@
                         <button id="recovery-remove-btn" class="btn-danger" type="button"
                             data-i18n="recovery.remove" hidden>停用回復短語</button>
                     </div>
-                </section>
+                </details>
             </div>
 
             <footer class="modal-foot">

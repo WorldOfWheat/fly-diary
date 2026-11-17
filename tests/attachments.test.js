@@ -51,6 +51,8 @@ function setup({ invokeTable = {}, canEdit = true, locked = false } = {}) {
   const setStatus = spy();
   const refreshList = spy(async () => {});
   const flushText = spy(async () => {});
+  const beginNativePicker = spy();
+  const endNativePicker = spy();
   const gallery = createAttachmentGallery({
     els,
     invoke,
@@ -61,6 +63,8 @@ function setup({ invokeTable = {}, canEdit = true, locked = false } = {}) {
     isLocked: () => locked,
     flushText,
     refreshList,
+    beginNativePicker,
+    endNativePicker,
   });
 
   return {
@@ -70,6 +74,8 @@ function setup({ invokeTable = {}, canEdit = true, locked = false } = {}) {
     setStatus,
     refreshList,
     flushText,
+    beginNativePicker,
+    endNativePicker,
     gallery,
     restore,
   };
@@ -95,6 +101,30 @@ test("imageTypeForFile infers MIME from the name when the OS omits it", () => {
   assert.equal(imageTypeForFile({ type: "", name: "photo.tiff" }), "image/tiff");
   assert.equal(imageTypeForFile({ type: "text/plain", name: "notes.txt" }), "text/plain");
   assert.equal(imageTypeForFile({ type: "image/gif", name: "x.bin" }), "image/gif");
+});
+
+test("pickFile marks the native picker before opening the file input", async () => {
+  const ctx = setup({ invokeTable: { list_attachments: [] } });
+  try {
+    await ctx.gallery.load("2026-10-23");
+    ctx.gallery.pickFile();
+
+    assert.equal(ctx.beginNativePicker.count(), 1);
+    assert.equal(ctx.els.attachmentInput.clicked, 1);
+  } finally {
+    ctx.restore();
+  }
+});
+
+test("adding selected files releases the native picker guard", async () => {
+  const ctx = setup();
+  try {
+    await ctx.gallery.addFiles([]);
+
+    assert.equal(ctx.endNativePicker.count(), 1);
+  } finally {
+    ctx.restore();
+  }
 });
 
 test("attachmentDataUrl produces a usable data URL", () => {

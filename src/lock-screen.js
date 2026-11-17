@@ -400,12 +400,10 @@ export function createLockScreen(deps) {
     // The path field is shown on first run, and whenever the user opens the
     // workspace picker. It is *not* tied to `configured` any more: a returning
     // user must be able to point the app at another diary folder before they
-    // unlock, otherwise a second workspace would be unreachable. On mobile the
-    // folder cannot be chosen, so the field is only shown on first run (as a
-    // read-only display of where the diary lives) and never re-opened.
-    els.pathField.hidden = mobile
-      ? configured
-      : configured && !pickingWorkspace;
+    // unlock, otherwise a second workspace would be unreachable. Mobile has no
+    // folder picker and the diary lives in a fixed private directory, so the
+    // field is never shown there, including on first run.
+    els.pathField.hidden = mobile || (configured && !pickingWorkspace);
     // The current workspace is only worth showing once one has been chosen,
     // and it is hidden while the picker is open (the path field says it all).
     // Mobile has no second workspace, so the row is never useful there.

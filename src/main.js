@@ -33,6 +33,7 @@ import {
 } from "./lib/list-rows.js";
 import { prefersReducedMotion, setExitAnimationsEnabled } from "./lib/motion.js";
 import { backButtonAction } from "./lib/back-nav.js";
+import { nativePickerGuard } from "./lib/native-picker.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -57,6 +58,8 @@ let savedTitle = "";
 let savedContent = "";
 /** Debounce timer for autosave. */
 let saveTimer = null;
+/** Whether the current native picker backgrounded the webview. */
+let nativePickerWasHidden = false;
 /** All entry metadata, newest first. */
 let allEntries = [];
 /** Date → metadata and date → broken reason, for the review strip. */
@@ -2008,6 +2011,10 @@ async function lockAndFlush() {
   // No fading overlay ghosts above the lock screen: their z-index is higher
   // than the lock layer, and even a title or thumbnail must not linger there.
   setExitAnimationsEnabled(false);
+  // A picker that was open when the session locked must not suppress the next
+  // background lock after the user unlocks again.
+  nativePickerGuard.reset();
+  nativePickerWasHidden = false;
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -2062,6 +2069,20 @@ function stopAutoLockTimer() {
   autoLock.stop();
 }
 
+/** Mark the start of a native file/folder picker. */
+function beginNativePicker() {
+  nativePickerWasHidden = false;
+  nativePickerGuard.begin();
+  resetAutoLockTimer();
+}
+
+/** Mark the end of a native picker and restart the idle countdown. */
+function endNativePicker() {
+  nativePickerWasHidden = false;
+  nativePickerGuard.end();
+  resetAutoLockTimer();
+}
+
 /** Apply a new auto-lock duration and re-arm the timer. */
 function setAutoLockMinutes(minutes) {
   autoLock.setMinutes(minutes);
@@ -2076,17 +2097,33 @@ function setAutoLockMinutes(minutes) {
  */
 function initSuspendLock() {
   const lockIfUnlocked = () => {
-    if (!els.app.hidden) lockScreen.lockNow();
+    if (els.app.hidden) return;
+    if (nativePickerGuard.suppresses()) return;
+    lockScreen.lockNow();
   };
-  listen("tauri://suspended", lockIfUnlocked);
+  const handleHide = () => {
+    if (nativePickerGuard.isOpen()) nativePickerWasHidden = true;
+    lockIfUnlocked();
+  };
+  listen("tauri://suspended", handleHide);
   listen("tauri://resumed", lockIfUnlocked);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") lockIfUnlocked();
-    // Timers can be suspended while hidden; check the deadline as soon as the
-    // webview is visible again.
-    else resetAutoLockTimer();
+    if (document.visibilityState === "hidden") {
+      handleHide();
+    } else {
+      // Returning from a picker is not a lock event: close the guard and let
+      // the idle timer start a fresh interval.
+      if (nativePickerWasHidden) endNativePicker();
+      else resetAutoLockTimer();
+    }
   });
-  window.addEventListener("pagehide", lockIfUnlocked);
+  // `focus` covers pickers that do not change visibility. Only end after a
+  // picker actually backgrounded the webview; a focus event while the picker is
+  // still opening must not disarm the guard.
+  window.addEventListener("focus", () => {
+    if (nativePickerWasHidden) endNativePicker();
+  });
+  window.addEventListener("pagehide", handleHide);
 }
 
 /**
@@ -2290,6 +2327,8 @@ function createControllers() {
     afterRestore: () => lockScreen.lockNow(),
     afterSync: afterSyncReport,
     setSyncAutoEnabled,
+    beginNativePicker,
+    endNativePicker,
   });
 
   recoveryDialog = createRecoveryDialog({
@@ -2311,6 +2350,8 @@ function createControllers() {
     refreshList,
     onEntryChanged: syncHeaderActions,
     onSyncNeeded: scheduleSyncAfterChange,
+    beginNativePicker,
+    endNativePicker,
   });
 
   nativeFileDrop = createNativeFileDrop({
@@ -2491,6 +2532,7 @@ function wireEvents() {
     showListLayer,
     // Attachments
     pickAttachment: attachmentGallery.pickFile,
+    endNativePicker,
     canAttachImages: attachmentGallery.canEdit,
     onAttachmentBlocked: () => {
       // Read-only is a deliberate gate: an image paste/drop must not silently

@@ -403,14 +403,14 @@ test("renderLockScreen explains the picker when the folder has no vault", () => 
 // Mobile: the diary folder is fixed
 // ---------------------------------------------------------------------------
 
-test("mobile shows the fixed folder on first run without a browse button", async () => {
+test("mobile hides the fixed folder on first run and has no browse button", async () => {
   await withLock(
     async ({ lock, els }) => {
       await lock.loadSettings();
       lock.setVaultInitialized(false);
       lock.renderLockScreen();
 
-      assert.equal(els.pathField.hidden, false);
+      assert.equal(els.pathField.hidden, true);
       assert.equal(els.browseDir.hidden, true);
       assert.equal(els.diaryDir.readOnly, true);
       assert.equal(els.workspaceRow.hidden, true);
@@ -423,6 +423,40 @@ test("mobile shows the fixed folder on first run without a browse button", async
           autoLockMinutes: 5,
           mobile: true,
         },
+      },
+    }
+  );
+});
+
+test("mobile creates the first vault from the hidden default folder", async () => {
+  await withLock(
+    async ({ lock, els, invoke, deps }) => {
+      await lock.loadSettings();
+      lock.setVaultInitialized(false);
+      els.passphrase.value = "longenough12";
+      els.passphraseConfirm.value = "longenough12";
+      els.kdfMemory.value = "64";
+      els.kdfIterations.value = "3";
+      els.kdfParallelism.value = "4";
+
+      await lock.handleUnlockSubmit(submitEvent());
+
+      assert.equal(els.pathField.hidden, true);
+      assert.deepEqual(invoke.argsOf("set_diary_dir"), {
+        path: "/data/user/0/com.flydiary.app/files/diary",
+      });
+      assert.ok(invoke.argsOf("create_vault"));
+      assert.equal(deps.enterApp.count(), 1);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: false,
+          defaultDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+        vault_exists: false,
       },
     }
   );

@@ -215,6 +215,7 @@ function harness(overrides = {}) {
     selectDate: spy("selectDate"),
     showListLayer: spy("showListLayer"),
     pickAttachment: spy("pickAttachment"),
+    endNativePicker: spy("endNativePicker"),
     canAttachImages: () => true,
     onAttachmentBlocked: spy("onAttachmentBlocked"),
     addAttachmentFiles: spy("addAttachmentFiles"),
@@ -488,6 +489,18 @@ test("the attachment add button and file input reach the gallery", () => {
     h.els.attachmentInput.files = files;
     h.els.attachmentInput.dispatch("change", { target: h.els.attachmentInput });
     assert.deepEqual(h.argsOf("addAttachmentFiles"), [files]);
+    assert.deepEqual(h.names().slice(-2), [
+      "endNativePicker",
+      "addAttachmentFiles",
+    ]);
+  });
+});
+
+test("cancelling the image picker releases the suspend guard", () => {
+  withHarness((h) => {
+    h.els.attachmentInput.dispatch("cancel");
+
+    assert.deepEqual(h.names(), ["endNativePicker"]);
   });
 });
 
