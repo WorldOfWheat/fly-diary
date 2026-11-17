@@ -495,6 +495,11 @@ export function createSettingsDialog(deps) {
 
     try {
       const settings = await deps.invoke("get_settings");
+      // Mobile has no folder picker, so the diary path is fixed. Hiding the
+      // action is clearer than opening a picker that cannot change anything.
+      if (els.settingsChangeDirBtn) {
+        els.settingsChangeDirBtn.hidden = Boolean(settings.mobile);
+      }
       renderAutoLockChoices(
         settings.autoLockChoices ?? DEFAULT_AUTO_LOCK_CHOICES,
         settings.autoLockMinutes ?? 0

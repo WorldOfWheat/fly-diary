@@ -60,6 +60,14 @@ export function createLockScreen(deps) {
 
   /** Whether a settings file exists (a diary folder has been chosen). */
   let configured = false;
+  /**
+   * Whether this build has no filesystem folder picker (Android/iOS).
+   *
+   * The diary always lives in the app's private data directory on mobile, so
+   * the path field is read-only there and the controls that would open a
+   * picker are hidden instead of silently doing nothing.
+   */
+  let mobile = false;
   /** Whether the chosen folder already holds a vault. */
   let vaultInitialized = false;
   /**
@@ -392,11 +400,25 @@ export function createLockScreen(deps) {
     // The path field is shown on first run, and whenever the user opens the
     // workspace picker. It is *not* tied to `configured` any more: a returning
     // user must be able to point the app at another diary folder before they
-    // unlock, otherwise a second workspace would be unreachable.
-    els.pathField.hidden = configured && !pickingWorkspace;
+    // unlock, otherwise a second workspace would be unreachable. On mobile the
+    // folder cannot be chosen, so the field is only shown on first run (as a
+    // read-only display of where the diary lives) and never re-opened.
+    els.pathField.hidden = mobile
+      ? configured
+      : configured && !pickingWorkspace;
     // The current workspace is only worth showing once one has been chosen,
     // and it is hidden while the picker is open (the path field says it all).
-    els.workspaceRow.hidden = !configured || pickingWorkspace;
+    // Mobile has no second workspace, so the row is never useful there.
+    els.workspaceRow.hidden = mobile || !configured || pickingWorkspace;
+    if (els.browseDir) els.browseDir.hidden = mobile;
+    if (els.switchWorkspace) {
+      // Hide and disable: mobile has exactly one workspace, so even if an older
+      // layout reveals the row the button cannot open a picker that has no
+      // filesystem target.
+      els.switchWorkspace.hidden = mobile;
+      els.switchWorkspace.disabled = mobile;
+    }
+    if (els.diaryDir) els.diaryDir.readOnly = mobile;
     // KDF parameters can only be chosen when a new vault is being created.
     els.advancedField.hidden = vaultInitialized;
 
@@ -439,6 +461,7 @@ export function createLockScreen(deps) {
   async function loadSettings() {
     const settings = await deps.invoke("get_settings");
     configured = settings.configured;
+    mobile = Boolean(settings.mobile);
     els.diaryDir.value = settings.diaryDir ?? settings.defaultDir ?? "";
     renderWorkspacePath();
     // Keep the idle timer in sync with whatever is on disk.
@@ -509,6 +532,7 @@ export function createLockScreen(deps) {
    * pointing at the original workspace.
    */
   async function openWorkspacePicker() {
+    if (mobile) return;
     els.lockError.textContent = "";
     pickingWorkspace = true;
     // The native picker itself relaxes capture protection for its lifetime and
@@ -631,6 +655,7 @@ export function createLockScreen(deps) {
 
   /** Open the native folder picker and store the result in the path field. */
   async function browseForDir() {
+    if (mobile) return;
     els.lockError.textContent = "";
     try {
       const picked = await deps.invoke("pick_diary_dir");
@@ -646,6 +671,7 @@ export function createLockScreen(deps) {
 
   /** Change the diary location from the sidebar (must be locked first). */
   async function changeDiaryDir() {
+    if (mobile) return;
     await deps.lockAndFlush();
 
     deps.resetEditorState();

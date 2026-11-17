@@ -73,6 +73,13 @@ struct SettingsView {
     autosave_delay_ms: u32,
     /// The autosave delays the UI may offer.
     autosave_delay_choices: Vec<u32>,
+    /// Whether this build runs on a mobile target.
+    ///
+    /// Mobile has no filesystem folder picker: the diary always lives in the
+    /// app's private data directory, so the lock screen hides the browse and
+    /// workspace-switch controls instead of offering an action that cannot
+    /// change anything.
+    mobile: bool,
 }
 
 /// Build information shown in the settings dialog.
@@ -228,6 +235,7 @@ async fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
             auto_lock_choices: settings::AUTO_LOCK_CHOICES.to_vec(),
             autosave_delay_ms,
             autosave_delay_choices: settings::AUTOSAVE_DELAY_CHOICES.to_vec(),
+            mobile: cfg!(mobile),
         })
     })
     .await

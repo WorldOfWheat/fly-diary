@@ -4,6 +4,9 @@
 // be resolved by the browser.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+// Android-only APIs. `withGlobalTauri` exposes the app module on both desktop
+// and mobile; `onBackButtonPress` is simply never called off Android.
+const tauriApp = window.__TAURI__.app;
 
 // Relative specifiers *do* work without a bundler, so the i18n layer and the
 // pure helpers under `lib/` are normal ES modules next to this file.
@@ -29,6 +32,7 @@ import {
   firstRowForYear,
 } from "./lib/list-rows.js";
 import { prefersReducedMotion, setExitAnimationsEnabled } from "./lib/motion.js";
+import { backButtonAction } from "./lib/back-nav.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -2085,6 +2089,65 @@ function initSuspendLock() {
   window.addEventListener("pagehide", lockIfUnlocked);
 }
 
+/**
+ * Route the Android hardware/gesture back button through the overlay stack.
+ *
+ * Registering this listener replaces Tauri's default back action, which would
+ * leave the activity when no WebView history exists. Leaving the activity fires
+ * `pagehide`/`visibilitychange` and therefore looks like "closing settings logs
+ * me out". Instead, back closes the topmost DOM overlay; the diary stays
+ * unlocked. Only an empty stack exits the app (the normal Android behaviour,
+ * and the only path that intentionally triggers the suspend lock).
+ */
+function handleAndroidBack() {
+  const action = backButtonAction({
+    attachmentViewer: attachmentGallery.isViewerOpen(),
+    recovery: recoveryDialog.isOpen(),
+    stats: statsDialog.isStatsOpen(),
+    importDialog: importDialog.isImportOpen(),
+    settings: settingsDialog.isSettingsOpen(),
+    calendar: calendar.isCalendarOpen(),
+    phoneEditor:
+      Boolean(phoneLayout?.matches) && els.app?.dataset.layer === "editor",
+  });
+
+  switch (action) {
+    case "closeAttachments":
+      attachmentGallery.closeViewer();
+      return;
+    case "closeRecovery":
+      recoveryDialog.close();
+      return;
+    case "closeStats":
+      statsDialog.closeStats();
+      return;
+    case "closeImport":
+      importDialog.closeImport();
+      return;
+    case "closeSettings":
+      settingsDialog.closeSettings();
+      return;
+    case "closeCalendar":
+      calendar.closeCalendar({ restoreFocus: true });
+      return;
+    case "showList":
+      showListLayer();
+      return;
+    default:
+      Promise.resolve(tauriApp?.exit?.(0)).catch((err) => {
+        console.error("back button exit failed:", err);
+      });
+  }
+}
+
+/** Register the Android back handler when the API is available. */
+function initAndroidBackButton() {
+  if (typeof tauriApp?.onBackButtonPress !== "function") return;
+  tauriApp.onBackButtonPress(handleAndroidBack).catch((err) => {
+    console.error("back button listener failed:", err);
+  });
+}
+
 /** Wire the global activity listeners once, at startup. */
 function initAutoLock() {
   for (const name of ACTIVITY_EVENTS) {
@@ -2575,6 +2638,7 @@ async function init() {
   // Idle auto-lock listens globally; the duration arrives with the settings.
   initAutoLock();
   initSuspendLock();
+  initAndroidBackButton();
 
   // The bookmark button starts disabled: no entry is open yet.
   renderFavouriteButton();

@@ -27,6 +27,7 @@ fly-diary/
 │   ├── i18n.js             # 多語系字典、t()、日期在地化
 │   ├── lib/
 │   │   ├── auto-lock.js    # 閒置計時器（可注入 lock callback，含 deadline 補鎖）
+│   │   ├── back-nav.js     # Android 返回鍵的 overlay 關閉順序（純函式）
 │   │   ├── dates.js        # 純日期運算（可單獨測試，無 DOM 依賴）
 │   │   ├── highlight.js    # 搜尋摘要的 UTF-16 標記切段（可單獨測試）
 │   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
@@ -53,6 +54,7 @@ fly-diary/
 │   │   ├── dom.js          # 極簡 DOM stub（fakeElement / installDom / fakeInvoke）
 │   │   └── css.js          # 展開 styles.css 的 @import，供 CSS invariant 測試
 │   ├── auto-lock.test.js   # 閒置計時：注入 callback、0 分鐘、deadline 補鎖
+│   ├── back-nav.test.js    # Android 返回鍵的 overlay 關閉順序
 │   ├── dates.test.js
 │   ├── highlight.test.js   # 搜尋摘要標記：範圍切段、重疊、UTF-16、越界
 │   ├── history.test.js     # 回顧卡片：offset、月底夾取、壞檔、缺漏

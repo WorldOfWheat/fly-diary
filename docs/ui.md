@@ -104,11 +104,12 @@
 - **單一 grid 格子**：`.app` 在窄視窗只留一個 `minmax(0, 1fr)` 格子，由 `.app[data-layer="list|editor"]` 決定顯示列表或編輯器。`main.js` 的 `showListLayer()` / `showEditorLayer()` 是唯二寫入這個屬性的地方。
 - **列表優先**：`enterApp()` 進入 App 時先顯示列表；點任一天（`selectDate()`，包含搜尋結果與損壞檔）才切到編輯器，編輯器佔滿整個視窗。
 - **返回鈕**：編輯區左上角的「列表」按鈕（`#back-to-list`）只在窄視窗出現，按一下呼叫 `showListLayer()`。桌面寬度下兩欄並存，按鈕以 `display: none` 隱藏；`wiring.js` 對它做存在性檢查，舊 DOM 沒有這個按鈕也能正常初始化。
+- **Android 返回鍵**：註冊 `onBackButtonPress`，依序關閉最上層的附件檢視、回復短語、統計、匯入、設定與月曆；手機編輯器層返回列表，全部都沒有才離開 App。這避免返回鍵直接結束 Activity，觸發 `pagehide` 鎖定而看起來像「關掉設定就被登出」。
 - **標頭壓縮**：窄視窗的狀態列允許換行，狀態文字可縮短並以省略號截斷，避免解鎖／收藏／刪除按鈕被推出畫面。
 - **320px 極窄寬度**：日期導覽縮小、設定列與匯入列改單欄、統計卡片最小寬度降到 `4.5rem`；狀態文字改為視覺隱藏（`clip-path`）而不是 `display: none`，因為它同時是 `role="status"` / `aria-live` 區域，要保留給螢幕閱讀器。
-- **解鎖畫面**：窄視窗時標題與主題／語言開關改成單列置中；工作區列只留「切換工作區」按鈕，路徑文字在窄視窗隱藏，把寬度讓給按鈕。
+- **解鎖畫面**：窄視窗時標題與主題／語言開關改成單列置中；工作區列只留「切換工作區」按鈕，路徑文字在窄視窗隱藏，把寬度讓給按鈕。行動版沒有資料夾選擇器，因此不顯示「瀏覽…」與「切換工作區」（後者同時設為 disabled）；第一次啟動只以唯讀欄位顯示固定的 App 私有路徑。
 - **觸控裝置**（`pointer: coarse`）：圖示按鈕至少 `2.75rem`、清單列高提高到 `--row-h: 3.75rem`（虛擬滾動會用 `getComputedStyle` 重新量測）。`hover: none` 會關掉觸控後殘留的 hover 樣式，改用 `:active` 回饋。圖片縮圖列可橫向捲動，排序／刪除按鈕在觸控裝置上常駐顯示。
-- **安全區與捲動**：`height: 100dvh`、`viewport-fit=cover` 與 `env(safe-area-inset-*)` 讓內容避開瀏海、手勢列與行動瀏覽器網址列；`touch-action: manipulation` 去掉雙擊縮放延遲，`overscroll-behavior: contain` 阻止內層捲動連鎖到頁面。
+- **安全區與捲動**：`height: 100dvh`、`viewport-fit=cover` 與 `env(safe-area-inset-*)` 讓內容避開瀏海、手勢列與行動瀏覽器網址列；清單與編輯器標頭也套用頂部安全區，避免 Android 的 status bar 蓋住日期導覽與狀態列。`touch-action: manipulation` 去掉雙擊縮放延遲，`overscroll-behavior: contain` 阻止內層捲動連鎖到頁面。
 
 ## 多語系
 

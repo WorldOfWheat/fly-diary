@@ -33,6 +33,8 @@ const LOCK_IDS = [
   "workspacePath",
   "pathField",
   "diaryDir",
+  "browseDir",
+  "switchWorkspace",
   "advancedField",
   "kdfMemory",
   "kdfIterations",
@@ -395,6 +397,97 @@ test("renderLockScreen explains the picker when the folder has no vault", () => 
 
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.switching");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Mobile: the diary folder is fixed
+// ---------------------------------------------------------------------------
+
+test("mobile shows the fixed folder on first run without a browse button", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      await lock.loadSettings();
+      lock.setVaultInitialized(false);
+      lock.renderLockScreen();
+
+      assert.equal(els.pathField.hidden, false);
+      assert.equal(els.browseDir.hidden, true);
+      assert.equal(els.diaryDir.readOnly, true);
+      assert.equal(els.workspaceRow.hidden, true);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: false,
+          defaultDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("mobile hides the path field and workspace row once configured", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      await lock.loadSettings();
+      lock.setVaultInitialized(true);
+      lock.renderLockScreen();
+
+      assert.equal(els.pathField.hidden, true);
+      assert.equal(els.workspaceRow.hidden, true);
+      assert.equal(els.browseDir.hidden, true);
+      assert.equal(els.switchWorkspace.hidden, true);
+      assert.equal(els.switchWorkspace.disabled, true);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: true,
+          diaryDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("desktop keeps the browse and workspace controls", async () => {
+  await withLock(async ({ lock, els }) => {
+    await lock.loadSettings();
+    lock.setVaultInitialized(true);
+    lock.renderLockScreen();
+
+    assert.equal(els.browseDir.hidden, false);
+    assert.equal(els.switchWorkspace.hidden, false);
+    assert.equal(els.diaryDir.readOnly, false);
+    assert.equal(els.workspaceRow.hidden, false);
+  });
+});
+
+test("mobile does not call the native picker", async () => {
+  await withLock(
+    async ({ lock, invoke }) => {
+      await lock.loadSettings();
+      await lock.browseForDir();
+      await lock.openWorkspacePicker();
+
+      assert.equal(invoke.commands().includes("pick_diary_dir"), false);
+      assert.equal(lock.isPickingWorkspace(), false);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: true,
+          diaryDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+      },
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

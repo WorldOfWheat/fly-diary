@@ -24,6 +24,7 @@ const SETTINGS_IDS = [
   "settingsSave",
   "settingsCalibrate",
   "settingsDiaryPath",
+  "settingsChangeDirBtn",
   "settingsAppVersion",
   "settingsAppCommit",
   "settingsAppAuthor",
@@ -167,6 +168,33 @@ test("openSettings shows the diary folder", async () => {
       "/home/user/Documents/diary"
     );
     assert.equal(els.settingsDiaryPath.title, "/home/user/Documents/diary");
+  });
+});
+
+test("openSettings hides the folder action on mobile", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.openSettings();
+      assert.equal(els.settingsChangeDirBtn.hidden, true);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          autoLockChoices: [0, 5, 15],
+          autoLockMinutes: 5,
+          autosaveDelayChoices: [200, 800, 3000],
+          autosaveDelayMs: 800,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("openSettings keeps the folder action on desktop", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.openSettings();
+    assert.equal(els.settingsChangeDirBtn.hidden, false);
   });
 });
 

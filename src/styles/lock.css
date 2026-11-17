@@ -235,6 +235,7 @@ html[data-input-modality="keyboard"] .lock-input:focus {
 
 .lock-path-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.375rem;
 }
 
@@ -274,7 +275,11 @@ html[data-input-modality="keyboard"] .lock-input:focus {
 }
 
 .lock-path-row .lock-input {
-  flex: 1;
+  /* A non-zero flex basis keeps the field visible when the card is narrow: with
+     `flex: 1` the basis is 0, and a flex container that runs out of room can
+     leave the input at zero width while the fixed-width browse button stays.
+     The row wraps instead, so the path field always keeps a usable width. */
+  flex: 1 1 8rem;
   min-width: 0;
   font-family: var(--mono);
   font-size: 0.75rem;

@@ -26,7 +26,7 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 
 | Command                                   | 說明                                                                         |
 | ----------------------------------------- | ---------------------------------------------------------------------------- |
-| `get_settings()`                          | 讀取設定檔（是否已設定、日記路徑、預設路徑、自動鎖定與自動儲存延遲及可選值） |
+| `get_settings()`                          | 讀取設定檔（是否已設定、日記路徑、預設路徑、自動鎖定與自動儲存延遲及可選值、是否為行動版） |
 | `set_diary_dir(path)`                     | 將日記路徑寫入設定檔（保留既有的自動鎖定與自動儲存設定）                     |
 | `set_auto_lock(minutes)`                  | 寫入閒置自動鎖定分鐘數（`0` 表示永不）                                       |
 | `set_autosave_delay(ms)`                  | 寫入自動儲存延遲毫秒數（只接受 `200/400/800/1500/3000`）                     |
@@ -84,7 +84,8 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `restore_from_sync_dir(treeUri, displayName?)` | 需要先鎖定；用外部資料夾內容取代私有 vault，舊資料保留為 `*.local-backup-*` |
 | `set_screenshot_protection(protected)`    | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
 
-> 行動版（`#[cfg(mobile)]`）的差異：`pick_diary_dir` 直接回傳 App 私有資料夾、
-> `pick_import_dir` 回報不支援 `.txt` 資料夾匯入、選單列不建置。Android 另有上方
-> `*_sync_*` 系列命令與 `src-tauri/plugins/saf-sync` 外掛；桌面版不會載入該外掛，
+> 行動版（`#[cfg(mobile)]`）的差異：`get_settings` 的 `mobile: true` 會讓解鎖畫面隱藏
+> 「瀏覽…」與「切換工作區」，設定頁也隱藏變更路徑按鈕；`pick_diary_dir` 仍直接回傳
+> App 私有資料夾、`pick_import_dir` 回報不支援 `.txt` 資料夾匯入、選單列不建置。Android
+> 另有上方 `*_sync_*` 系列命令與 `src-tauri/plugins/saf-sync` 外掛；桌面版不會載入該外掛，
 > `get_sync_status` 回報 `supported: false`。
