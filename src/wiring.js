@@ -450,6 +450,22 @@ export function initEventWiring(deps) {
     if (e.target === els.settingsOverlay) deps.closeSettings();
   });
 
+  // Android folder sync. Guarded because a desktop build (and the DOM tests)
+  // may not include the section at all.
+  if (els.syncPickBtn) on(els.syncPickBtn, "click", deps.pickSyncDir);
+  if (els.syncNowBtn) on(els.syncNowBtn, "click", deps.syncNow);
+  if (els.syncUnbindBtn) on(els.syncUnbindBtn, "click", deps.unbindSyncDir);
+  if (els.syncAuto) {
+    on(els.syncAuto, "change", () => deps.setSyncAuto(els.syncAuto.checked));
+  }
+  if (els.syncConflictList) {
+    on(els.syncConflictList, "click", (event) => {
+      const button = event.target?.closest?.("button[data-path]");
+      if (!button) return;
+      deps.resolveSyncConflict(button.dataset.path, button.dataset.keep);
+    });
+  }
+
   // Recovery phrase settings + one-time display dialog.
   if (els.recoveryGenerateBtn) {
     on(els.recoveryGenerateBtn, "click", deps.openRecovery);

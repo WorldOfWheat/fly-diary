@@ -73,7 +73,18 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `upgrade_entries()`                       | 把舊格式日記改寫成 `version="4"`，回傳升級／略過／失敗報告（解鎖後自動呼叫） |
 | `today()`                                 | 回傳本地時區的今天日期                                                       |
 | `diary_path()`                            | 回傳日記資料夾絕對路徑                                                       |
+| `get_sync_status()`                       | 回傳同步支援與否、綁定資料夾、自動同步、上次同步時間與目前衝突（桌面版 `supported: false`） |
+| `pick_sync_dir()`                         | Android 版開啟 SAF 資料夾選擇器；取消或桌面版回 `null`                       |
+| `inspect_sync_dir(treeUri)`               | 檢查外部資料夾是否為空、是否屬於同一個 vault（需解鎖）                       |
+| `bind_sync_dir(treeUri, displayName?)`    | 綁定資料夾並執行第一次三向同步（需解鎖；不同 vault 會拒絕）                  |
+| `unbind_sync_dir()`                       | 解除綁定並刪除同步狀態（不動日記與外部檔案）                                 |
+| `set_sync_auto(enabled)`                  | 開關解鎖後與存檔後的自動同步                                                 |
+| `sync_now()`                              | 立即同步，回傳上傳／下載／衝突清單                                           |
+| `resolve_sync_conflict(path, keep)`       | 以 `keep: "local"` 或 `"remote"` 解決一個衝突                                |
+| `restore_from_sync_dir(treeUri, displayName?)` | 需要先鎖定；用外部資料夾內容取代私有 vault，舊資料保留為 `*.local-backup-*` |
 | `set_screenshot_protection(protected)`    | 開關視窗的截圖／錄影保護（Windows、macOS 有效；Linux 為空操作）              |
 
-> 行動版（`#[cfg(mobile)]`）的差異只有三處：`pick_diary_dir` 直接回傳 App 私有資料夾、
-> `pick_import_dir` 回報不支援資料夾匯入、選單列不建置。其餘命令桌面與行動版共用同一份實作。
+> 行動版（`#[cfg(mobile)]`）的差異：`pick_diary_dir` 直接回傳 App 私有資料夾、
+> `pick_import_dir` 回報不支援 `.txt` 資料夾匯入、選單列不建置。Android 另有上方
+> `*_sync_*` 系列命令與 `src-tauri/plugins/saf-sync` 外掛；桌面版不會載入該外掛，
+> `get_sync_status` 回報 `supported: false`。

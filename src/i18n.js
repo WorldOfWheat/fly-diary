@@ -152,6 +152,39 @@ const zhHant = {
   "settings.errNoChange": "沒有需要變更的項目",
   "settings.errCalibrate": "量測失敗：{message}",
   "settings.errSave": "儲存失敗：{message}",
+  "sync.heading": "資料夾同步（Android）",
+  "sync.hint":
+    "把加密檔案同步到一個外部資料夾（例如 Syncthing 或雲端硬碟同步的資料夾）。日記本體仍留在 App 的私有空間，這裡只複製密文，不會上傳任何明文。",
+  "sync.unboundHint": "尚未連結資料夾。選擇一個空資料夾，或同一個日記本的資料夾。",
+  "sync.pick": "選擇資料夾",
+  "sync.folderLabel": "資料夾",
+  "sync.lastSyncedLabel": "上次同步",
+  "sync.auto": "自動同步",
+  "sync.now": "立即同步",
+  "sync.unbind": "解除連結",
+  "sync.never": "尚未同步",
+  "sync.bound": "已連結資料夾。",
+  "sync.running": "同步中…",
+  "sync.upToDate": "兩邊都已是最新狀態。",
+  "sync.result": "已上傳 {pushed} 個、下載 {pulled} 個檔案，{conflicts} 個衝突。",
+  "sync.conflictCount": "有 {n} 個同步衝突需要在設定頁處理。",
+  "sync.conflictsHeading": "需要處理的衝突",
+  "sync.conflictsHint":
+    "兩邊都改過同一個檔案時，同步不會覆蓋任何一邊。請選擇要保留哪一份。",
+  "sync.conflictBoth": "兩邊都修改過",
+  "sync.conflictLocalDeleted": "本機已刪除，資料夾有修改",
+  "sync.conflictRemoteDeleted": "資料夾已刪除，本機有修改",
+  "sync.keepLocal": "保留本機",
+  "sync.keepRemote": "保留資料夾",
+  "sync.deleteLocal": "刪除本機",
+  "sync.deleteRemote": "刪除資料夾檔案",
+  "sync.resolveConfirm": "要針對 {path} 套用這個選擇嗎？這會覆蓋另一邊。",
+  "sync.unbindConfirm":
+    "解除連結只會停止同步，不會刪除日記或資料夾裡的檔案。確定要解除嗎？",
+  "sync.restoreConfirm":
+    "「{name}」是另一個日記本，不是目前解鎖的這一個。\n\n要改用它的資料嗎？目前的日記會先鎖定，並保留一份本機備份。",
+  "sync.restoreFailed": "從資料夾還原失敗：{message}",
+  "sync.failed": "同步失敗：{message}",
   "recovery.settingsTitle": "回復短語",
   "recovery.settingsHint":
     "啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。",
@@ -527,6 +560,43 @@ const en = {
   "settings.errNoChange": "Nothing to change",
   "settings.errCalibrate": "Measurement failed: {message}",
   "settings.errSave": "Could not save: {message}",
+  "sync.heading": "Folder sync (Android)",
+  "sync.hint":
+    "Mirror the encrypted files to an external folder, such as one synced by Syncthing or a cloud drive. The diary itself stays in the app's private storage; only ciphertext is copied and no plaintext is uploaded.",
+  "sync.unboundHint":
+    "No folder is linked yet. Pick an empty folder, or the folder of the same vault.",
+  "sync.pick": "Choose folder",
+  "sync.folderLabel": "Folder",
+  "sync.lastSyncedLabel": "Last sync",
+  "sync.auto": "Sync automatically",
+  "sync.now": "Sync now",
+  "sync.unbind": "Unlink",
+  "sync.never": "Never",
+  "sync.bound": "Folder linked.",
+  "sync.running": "Syncing…",
+  "sync.upToDate": "Both sides are already up to date.",
+  "sync.result":
+    "Uploaded {pushed}, downloaded {pulled}, {conflicts} conflicts.",
+  "sync.conflictCount":
+    "{n} sync conflicts need attention in settings.",
+  "sync.conflictsHeading": "Conflicts to resolve",
+  "sync.conflictsHint":
+    "When the same file changed on both sides, sync overwrites neither. Choose which copy to keep.",
+  "sync.conflictBoth": "Changed on both sides",
+  "sync.conflictLocalDeleted": "Deleted locally, changed in the folder",
+  "sync.conflictRemoteDeleted": "Deleted in the folder, changed locally",
+  "sync.keepLocal": "Keep local",
+  "sync.keepRemote": "Keep folder copy",
+  "sync.deleteLocal": "Delete local",
+  "sync.deleteRemote": "Delete folder copy",
+  "sync.resolveConfirm":
+    "Apply this choice to {path}? It overwrites the other copy.",
+  "sync.unbindConfirm":
+    "Unlinking only stops syncing; it deletes neither the diary nor the folder. Unlink?",
+  "sync.restoreConfirm":
+    "\"{name}\" belongs to a different diary vault than the one currently unlocked.\n\nAdopt its data? The current diary will lock first and a local backup will be kept.",
+  "sync.restoreFailed": "Could not restore from the folder: {message}",
+  "sync.failed": "Sync failed: {message}",
   "recovery.settingsTitle": "Recovery phrase",
   "recovery.settingsHint":
     "When enabled, the app generates 12 BIP39 English words. Write them on paper and store them away from the diary; they can reset the passphrase if you forget it. The phrase is a second key: anyone who has it and the diary files can read everything.",

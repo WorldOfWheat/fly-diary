@@ -142,6 +142,20 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `MainActivity` 設定 `FLAG_SECURE`，避免截圖、螢幕錄影與最近任務縮圖看到明文。
 - 備份與螢幕保護由 `scripts/harden-android.mjs` 套用；`src-tauri/gen/android` 仍保持 gitignored，重新產生 Android 專案後要用 `pnpm android:init`／`android:dev`／`android:build` 重新套用。
 
+### Android 資料夾同步
+
+Android 版可以把**密文**鏡像到使用者透過 SAF 選定的外部資料夾（例如 Syncthing 或雲端硬碟同步的目錄）。日記本體仍是 App 私有資料夾，`pick_diary_dir` 不會回傳外部路徑。
+
+- **只搬密文**：同步不需要 diary key，entry、附件、`vault.xml` 與 `recovery.xml` 都以原始位元組複製。明文與搜尋索引不會離開 App；同步索引與附件 manifest 解密仍只在原本的解鎖流程發生。
+- **不可觸及 webview**：SAF 外掛沒有對 JavaScript 開放的 command，URI 只存在 Rust 端。外掛只接受 Rust 傳來的相對路徑，並在 Rust 端用嚴格白名單（`vault.xml`、`recovery.xml`、`YYYY-MM-DD.xml`、`attachments/...`）拒絕 `..`、絕對路徑與非預期檔名。
+- **不自動覆蓋**：三向比較以 `sync-state.json` 的 SHA-256 判斷哪一邊改過。兩邊都改過、或一邊刪除另一邊修改時，同步停手並回報衝突，必須在設定頁選擇保留本機或保留資料夾。
+- **刪除方向不對稱**：本機刪除日記且資料夾自上次同步未改時，會一併刪除鏡像；資料夾少了檔案而本機未改時，會把本機版本重新上傳，**不會刪除私有 vault**。兩邊都改過、或一邊刪除另一邊修改時才列為衝突。資料夾整個變空會直接報錯，不會把全部日記刪掉。
+- **外部資料夾的風險**：資料夾可能被其他 App、同步服務或使用者修改。AAD 會讓搬檔、跨 vault 搬移與降級改寫解密失敗，但**刪除與阻斷服務無法防止**；只選可信任的資料夾。
+- **SAF 權限會消失**：換手機、清除 App 資料或撤銷授權後，URI 權限不再有效。App 會回報資料夾無法存取，必須重新選擇；不會把它當成空資料夾而覆蓋。
+- **備份範圍不同**：Auto Backup 只涵蓋 App 私有資料，不包含 SAF 外部資料夾。外部副本要由使用者自己的同步／備份工具負責。
+- **還原會換 vault**：若選到的資料夾屬於另一個 vault，App 會要求先鎖定，再把目前私有資料夾改名為 `*.local-backup-<timestamp>`，然後匯入外部檔案。舊 vault 的檔案保留在備份目錄，不會刪除。
+- 同步狀態檔只記錄路徑、密文雜湊與時間，不含金鑰或明文；它與 `sync.xml` 都只有 App 自己可讀。
+
 ### 檔案系統防護
 
 - 暫存檔使用 `create_new` + `O_NOFOLLOW` + 隨機 suffix；避免在共用／同步資料夾中被預放 symlink，讓寫入轉向其他檔案。
@@ -198,7 +212,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。
 - 孤兒附件（整個日期資料夾沒有 XML）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免同步延遲時誤刪。舊版 App 不認識附件，用舊版刪除日記時也會留下孤兒。
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
-- 行動版沒有資料夾選擇器，也沒有資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。想在手機上使用外部資料夾或匯入 `.txt`，目前只能走桌面版。
+- 行動版仍沒有「把日記本體放在外部資料夾」的選擇器，也沒有 `.txt` 資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。Android 的外部資料夾需求由下方的「資料夾同步」處理，日記本體不會搬出 App 私有空間。
 - Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。
 - 原生拖放（`onDragDropEvent`）與原生剪貼簿備援目前只在桌面版；行動版仍以檔案選擇器與 WebView 的 paste 事件為主。
 - 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
@@ -217,6 +231,8 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
 - Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；安全性覆蓋由 `scripts/harden-android.mjs` 套用，重新產生專案後要再跑一次。換一台機器建置時需要自備 Android SDK／NDK 與 Rust target；目前 repo 沒有 iOS 專案。
+- Android 資料夾同步沒有背景服務：只在解鎖後、儲存後（開啟自動同步時）或使用者按下「立即同步」時執行。App 被關閉或鎖定後不會自動上傳；最後一次編輯可能要等到下次解鎖或手動同步才會離開手機。
+- SAF provider 不一定支援原子替換。外掛會先寫入 `.flydiary-*` 暫存檔再改名；若 provider 不支援改名，會退回直接覆寫，中途失敗可能留下大小或雜湊不同的遠端檔。下次同步會把它視為「遠端已修改」而停在衝突，不會直接覆蓋本機。
 - 防止截圖在 Windows、macOS 與 Android（`FLAG_SECURE`）生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
 - 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。

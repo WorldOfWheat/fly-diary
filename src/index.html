@@ -510,6 +510,63 @@
                     </div>
                 </section>
 
+                <!-- Android folder sync (hidden on desktop: the backend reports
+                     supported=false there). The private vault stays the source
+                     of truth; this only mirrors encrypted files to a folder the
+                     user picked with the system folder picker. -->
+                <section id="sync-section" class="settings-section" hidden>
+                    <h3 class="settings-heading" data-i18n="sync.heading">資料夾同步</h3>
+                    <p class="settings-hint" data-i18n="sync.hint">
+                        手機版可以把加密檔案同步到一個外部資料夾（例如 Syncthing 或雲端硬碟同步的資料夾）。
+                        日記本體仍留在 App 的私有空間，這裡只複製密文，不會上傳任何明文。
+                    </p>
+
+                    <div id="sync-unbound" hidden>
+                        <p class="settings-hint" data-i18n="sync.unboundHint">
+                            尚未連結資料夾。選擇一個空資料夾或同一個日記本的資料夾即可開始。
+                        </p>
+                        <div class="settings-actions">
+                            <button id="sync-pick-btn" class="btn-browse" type="button" data-i18n="sync.pick">
+                                選擇資料夾
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="sync-bound" hidden>
+                        <div class="settings-row">
+                            <span class="settings-label" data-i18n="sync.folderLabel">資料夾</span>
+                            <span id="sync-display-name" class="settings-path"></span>
+                        </div>
+                        <div class="settings-row">
+                            <span class="settings-label" data-i18n="sync.lastSyncedLabel">上次同步</span>
+                            <span id="sync-last" class="settings-path"></span>
+                        </div>
+                        <label class="settings-row" for="sync-auto">
+                            <span class="settings-label" data-i18n="sync.auto">自動同步</span>
+                            <input id="sync-auto" type="checkbox" />
+                        </label>
+                        <div class="settings-actions">
+                            <button id="sync-now-btn" class="btn-browse" type="button" data-i18n="sync.now">
+                                立即同步
+                            </button>
+                            <button id="sync-unbind-btn" class="btn-danger" type="button" data-i18n="sync.unbind">
+                                解除連結
+                            </button>
+                        </div>
+                        <p id="sync-status" class="settings-hint" aria-live="polite"></p>
+
+                        <div id="sync-conflicts" hidden>
+                            <h4 class="settings-heading" data-i18n="sync.conflictsHeading">需要處理的衝突</h4>
+                            <p class="settings-hint" data-i18n="sync.conflictsHint">
+                                兩邊都改過同一個檔案時，同步不會覆蓋任何一邊。請選擇要保留哪一份。
+                            </p>
+                            <ul id="sync-conflict-list" class="sync-conflict-list"></ul>
+                        </div>
+                    </div>
+
+                    <p id="sync-error" class="import-error" role="alert"></p>
+                </section>
+
                 <!-- Auto-lock -->
                 <section class="settings-section">
                     <h3 class="settings-heading" data-i18n="settings.autoLock">閒置自動鎖定</h3>

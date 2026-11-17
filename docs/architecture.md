@@ -84,6 +84,7 @@ fly-diary/
 │   ├── tests/
 │   │   ├── vault_lifecycle.rs      # 整合測試：建立→寫入→上鎖→解鎖→讀回
 │   │   └── attachments_lifecycle.rs # 附件：新增→排序→上鎖→解鎖→刪除
+│   ├── plugins/saf-sync/   # Android-only Tauri plugin（Kotlin SAF 存取，無 JS commands）
 │   └── src/
 │       ├── main.rs         # 進入點；關閉 core dump 與同使用者記憶體存取
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
@@ -98,6 +99,7 @@ fly-diary/
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
 │       ├── pool.rs         # 受限的 Rayon vault I/O pool（最多 4 執行緒）
 │       ├── search.rs       # 解鎖期間的記憶體全文索引（不落盤，鎖定即清除）
+│       ├── sync.rs         # Android 資料夾同步：三向比較、衝突、還原；平台中立可測試
 │       └── storage.rs      # vault、recovery.xml 與加密日記的檔案儲存層
 ├── docs/                   # 文件（security / file-format / ui / accessibility / architecture / development / reference）
 ├── .github/
@@ -115,6 +117,7 @@ fly-diary/
 ## 設計重點
 
 - **設定與資料分離**：設定檔（`settings.xml`）只存日記路徑，放在平台 config 目錄；日記本體放在使用者指定的資料夾，兩者可分別備份或搬移。
+- **同步與儲存分離（Android）**：資料夾同步不改 `storage.rs` 的原子寫入與金鑰路徑。`sync.rs` 只複製密文，並以 `sync-state.json` 做三向比較；SAF 細節封裝在 `plugins/saf-sync`，桌面 build 不連結該外掛，也不讀 `sync.xml`。
 - **路徑驗證**：`settings::validate_diary_dir` 要求絕對路徑且不得為檔案系統根目錄，避免工作目錄變動導致日記「消失」。
 - **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`），檔名由日期推導，天然保證一天一篇。
 - **標題也加密**：標題與內容打包成同一段明文再加密，`list_entries` 必須持有金鑰才能解出標題；鎖定時側邊欄會清空，避免殘留任何標題。

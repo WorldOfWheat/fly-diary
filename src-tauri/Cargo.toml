@@ -44,6 +44,10 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# --- Android-only SAF folder sync bridge ---
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-saf-sync = { path = "plugins/saf-sync" }
+
 [profile.release]
 codegen-units = 1
 lto = true

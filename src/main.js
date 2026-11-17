@@ -126,6 +126,12 @@ let suppressInput = false;
  */
 let autosaveDelay = 800;
 
+/** Whether the Android folder-sync hooks are enabled (always false on desktop). */
+let autoSyncEnabled = false;
+
+/** Pending debounce for the post-save sync, if any. */
+let syncDebounceTimer = null;
+
 // ---------------------------------------------------------------------------
 // DOM references
 // ---------------------------------------------------------------------------
@@ -1731,10 +1737,101 @@ async function saveNow() {
     // is nothing to bookmark yet) and used to stay that way until the user
     // navigated away and back, because only `selectDate` ever re-enabled it.
     syncHeaderActions();
+    scheduleSyncAfterChange();
   } catch (err) {
     console.error("save_entry failed:", err);
     setStatus(t("status.saveFailed"));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Android folder sync hooks
+// ---------------------------------------------------------------------------
+//
+// The backend owns the three-way comparison and conflict rules; the frontend
+// only decides *when* to ask. A manual sync lives in the settings dialog. The
+// optional automatic hooks run after unlock and, debounced, after a write.
+
+/** Record the user's automatic-sync preference from the backend. */
+function setSyncAutoEnabled(enabled) {
+  autoSyncEnabled = Boolean(enabled);
+  if (!autoSyncEnabled && syncDebounceTimer) {
+    clearTimeout(syncDebounceTimer);
+    syncDebounceTimer = null;
+  }
+}
+
+/**
+ * Apply a sync report to the visible state.
+ *
+ * Pulling an entry deletes the local index and makes the search index stale,
+ * so this rescans rather than using the cheap `list_entries` path. If the entry
+ * currently on screen was pulled, it is reloaded so the editor cannot keep
+ * showing (and later overwrite) the old copy.
+ */
+async function afterSyncReport(report) {
+  const pulled = report?.pulled ?? [];
+  const conflicts = report?.conflicts ?? [];
+  if (pulled.length > 0 || conflicts.length > 0) {
+    await refreshList({ scanBroken: true });
+  }
+  if (currentDate && pulled.includes(`${currentDate}.xml`)) {
+    await selectDate(currentDate);
+  }
+  if (conflicts.length > 0) {
+    setStatus(t("sync.conflictCount", { n: conflicts.length }));
+  }
+}
+
+/** Sync on unlock when the user enabled the automatic hooks. */
+async function autoSyncOnUnlock() {
+  if (!autoSyncEnabled) return;
+  try {
+    setStatus(t("sync.running"));
+    const report = await invoke("sync_now");
+    const pushed = report?.pushed?.length ?? 0;
+    const pulled = report?.pulled?.length ?? 0;
+    const conflicts = report?.conflicts?.length ?? 0;
+    if (conflicts > 0) {
+      setStatus(t("sync.conflictCount", { n: conflicts }));
+    } else if (pushed || pulled) {
+      setStatus(t("sync.result", { pushed, pulled, conflicts }), true);
+    }
+    await afterSyncReport(report);
+  } catch (err) {
+    // A failed automatic sync must not block the diary; the manual button in
+    // settings shows the same error with the user watching.
+    console.error("auto sync failed:", err);
+    setStatus(t("sync.failed", { message: String(err) }));
+  }
+}
+
+/**
+ * Debounced sync after a local write.
+ *
+ * Autosave can fire every few seconds; waiting a couple of seconds batches a
+ * paragraph into one SAF round trip instead of syncing each keystroke burst.
+ */
+function scheduleSyncAfterChange() {
+  if (!autoSyncEnabled) return;
+  if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(async () => {
+    syncDebounceTimer = null;
+    try {
+      const report = await invoke("sync_now");
+      await afterSyncReport(report);
+    } catch (err) {
+      console.error("auto sync failed:", err);
+    }
+  }, 2500);
+}
+
+/** Flush a pending autosave without locking, used before a manual sync. */
+async function flushPendingSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await saveNow();
 }
 
 function scheduleSave() {
@@ -1796,6 +1893,7 @@ async function deleteCurrent() {
     currentFavourite = false;
     renderFavouriteButton();
     await refreshList();
+    scheduleSyncAfterChange();
   } catch (err) {
     console.error("delete_entry failed:", err);
     setStatus(t("status.deleteFailed"));
@@ -1843,6 +1941,7 @@ async function deleteBrokenFile(date) {
     // already switched the sidebar back to "all".
     if (currentView === "broken") renderList();
     syncHeaderActions();
+    scheduleSyncAfterChange();
   } catch (err) {
     console.error("delete_entry failed:", err);
     setStatus(t("broken.deleteFailed", { message: String(err) }));
@@ -2123,6 +2222,11 @@ function createControllers() {
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
     openRecovery: () => recoveryDialog.open(),
+    flushSave: flushPendingSave,
+    flushAndLock: lockAndFlush,
+    afterRestore: () => lockScreen.lockNow(),
+    afterSync: afterSyncReport,
+    setSyncAutoEnabled,
   });
 
   recoveryDialog = createRecoveryDialog({
@@ -2143,6 +2247,7 @@ function createControllers() {
     flushText: saveNow,
     refreshList,
     onEntryChanged: syncHeaderActions,
+    onSyncNeeded: scheduleSyncAfterChange,
   });
 
   nativeFileDrop = createNativeFileDrop({
@@ -2262,6 +2367,9 @@ async function enterApp() {
   // or moved while the app was closed. `announce` tells the user once, on entry,
   // if anything failed to decrypt; the tab badge stays visible afterwards.
   await refreshList();
+  // Pull anything the external folder gained while the app was closed before
+  // the user starts editing. A failure only surfaces in the status bar.
+  await autoSyncOnUnlock();
   if (brokenEntries.length > 0) {
     setStatus(t("broken.notify", { n: brokenEntries.length }));
   }
@@ -2366,6 +2474,12 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
+    // Android folder sync (the section is hidden on desktop).
+    pickSyncDir: settingsDialog.pickSyncDir,
+    syncNow: settingsDialog.syncNow,
+    unbindSyncDir: settingsDialog.unbindSyncDir,
+    setSyncAuto: settingsDialog.setSyncAuto,
+    resolveSyncConflict: settingsDialog.resolveSyncConflict,
     // Recovery phrase: create/show-once dialog and removal.
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,
@@ -2484,6 +2598,12 @@ async function init() {
     lockScreen.setVaultInitialized(false);
     els.lockError.textContent = t("lock.errSettings");
   }
+
+  // Android folder sync is optional and absent on desktop; the flag only
+  // controls the post-unlock/post-save hooks.
+  invoke("get_sync_status")
+    .then((status) => setSyncAutoEnabled(Boolean(status?.autoSync)))
+    .catch(() => setSyncAutoEnabled(false));
 
   lockScreen.showLockScreen();
   lockScreen.renderLockScreen();

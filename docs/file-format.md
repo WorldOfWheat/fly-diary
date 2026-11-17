@@ -267,6 +267,59 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 缺少元素時自動套用預設值（分別是 10 分鐘與 800 毫秒），下次寫入即升級為 `version="3"`；
 但元素存在而內容不合法時會直接報錯，不會默默改成預設值。
 
+### Android 資料夾同步（`sync.xml` / `sync-state.json`）
+
+Android 版的資料夾同步是額外功能，設定**不放在** `settings.xml`，桌面版也不會讀寫這兩個檔案：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<sync version="1">
+  <tree-uri>content://com.android.externalstorage.documents/tree/primary%3ADiary</tree-uri>
+  <display-name>Diary</display-name>
+  <auto>0</auto>
+</sync>
+```
+
+- `tree-uri` 是 SAF（Storage Access Framework）的資料夾 URI，不是檔案系統路徑。App 只透過
+  `ContentResolver` 存取，日記本體仍留在 App 私有目錄。
+- `display-name` 只用於顯示；所有路徑都從 URI 重新列舉，不信任這個名稱。
+- `auto` 為 `1` 時，App 會在解鎖後與每次存檔後（延遲約 2.5 秒）自動同步；`0` 時只能手動按
+  「立即同步」。
+
+三向同步狀態存在同一個 App 設定目錄的 `sync-state.json`：
+
+```json
+{
+  "treeUri": "content://...",
+  "vaultId": "BASE64(16 bytes)",
+  "lastSyncedAtMs": 1763280000000,
+  "files": {
+    "2026-11-16.xml": {
+      "hash": "SHA-256 of the ciphertext, hex",
+      "remoteSize": 512,
+      "remoteMtimeMs": 1763279999000
+    }
+  }
+}
+```
+
+它只用來判斷「上次同步後哪一邊改過」，不含金鑰或明文。被同步的檔案只有：
+
+```text
+vault.xml
+recovery.xml
+YYYY-MM-DD.xml
+attachments/YYYY-MM-DD/manifest.xml
+attachments/YYYY-MM-DD/<32 hex>.bin
+```
+
+`index.xml` 是快取，**不同步**：日記有變動時，本機與資料夾兩邊的 `index.xml` 都會被刪除，
+讓各自的 App 下次啟動時依實際的日記檔重建（可能多花一次掃描時間，但不會顯示過期標題）。
+`migration.journal`、`*.tmp-*`、`*.upgrade` 與其他檔案也會被忽略。
+兩邊都改過同一個檔案時不會自動覆蓋，而是在設定頁列出衝突，由使用者選擇保留哪一邊。
+刪除方向不對稱：本機刪除會同步刪除鏡像；資料夾少了檔案則會把本機版本重新上傳，
+只有使用者明確選擇「刪除本機」時才會移除私有 vault 的檔案。
+
 ## 日記儲存位置
 
 **第一次啟動**時，解鎖畫面會要求選擇日記資料夾（可手動輸入或按「瀏覽…」開啟原生選擇器），

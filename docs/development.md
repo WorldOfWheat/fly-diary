@@ -119,8 +119,27 @@ generated 專案，仍保持 gitignored；重新產生後請用 `pnpm android:in
 
 行動版有三個刻意不同的行為：
 
-- **沒有資料夾選擇器**：`pick_diary_dir` 在 `#[cfg(mobile)]` 下直接回傳 App 私有資料夾，不開原生對話框；日記因此固定放在 App 的資料目錄。
-- **不支援資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
+- **沒有日記資料夾選擇器**：`pick_diary_dir` 在 `#[cfg(mobile)]` 下直接回傳 App 私有資料夾，不開原生對話框；日記因此固定放在 App 的資料目錄。外部資料夾改由獨立的「資料夾同步」功能處理（見下節）。
+- **不支援 `.txt` 資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
 - 選單列只在桌面建置（`build_menu` 包在 `#[cfg(desktop)]`），行動版沒有 `Edit` 選單可掛。
 
 其餘加密、儲存、索引與背景升級流程在桌面與行動版完全相同。
+
+### Android 資料夾同步外掛
+
+手機版的「資料夾同步」是 Android-only，桌面版不會連結這個外掛，也不會讀取它的設定：
+
+- `src-tauri/plugins/saf-sync` 是自訂 Tauri Android plugin，Kotlin 端用 Storage Access Framework
+  （`ACTION_OPEN_DOCUMENT_TREE` + `takePersistableUriPermission`）選資料夾與讀寫檔案。
+  它沒有任何開放給 JavaScript 的 command；Rust 端透過 `SafSyncExt` 直接呼叫，所以即使 webview
+  被注入也碰不到資料夾。
+- `src-tauri/src/sync.rs` 是平台中立的同步引擎與三向比較規則，桌面 `cargo test` 會用假的
+  `Remote` 跑完整測試；真正的 SAF 實作只在 `#[cfg(target_os = "android")]` 的 command 裡接上。
+- 外掛是 `tauri-plugin-saf-sync` 的 path dependency，只在 Android target 下載入。重新執行
+  `pnpm android:init` 後，Tauri CLI 會把它列進 `src-tauri/gen/android/tauri.settings.gradle`。
+- 綁定設定寫在 App 設定目錄的 `sync.xml`，三向雜湊寫在 `sync-state.json`；兩者都不是日記資料夾
+  的一部分，也不會被桌面版讀寫。
+- Kotlin／Gradle 端無法用一般 `cargo test` 驗證；改動外掛後要實際跑一次
+  `pnpm android:dev` 或 `android:build`。若之前的實驗留下空的
+  `src-tauri/plugins/*/android/build` 目錄，請先刪掉，避免 Gradle 參照到沒有 `build.gradle`
+  的專案。

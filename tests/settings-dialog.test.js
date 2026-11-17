@@ -36,6 +36,19 @@ const SETTINGS_IDS = [
   "recoveryStatus",
   "recoveryGenerateBtn",
   "recoveryRemoveBtn",
+  "syncSection",
+  "syncUnbound",
+  "syncBound",
+  "syncPickBtn",
+  "syncDisplayName",
+  "syncLast",
+  "syncAuto",
+  "syncNowBtn",
+  "syncUnbindBtn",
+  "syncStatus",
+  "syncConflicts",
+  "syncConflictList",
+  "syncError",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -68,6 +81,8 @@ function harness(overrides = {}) {
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
     get_recovery_status: { enabled: false },
     remove_recovery: null,
+    // Desktop/unsupported is the default; sync-specific tests override it.
+    get_sync_status: { supported: false },
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -662,7 +677,8 @@ test("saveSettings requires the current passphrase for a parameter-only change",
           c !== "get_settings" &&
           c !== "get_vault_kdf" &&
           c !== "get_recovery_status" &&
-          c !== "app_info"
+          c !== "app_info" &&
+          c !== "get_sync_status"
       );
     assert.deepEqual(writes, []);
   });
@@ -790,6 +806,183 @@ test("the vault-wide actions never write settings", async () => {
 
     assert.deepEqual(invoke.commands(), []);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Android folder sync
+// ---------------------------------------------------------------------------
+
+test("the sync section stays hidden when the backend does not support it", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.refreshSyncStatus();
+    assert.equal(els.syncSection.hidden, true);
+  }, { invokeTable: { get_sync_status: { supported: false } } });
+});
+
+test("the sync section renders the folder, auto flag and conflicts", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.refreshSyncStatus();
+
+      assert.equal(els.syncSection.hidden, false);
+      assert.equal(els.syncUnbound.hidden, true);
+      assert.equal(els.syncBound.hidden, false);
+      assert.equal(els.syncDisplayName.textContent, "Diary");
+      assert.equal(els.syncDisplayName.title, "content://tree");
+      assert.equal(els.syncAuto.checked, true);
+      assert.equal(els.syncLast.textContent, "sync.never");
+
+      assert.equal(els.syncConflicts.hidden, false);
+      const row = els.syncConflictList.children[0];
+      assert.equal(row.children[0].children[0].textContent, "2026-11-16.xml");
+      assert.equal(row.children[0].children[1].textContent, "sync.conflictBoth");
+      assert.deepEqual(
+        row.children[1].children.map((button) => button.textContent),
+        ["sync.keepLocal", "sync.keepRemote"]
+      );
+    },
+    {
+      invokeTable: {
+        get_sync_status: {
+          supported: true,
+          bound: true,
+          displayName: "Diary",
+          treeUri: "content://tree",
+          autoSync: true,
+          lastSyncedAtMs: 0,
+          conflicts: [
+            {
+              path: "2026-11-16.xml",
+              kind: "bothChanged",
+              localSize: 10,
+              remoteSize: 12,
+            },
+          ],
+        },
+      },
+    }
+  );
+});
+
+test("syncNow flushes, syncs, renders the report and hands it back", async () => {
+  const flushSave = spy();
+  const afterSync = spy();
+  const report = {
+    pushed: ["2026-11-16.xml"],
+    pulled: [],
+    conflicts: [],
+    notes: [],
+    syncedAtMs: 1234,
+  };
+
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.syncNow();
+
+      assert.deepEqual(flushSave.args(), [[]]);
+      assert.equal(
+        els.syncStatus.textContent,
+        "sync.result(pushed=1,pulled=0,conflicts=0)"
+      );
+      assert.equal(afterSync.count(), 1);
+      assert.deepEqual(afterSync.args()[0], [report]);
+      assert.equal(els.syncNowBtn.disabled, false);
+    },
+    {
+      deps: { flushSave, afterSync },
+      invokeTable: {
+        get_sync_status: {
+          supported: true,
+          bound: true,
+          displayName: "Diary",
+          treeUri: "content://tree",
+          autoSync: false,
+          lastSyncedAtMs: 0,
+          conflicts: [],
+        },
+        sync_now: report,
+      },
+    }
+  );
+});
+
+test("the auto-sync checkbox writes the preference and rolls back on failure", async () => {
+  const setSyncAutoEnabled = spy();
+  let failNext = false;
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.refreshSyncStatus();
+      assert.equal(els.syncAuto.checked, true);
+
+      await settings.setSyncAuto(false);
+      assert.deepEqual(setSyncAutoEnabled.args().at(-1), [false]);
+
+      failNext = true;
+      await settings.setSyncAuto(true);
+      assert.equal(els.syncAuto.checked, false);
+      assert.match(els.syncError.textContent, /^sync.failed/);
+    },
+    {
+      deps: { setSyncAutoEnabled },
+      invokeTable: {
+        get_sync_status: {
+          supported: true,
+          bound: true,
+          displayName: "Diary",
+          treeUri: "content://tree",
+          autoSync: true,
+          lastSyncedAtMs: 0,
+          conflicts: [],
+        },
+        set_sync_auto: () => {
+          if (failNext) throw new Error("write failed");
+        },
+      },
+    }
+  );
+});
+
+test("a sync conflict is resolved only after confirmation", async () => {
+  const original = globalThis.confirm;
+  const afterSync = spy();
+  try {
+    globalThis.confirm = () => true;
+    await withSettings(
+      async ({ settings, invoke }) => {
+        await settings.resolveSyncConflict("2026-11-16.xml", "remote");
+        assert.deepEqual(invoke.argsOf("resolve_sync_conflict"), {
+          path: "2026-11-16.xml",
+          keep: "remote",
+        });
+        assert.ok(invoke.commands().includes("sync_now"));
+        assert.equal(afterSync.count(), 1);
+      },
+      {
+        deps: { flushSave: spy(), afterSync },
+        invokeTable: {
+          get_sync_status: {
+            supported: true,
+            bound: true,
+            displayName: "Diary",
+            treeUri: "content://tree",
+            autoSync: false,
+            lastSyncedAtMs: 0,
+            conflicts: [],
+          },
+          resolve_sync_conflict: null,
+          sync_now: {
+            pushed: [],
+            pulled: ["2026-11-16.xml"],
+            conflicts: [],
+            notes: [],
+            syncedAtMs: 1,
+          },
+        },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
 });
 
 /** Shared deps for the tests that build a second controller. */
