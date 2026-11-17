@@ -12,7 +12,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createSettingsDialog } from "../src/settings-dialog.js";
-import { installDom, fakeEls, fakeT, fakeInvoke, spy, fakeElement } from "./helpers/dom.js";
+import {
+  installDom,
+  fakeEls,
+  fakeT,
+  fakeInvoke,
+  spy,
+  fakeElement,
+} from "./helpers/dom.js";
 
 const SETTINGS_IDS = [
   "settingsOverlay",
@@ -61,7 +68,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "1.0.0",
+      version: "2.0.0",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -210,7 +217,9 @@ test("openSettings collapses the settings blocks on mobile", async () => {
       await settings.openSettings();
 
       assert.deepEqual(
-        els.settingsOverlay.byClass("settings-section").map((section) => section.open),
+        els.settingsOverlay
+          .byClass("settings-section")
+          .map((section) => section.open),
         [false, false]
       );
       assert.equal(document.activeElement, firstSummary);
@@ -235,7 +244,9 @@ test("openSettings leaves the settings blocks open on desktop", async () => {
     await settings.openSettings();
 
     assert.deepEqual(
-      els.settingsOverlay.byClass("settings-section").map((section) => section.open),
+      els.settingsOverlay
+        .byClass("settings-section")
+        .map((section) => section.open),
       [true, true]
     );
     assert.equal(document.activeElement, els.settingsCurrentPass);
@@ -246,7 +257,7 @@ test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "1.0.0");
+    assert.equal(els.settingsAppVersion.textContent, "2.0.0");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
@@ -879,7 +890,6 @@ test("the vault-wide actions never write settings", async () => {
   });
 });
 
-
 // ---------------------------------------------------------------------------
 // Encrypted backup export / restore
 // ---------------------------------------------------------------------------
@@ -895,7 +905,10 @@ test("exportBackup flushes the pending save and reports the path", async () => {
         els.settingsBackupStatus.textContent,
         "backup.exported(path=/home/u/backup.tar)"
       );
-      assert.equal(els.settingsBackupStatus.classList.contains("is-saved"), true);
+      assert.equal(
+        els.settingsBackupStatus.classList.contains("is-saved"),
+        true
+      );
     },
     {
       deps: { flushSave },

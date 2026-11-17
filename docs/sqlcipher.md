@@ -148,7 +148,7 @@ attachments/YYYY-MM-DD/*.bin # 每張圖片的加密 sidecar
 - 有 `diary.db` → 目前格式，直接解鎖。
 - 只有 `vault.xml`（沒有 `diary.db`）→ 舊 XML 格式。鎖定畫面會顯示提示；
   解鎖成功後詢問是否遷移。若其實是損壞或誤刪的 DB，請改用加密備份還原。
-- 只有 `.fd` 而沒有 `diary.db` → 拒絕遷移並提示先用 1.0.0 重建／匯出；新版不再讀取 `.fd`。
+- 只有 `.fd` 而沒有 `diary.db` → 拒絕遷移並提示先用 2.0.0 重建／匯出；新版不再讀取 `.fd`。
 - 使用者拒絕 → 呼叫 `lock`，顯示「請更換其他 workspace 或新建」，不會進入編輯器。
 
 遷移流程（`migrate_storage`）：

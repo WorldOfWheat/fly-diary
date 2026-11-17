@@ -2,7 +2,7 @@
 
 一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **SQLCipher 加密的 SQLite** 儲存，
 並可匯出單一加密備份檔（資料庫快照 + 金鑰包裝檔 + 附件）。
-目前版本 `1.0.0`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
+目前版本 `2.0.0`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
 把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
 
 ## 功能亮點
@@ -56,17 +56,17 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 
 ## 文件
 
-| 文件                                      | 內容                                                        |
-| ----------------------------------------- | ----------------------------------------------------------- |
-| [security.md](docs/security.md)           | 金鑰階層、KDF、AAD 與版本、記憶體保護、供應鏈安全、已知限制 |
-| [sqlcipher.md](docs/sqlcipher.md)         | SQLCipher 儲存層、HKDF 子金鑰、加密備份與舊格式遷移           |
+| 文件                                      | 內容                                                               |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| [security.md](docs/security.md)           | 金鑰階層、KDF、AAD 與版本、記憶體保護、供應鏈安全、已知限制        |
+| [sqlcipher.md](docs/sqlcipher.md)         | SQLCipher 儲存層、HKDF 子金鑰、加密備份與舊格式遷移                |
 | [file-format.md](docs/file-format.md)     | `vault.xml`／`recovery.xml`／備份 `.tar`／附件的檔案格式與儲存位置 |
-| [ui.md](docs/ui.md)                       | 唯讀、月曆、縮放、手機版、多語系、設定頁、主題              |
-| [css-reset.md](docs/css-reset.md)         | 瀏覽器 reset 的規則目的、載入順序與覆寫方式                 |
-| [accessibility.md](docs/accessibility.md) | WCAG 2.2 AA 目標、已完成項目、手動驗證與剩餘缺口            |
-| [architecture.md](docs/architecture.md)   | 專案結構與設計取捨                                          |
-| [development.md](docs/development.md)     | 系統依賴、開發指令、測試、打包、Android                     |
-| [reference.md](docs/reference.md)         | 鍵盤快速鍵與 Tauri Commands                                 |
+| [ui.md](docs/ui.md)                       | 唯讀、月曆、縮放、手機版、多語系、設定頁、主題                     |
+| [css-reset.md](docs/css-reset.md)         | 瀏覽器 reset 的規則目的、載入順序與覆寫方式                        |
+| [accessibility.md](docs/accessibility.md) | WCAG 2.2 AA 目標、已完成項目、手動驗證與剩餘缺口                   |
+| [architecture.md](docs/architecture.md)   | 專案結構與設計取捨                                                 |
+| [development.md](docs/development.md)     | 系統依賴、開發指令、測試、打包、Android                            |
+| [reference.md](docs/reference.md)         | 鍵盤快速鍵與 Tauri Commands                                        |
 
 ## 安全摘要
 
@@ -87,7 +87,7 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 - 全文搜尋索引只存在解鎖期間的 Rust 記憶體；解鎖後第一次載入需要解密全部日記，日記量大或放在網路磁碟時會較慢。掃描、匯入、升級與搜尋會使用最多 4 條背景執行緒，SSD 上較有感。索引不進 `mlock`，鎖定時清除。
 - **備份不是同步服務**：備份檔不會自動上傳，也不會在兩台裝置間合併變更；使用者要自行把 `.tar` 複製到其他位置。還原會回到備份當時的資料庫與附件，備份之後的變更不會保留（目前資料會留在 `*.local-backup-*`）。
 - 若 `diary.db` 損壞，解鎖畫面在密碼驗證成功後會提供「還原加密備份」；App 不會自動建立空資料庫。
-- **從 1.0.0 之前的同步資料夾升級**：若資料夾只有 `.fd` 而沒有 `diary.db`（舊 Android 資料夾同步的還原情境），請先用 1.0.0 版重建並匯出備份再升級；新版不再讀取 `.fd`，也不會用空資料庫蓋過它們。一般已有 `diary.db` 的日記本不受影響，殘留的 `.fd` 會被忽略，可手動刪除。
+- **從 2.0.0 之前的同步資料夾升級**：若資料夾只有 `.fd` 而沒有 `diary.db`（舊 Android 資料夾同步的還原情境），請先用 2.0.0 版重建並匯出備份再升級；新版不再讀取 `.fd`，也不會用空資料庫蓋過它們。一般已有 `diary.db` 的日記本不受影響，殘留的 `.fd` 會被忽略，可手動刪除。
 - 備份檔含 `vault.xml` 與 `recovery.xml`，方便在 App 無法解鎖時手動救援；但用 App 內還原時不會覆寫目前的金鑰包裝檔，避免把密碼或回復短語回滾到舊狀態。
 - 回復短語是明文可讀的第二把鑰匙，必須與日記分開保存；它不會自動備份，也不會顯示第二次。備份檔已包含 `recovery.xml`，但仍建議與日記分開保存。
 

@@ -35,23 +35,23 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - **recovery key**（可選）：12 個 BIP39 英文單字編碼 128-bit 隨機值，經 domain-separated SHA-256 展成 32 bytes，用來包裝同一把 diary key。它存在 `recovery.xml`，不影響 `vault.xml`。
 - 這層間接讓「改密碼」、「升級 KDF 參數」或「重新產生回復短語」都只需要重新包裝 32 bytes，不必重新加密所有日記。
 
-| 項目         | 實作                                                                   |
-| ------------ | ---------------------------------------------------------------------- |
-| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
-| 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
-| 預設參數     | 64 MiB 記憶體、3 次迭代、平行度 1（高於 OWASP 建議值）                 |
-| 參數範圍     | 記憶體 64–1024 MiB、迭代 2–16、平行度 1–16                             |
-| 新密碼長度   | 至少 12 個字元；由 Rust 後端強制，不只靠前端                           |
-| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
-| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
-| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗；SQLCipher 另以每頁 HMAC-SHA512 認證 |
-| 資料庫       | `diary.db` 以 SQLCipher raw key 加密；DB key 由 diary key 經 HKDF-SHA256 派生          |
-| 圖片附件     | v3 使用 HKDF 派生的 `attachment_key`，每張獨立 IV；舊 v1／v2 仍用 diary key             |
-| 附件 manifest | 存在 SQLCipher 的 `attachments` 表，沒有 XML 檔案                                    |
-| 備份檔       | `.tar` 內是 `VACUUM INTO` 的 SQLCipher 密文快照 + `vault.xml`／`recovery.xml` + 附件密文 |
-| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
-| 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本 |
-| 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux／Android 排除 dump/fork、Windows 排除 WER dump；鎖定或關閉即抹除、解鎖、unmap |
+| 項目          | 實作                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 對稱加密      | AES-256-GCM（`aes-gcm` crate，RustCrypto）                                                                                             |
+| 金鑰派生      | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整                                                                 |
+| 預設參數      | 64 MiB 記憶體、3 次迭代、平行度 1（高於 OWASP 建議值）                                                                                 |
+| 參數範圍      | 記憶體 64–1024 MiB、迭代 2–16、平行度 1–16                                                                                             |
+| 新密碼長度    | 至少 12 個字元；由 Rust 後端強制，不只靠前端                                                                                           |
+| Salt          | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                                                                                         |
+| IV / Nonce    | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                                                                                          |
+| 完整性        | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗；SQLCipher 另以每頁 HMAC-SHA512 認證                                              |
+| 資料庫        | `diary.db` 以 SQLCipher raw key 加密；DB key 由 diary key 經 HKDF-SHA256 派生                                                          |
+| 圖片附件      | v3 使用 HKDF 派生的 `attachment_key`，每張獨立 IV；舊 v1／v2 仍用 diary key                                                            |
+| 附件 manifest | 存在 SQLCipher 的 `attachments` 表，沒有 XML 檔案                                                                                      |
+| 備份檔        | `.tar` 內是 `VACUUM INTO` 的 SQLCipher 密文快照 + `vault.xml`／`recovery.xml` + 附件密文                                               |
+| 密碼驗證      | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）                                                                    |
+| 回復短語      | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本                                                          |
+| 金鑰生命週期  | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux／Android 排除 dump/fork、Windows 排除 WER dump；鎖定或關閉即抹除、解鎖、unmap |
 
 > ⚠️ **忘記密碼無法救回**（除非已啟用回復短語）：master key 由密碼派生且不落地，沒有後門。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
@@ -231,7 +231,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
 - 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在 SQLCipher 裡；DB 檔大小仍會透露大約的日記量。
 - 完整備份是設定頁匯出的 `.tar`：`VACUUM INTO` 快照 + `vault.xml` + `recovery.xml` + `attachments/`。只複製執行中的 `diary.db` 不是一致快照，請先鎖定並 checkpoint，或使用內建匯出。快照只寫 live pages，不含 free list；`diary.db` 本身仍可能有已刪除資料的殘留。
-- 若資料夾只有舊版 `.fd` 而沒有 `diary.db`，新版會拒絕遷移並提示先用 1.0.0 重建／匯出；殘留在正常 vault 的 `.fd` 會被忽略，可手動刪除。
+- 若資料夾只有舊版 `.fd` 而沒有 `diary.db`，新版會拒絕遷移並提示先用 2.0.0 重建／匯出；殘留在正常 vault 的 `.fd` 會被忽略，可手動刪除。
 - 刪除後的 page 可能留在 SQLite free list；`secure_delete=ON` 會先把內容歸零再加密，但仍建議刪除後 checkpoint 並定期 `VACUUM`。
 - 圖片會在前端重新編碼成 1000px WebP，EXIF（含 GPS）會被移除；若 WebView 不支援 WebP 編碼，PNG／WebP 來源會 fallback PNG 保留透明，其他格式則 fallback JPEG（透明區填白）。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
 - 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。

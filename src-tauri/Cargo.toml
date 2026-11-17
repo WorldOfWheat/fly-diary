@@ -1,6 +1,6 @@
 [package]
 name = "fly-diary"
-version = "1.0.0"
+version = "2.0.0"
 description = "A simple one-entry-per-day diary app"
 authors = ["WorldOfWheat"]
 repository = "https://github.com/WorldOfWheat/fly-diary"

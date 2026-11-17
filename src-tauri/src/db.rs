@@ -638,7 +638,7 @@ pub fn migrate_from_xml(dir: &Path, diary_key: &[u8; 32]) -> Result<MigrationRep
 
     if has_legacy_sync_records(dir) {
         return Err(
-            "This folder contains legacy .fd sync records but no database. Rebuild or export it with Fly Diary 1.0.0 before upgrading; this version no longer reads .fd files."
+            "This folder contains legacy .fd sync records but no database. Rebuild or export it with Fly Diary 2.0.0 before upgrading; this version no longer reads .fd files."
                 .to_string(),
         );
     }
