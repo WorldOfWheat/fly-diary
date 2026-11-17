@@ -53,22 +53,26 @@ const zhHant = {
     "第一次使用：選擇日記儲存位置，並設定一組密碼來加密日記",
   "lock.subtitle.legacy":
     "此工作區使用舊版 XML 格式，解鎖後可遷移為加密的 SQLite",
+  "lock.subtitle.rebuild":
+    "此工作區只有每日同步檔，解鎖後可重建加密資料庫",
   "lock.migrateConfirm":
-    "此日記本使用舊版 XML 儲存。要現在遷移為加密的 SQLite 嗎？遷移後舊版 App 將無法讀取。",
+    "此日記本使用舊版 XML 儲存。要現在遷移為加密的 SQLite 嗎？遷移成功後會刪除每日 XML 檔（只保留 vault 與 recovery）。",
   "lock.migrateRunning": "正在遷移日記格式…",
   "lock.migrateDeclined":
     "未遷移。請更換其他 workspace，或在此資料夾新建日記本。",
   "lock.migrateFailed": "遷移失敗，日記仍保持原樣，請再試一次",
   "lock.migrateBroken":
-    "已遷移 {migrated} 篇；{broken} 篇無法讀取，原檔已保留。",
+    "已遷移 {migrated} 篇；{broken} 篇無法讀取，原始位元組已保留在加密資料庫中。",
   "lock.rebuildConfirm":
-    "密碼正確，但加密資料庫無法開啟（{message}）。要用每日 XML 鏡像重建嗎？舊資料庫會保留為 diary.db.corrupt-*。",
-  "lock.rebuildRunning": "正在從 XML 鏡像重建資料庫…",
+    "密碼正確，但加密資料庫無法開啟（{message}）。要用每日加密同步檔（.fd）重建嗎？舊資料庫會保留為 diary.db.corrupt-*。",
+  "lock.rebuildRunning": "正在從每日加密同步檔重建資料庫…",
   "lock.rebuildDeclined":
     "未重建。請更換其他 workspace，或在此資料夾新建日記本。",
   "lock.rebuildFailed": "重建失敗，舊資料庫仍保留，請再試一次",
-  "lock.rebuildDone": "已從 XML 鏡像重建資料庫。",
-  "lock.rebuildBackup": "已從 XML 鏡像重建資料庫；舊檔保留在 {path}。",
+  "lock.rebuildMissing":
+    "此資料夾只有每日同步檔，還沒有加密資料庫",
+  "lock.rebuildDone": "已從每日加密同步檔重建資料庫。",
+  "lock.rebuildBackup": "已從每日加密同步檔重建資料庫；舊檔保留在 {path}。",
   "lock.pathLabel": "日記儲存資料夾",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "瀏覽…",
@@ -475,25 +479,29 @@ const en = {
     "First run: choose where to store the diary, then set a passphrase to encrypt it",
   "lock.subtitle.legacy":
     "This workspace uses the legacy XML format. Unlock it to migrate to encrypted SQLite.",
+  "lock.subtitle.rebuild":
+    "This workspace has daily sync records but no database. Unlock it to rebuild.",
   "lock.migrateConfirm":
-    "This diary uses the legacy XML storage. Migrate it to encrypted SQLite now? Older app versions will no longer be able to read it.",
+    "This diary uses the legacy XML storage. Migrate it to encrypted SQLite now? A successful migration deletes the daily XML files (only vault and recovery are kept).",
   "lock.migrateRunning": "Migrating diary storage…",
   "lock.migrateDeclined":
     "Not migrated. Switch to another workspace, or create a new diary in this folder.",
   "lock.migrateFailed":
     "Migration failed. The diary was left unchanged; please try again.",
   "lock.migrateBroken":
-    "Migrated {migrated} entries; {broken} could not be read and their original files were kept.",
+    "Migrated {migrated} entries; {broken} could not be read and their raw bytes were preserved in the encrypted database.",
   "lock.rebuildConfirm":
-    "The passphrase is correct, but the encrypted database cannot be opened ({message}). Rebuild it from the daily XML replicas? The old database will be kept as diary.db.corrupt-*.",
-  "lock.rebuildRunning": "Rebuilding the database from the XML replicas…",
+    "The passphrase is correct, but the encrypted database cannot be opened ({message}). Rebuild it from the daily encrypted sync records (.fd)? The old database will be kept as diary.db.corrupt-*.",
+  "lock.rebuildRunning": "Rebuilding the database from the daily encrypted sync records…",
   "lock.rebuildDeclined":
     "Not rebuilt. Switch to another workspace, or create a new diary in this folder.",
   "lock.rebuildFailed":
     "Rebuild failed. The old database was kept; please try again.",
-  "lock.rebuildDone": "Rebuilt the database from the XML replicas.",
+  "lock.rebuildMissing":
+    "This folder has daily sync records but no encrypted database.",
+  "lock.rebuildDone": "Rebuilt the database from the daily encrypted sync records.",
   "lock.rebuildBackup":
-    "Rebuilt the database from the XML replicas; the old file was kept at {path}.",
+    "Rebuilt the database from the daily encrypted sync records; the old file was kept at {path}.",
   "lock.pathLabel": "Diary folder",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "Browse…",

@@ -35,10 +35,9 @@
 //! removes a remote file.
 //!
 //! Only known files are accepted (`vault.xml`, `recovery.xml`,
-//! `YYYY-MM-DD.xml`, `attachments/YYYY-MM-DD/manifest.xml` and
-//! `attachments/YYYY-MM-DD/<32 hex>.bin`). `index.xml` is a cache and is
-//! deliberately left out; after pulling an entry the local cache is deleted so
-//! the next list rebuilds it. Temporary and migration files are ignored.
+//! `YYYY-MM-DD.fd` and `attachments/YYYY-MM-DD/<32 hex>.bin`). A `.fd` file is
+//! the encrypted per-day record produced by `db.rs`; it is not XML. Legacy XML
+//! entry and manifest files are ignored.
 
 // Most of this module is only reachable from Android command handlers. The
 // desktop build still compiles it (and its tests) but never calls it.
@@ -56,6 +55,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::crypto;
+use crate::db;
 use crate::fsutil;
 use crate::storage;
 
@@ -72,13 +72,9 @@ pub const CONFIG_FILE: &str = "sync.xml";
 /// hashes and paths, but contains no key material).
 pub const STATE_FILE: &str = "sync-state.json";
 
-/// Derived, encrypted cache. It is never uploaded; instead both sides delete it
-/// after an entry changes so the next launch rebuilds it against the real files.
-const INDEX_FILE: &str = "index.xml";
-
-/// Largest file the bridge will copy. Attachments are capped at 5 MiB before
-/// encryption; the envelope is small, so 16 MiB leaves plenty of headroom.
-pub const MAX_SYNC_FILE_BYTES: u64 = 16 * 1024 * 1024;
+/// Largest file the bridge will copy. A `.fd` record can contain a 16 MiB
+/// entry plus attachment metadata; 32 MiB leaves headroom.
+pub const MAX_SYNC_FILE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// `vault.xml` is tiny; anything larger is not a vault this app wrote.
 const MAX_PEEK_BYTES: u64 = 256 * 1024;
@@ -113,7 +109,6 @@ pub enum Kind {
     Vault,
     Recovery,
     Entry,
-    Manifest,
     Attachment,
 }
 
@@ -244,30 +239,123 @@ pub fn classify_path(path: &str) -> Option<Kind> {
         ["vault.xml"] => Some(Kind::Vault),
         ["recovery.xml"] => Some(Kind::Recovery),
         [name] => {
-            let date = name.strip_suffix(".xml")?;
+            let date = name.strip_suffix(".fd")?;
             storage::validate_date(date).ok()?;
             Some(Kind::Entry)
         }
         ["attachments", date, name] => {
             storage::validate_date(date).ok()?;
-            if *name == "manifest.xml" {
-                Some(Kind::Manifest)
+            let id = name.strip_suffix(".bin")?;
+            if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                Some(Kind::Attachment)
             } else {
-                let id = name.strip_suffix(".bin")?;
-                if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    Some(Kind::Attachment)
-                } else {
-                    None
-                }
+                None
             }
         }
         _ => None,
     }
 }
 
-/// Whether `path` is a diary entry (`YYYY-MM-DD.xml`).
+/// Whether `path` is a diary entry (`YYYY-MM-DD.fd`).
 pub fn is_entry_path(path: &str) -> bool {
     matches!(classify_path(path), Some(Kind::Entry))
+}
+
+fn remove_legacy_file(path: &Path, label: &str, notes: &mut Vec<String>) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => notes.push(format!("Could not remove legacy {label}: {error}")),
+    }
+}
+
+/// Remove legacy XML entry/manifest files once the new `.fd` record exists.
+///
+/// `vault.xml` and `recovery.xml` are deliberately kept. A legacy entry XML is
+/// only deleted when the same date has a local `.fd`, so a folder that still
+/// belongs to an un-migrated device cannot lose its only copy.
+fn cleanup_legacy_files(remote: &dyn Remote, local_dir: &Path) -> Result<Vec<String>, String> {
+    let mut notes = Vec::new();
+
+    for file in remote.list()? {
+        let path = file.path.as_str();
+        let parts: Vec<&str> = path.split('/').collect();
+        let legacy = match parts.as_slice() {
+            ["index.xml"] => true,
+            ["attachments", date, "manifest.xml"] => storage::validate_date(date).is_ok(),
+            [name] => name
+                .strip_suffix(".xml")
+                .is_some_and(|date| storage::validate_date(date).is_ok()),
+            _ => false,
+        };
+        if !legacy {
+            continue;
+        }
+        let date = match parts.as_slice() {
+            [name] => name
+                .strip_suffix(".xml")
+                .filter(|date| storage::validate_date(date).is_ok()),
+            ["attachments", date, "manifest.xml"] => Some(*date),
+            _ => None,
+        };
+        if let Some(date) = date {
+            if !local_dir
+                .join(format!("{date}.{}", db::SYNC_EXTENSION))
+                .is_file()
+            {
+                notes.push(format!(
+                    "Left legacy {path} in the folder because no .fd record exists for {date}"
+                ));
+                continue;
+            }
+        }
+        if let Err(error) = remote.delete(path) {
+            notes.push(format!(
+                "Could not remove legacy {path} from the folder: {error}"
+            ));
+        }
+    }
+
+    remove_legacy_file(&local_dir.join("index.xml"), "index.xml", &mut notes);
+    if let Ok(read_dir) = fs::read_dir(local_dir) {
+        for item in read_dir.flatten() {
+            let path = item.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("xml") {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(date) = name.strip_suffix(".xml") else {
+                continue;
+            };
+            if storage::validate_date(date).is_err() {
+                continue;
+            }
+            if !local_dir
+                .join(format!("{date}.{}", db::SYNC_EXTENSION))
+                .is_file()
+            {
+                notes.push(format!(
+                    "Left legacy {name} in place because no .fd record exists for {date}"
+                ));
+                continue;
+            }
+            remove_legacy_file(&path, name, &mut notes);
+        }
+    }
+    let attachments = local_dir.join("attachments");
+    if let Ok(read_dir) = fs::read_dir(&attachments) {
+        for item in read_dir.flatten() {
+            let manifest = item.path().join("manifest.xml");
+            if manifest.is_file() {
+                let label = manifest.to_string_lossy().into_owned();
+                remove_legacy_file(&manifest, &label, &mut notes);
+            }
+        }
+    }
+
+    Ok(notes)
 }
 
 // ---------------------------------------------------------------------------
@@ -594,14 +682,6 @@ fn scan_attachments(
     Ok(())
 }
 
-fn invalidate_index(local_dir: &Path) -> Result<(), String> {
-    match fs::remove_file(local_dir.join("index.xml")) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Failed to invalidate the diary index: {error}")),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Remote helpers
 // ---------------------------------------------------------------------------
@@ -817,14 +897,13 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
     let mut pulled: BTreeSet<String> = BTreeSet::new();
     let mut removed: BTreeSet<String> = BTreeSet::new();
     let mut remote_hashes: BTreeMap<String, String> = BTreeMap::new();
-    let mut index_dirty = false;
 
     let paths: BTreeSet<String> = local.keys().chain(remote_map.keys()).cloned().collect();
 
     for path in paths {
-        let Some(kind) = classify_path(&path) else {
+        if classify_path(&path).is_none() {
             continue;
-        };
+        }
         let local_file = local.get(&path);
         let remote_file = remote_map.get(&path);
         let base = state.files.get(&path);
@@ -866,9 +945,6 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
                                     .map_err(|e| format!("Failed to upload {path}: {e}"))?;
                                 pushed.insert(path.clone());
                                 report.pushed.push(path);
-                                if matches!(kind, Kind::Entry) {
-                                    index_dirty = true;
-                                }
                             }
                             (false, true) => {
                                 let local = req.local_dir.join(&path);
@@ -878,9 +954,6 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
                                     .map_err(|e| format!("Failed to download {path}: {e}"))?;
                                 pulled.insert(path.clone());
                                 report.pulled.push(path);
-                                if matches!(kind, Kind::Entry) {
-                                    index_dirty = true;
-                                }
                             }
                             _ => report.conflicts.push(SyncConflict {
                                 path,
@@ -899,9 +972,6 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
                         .map_err(|e| format!("Failed to upload {path}: {e}"))?;
                     pushed.insert(path.clone());
                     report.pushed.push(path);
-                    if matches!(kind, Kind::Entry) {
-                        index_dirty = true;
-                    }
                 }
                 Some(base) if local_file.hash == base.hash => {
                     remote
@@ -912,9 +982,6 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
                     report.notes.push(format!(
                         "{path} was missing from the folder and has been restored"
                     ));
-                    if matches!(kind, Kind::Entry) {
-                        index_dirty = true;
-                    }
                 }
                 Some(_) => report.conflicts.push(SyncConflict {
                     path,
@@ -947,9 +1014,6 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
                             .map_err(|e| format!("Failed to download {path}: {e}"))?;
                         pulled.insert(path.clone());
                         report.pulled.push(path);
-                        if matches!(kind, Kind::Entry) {
-                            index_dirty = true;
-                        }
                     }
                     Some(_) if !remote_changed => {
                         // The private vault is authoritative: deleting a day on
@@ -963,9 +1027,6 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
                         report.notes.push(format!(
                             "{path} was deleted locally and has been removed from the folder"
                         ));
-                        if matches!(kind, Kind::Entry) {
-                            index_dirty = true;
-                        }
                     }
                     Some(_) => report.conflicts.push(SyncConflict {
                         path,
@@ -979,13 +1040,9 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
         }
     }
 
-    if index_dirty {
-        // SQLCipher no longer writes an index file. Removing a stale one left
-        // by a pre-migration device is still useful; a provider that refuses
-        // is not fatal because the database is authoritative.
-        invalidate_index(req.local_dir)?;
-        let _ = remote.delete(INDEX_FILE);
-    }
+    report
+        .notes
+        .extend(cleanup_legacy_files(remote, req.local_dir)?);
 
     // Refresh both sides so the state records the metadata the provider
     // actually assigned to the files we just wrote.
@@ -1093,12 +1150,6 @@ pub fn resolve(
                 }
             }
         }
-    }
-
-    if matches!(kind, Kind::Entry) {
-        // The cache no longer describes the entries on at least one side.
-        invalidate_index(req.local_dir)?;
-        let _ = remote.delete(INDEX_FILE);
     }
 
     state.files.remove(path);
@@ -1346,22 +1397,20 @@ mod tests {
     fn classifies_only_known_files() {
         assert_eq!(classify_path("vault.xml"), Some(Kind::Vault));
         assert_eq!(classify_path("recovery.xml"), Some(Kind::Recovery));
-        assert_eq!(classify_path("2026-11-16.xml"), Some(Kind::Entry));
-        assert_eq!(
-            classify_path("attachments/2026-11-16/manifest.xml"),
-            Some(Kind::Manifest)
-        );
+        assert_eq!(classify_path("2026-11-16.fd"), Some(Kind::Entry));
         assert_eq!(
             classify_path("attachments/2026-11-16/0123456789abcdef0123456789abcdef.bin"),
             Some(Kind::Attachment)
         );
         for bad in [
             "index.xml",
+            "2026-11-16.xml",
+            "attachments/2026-11-16/manifest.xml",
             "migration.journal",
             "../vault.xml",
             "attachments/../vault.xml",
             "attachments/2026-11-16/../../vault.xml",
-            "2026-11-16.xml.tmp-1234",
+            "2026-11-16.fd.tmp-1234",
             "attachments/2026-11-16/not-an-id.bin",
             "attachments/2026-13-01/manifest.xml",
             "",
@@ -1390,24 +1439,39 @@ mod tests {
     #[test]
     fn first_sync_pushes_local_files() {
         let (local, config, remote) = setup("first-push");
-        write(&local.join("2026-11-16.xml"), b"entry");
+        write(&local.join("2026-11-16.fd"), b"entry");
         write(
-            &local.join("attachments/2026-11-16/manifest.xml"),
-            b"manifest",
+            &local.join("attachments/2026-11-16/0123456789abcdef0123456789abcdef.bin"),
+            b"image",
         );
         write(&local.join("index.xml"), b"index");
+        write(&local.join("2026-11-15.xml"), b"unmigrated legacy entry");
         remote.put("index.xml", b"remote index");
+        remote.put("2026-11-16.xml", b"legacy entry with an .fd counterpart");
+        remote.put("attachments/2026-11-16/manifest.xml", b"legacy manifest");
 
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
         assert!(report.pushed.contains(&"vault.xml".to_string()));
-        assert!(report.pushed.contains(&"2026-11-16.xml".to_string()));
+        assert!(report.pushed.contains(&"2026-11-16.fd".to_string()));
         assert!(report
             .pushed
-            .contains(&"attachments/2026-11-16/manifest.xml".to_string()));
-        assert!(!report.pushed.contains(&"index.xml".to_string()));
-        assert_eq!(remote.get("2026-11-16.xml"), b"entry");
+            .contains(&"attachments/2026-11-16/0123456789abcdef0123456789abcdef.bin".to_string()));
+        assert_eq!(remote.get("2026-11-16.fd"), b"entry");
+        assert_eq!(
+            remote.get("attachments/2026-11-16/0123456789abcdef0123456789abcdef.bin"),
+            b"image"
+        );
+
+        // Legacy XML is removed only once the same date has a `.fd` record.
         assert!(!remote.path("index.xml").exists());
+        assert!(!remote.path("2026-11-16.xml").exists());
+        assert!(!remote.path("attachments/2026-11-16/manifest.xml").exists());
         assert!(!local.join("index.xml").exists());
+        assert!(local.join("2026-11-15.xml").is_file());
+        assert!(report
+            .notes
+            .iter()
+            .any(|note| note.contains("2026-11-15.xml")));
         assert!(report.conflicts.is_empty());
         let _ = fs::remove_dir_all(local.parent().unwrap());
     }
@@ -1415,22 +1479,29 @@ mod tests {
     #[test]
     fn first_sync_pulls_remote_files() {
         let (local, config, remote) = setup("first-pull");
-        remote.put("2026-11-17.xml", b"remote entry");
-        remote.put("attachments/2026-11-17/manifest.xml", b"manifest");
+        remote.put("2026-11-17.fd", b"remote entry");
+        remote.put(
+            "attachments/2026-11-17/0123456789abcdef0123456789abcdef.bin",
+            b"image",
+        );
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
-        assert!(report.pulled.contains(&"2026-11-17.xml".to_string()));
+        assert!(report.pulled.contains(&"2026-11-17.fd".to_string()));
         assert_eq!(
-            fs::read(local.join("2026-11-17.xml")).unwrap(),
+            fs::read(local.join("2026-11-17.fd")).unwrap(),
             b"remote entry"
         );
-        assert!(!local.join("index.xml").exists());
+        assert_eq!(
+            fs::read(local.join("attachments/2026-11-17/0123456789abcdef0123456789abcdef.bin"))
+                .unwrap(),
+            b"image"
+        );
         let _ = fs::remove_dir_all(local.parent().unwrap());
     }
 
     #[test]
     fn unchanged_files_are_not_copied() {
         let (local, config, remote) = setup("unchanged");
-        write(&local.join("2026-11-16.xml"), b"entry");
+        write(&local.join("2026-11-16.fd"), b"entry");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
         assert!(report.pushed.is_empty());
@@ -1442,31 +1513,31 @@ mod tests {
     #[test]
     fn both_changed_is_a_conflict_and_nothing_is_overwritten() {
         let (local, config, remote) = setup("conflict");
-        write(&local.join("2026-11-16.xml"), b"base");
+        write(&local.join("2026-11-16.fd"), b"base");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
 
-        write(&local.join("2026-11-16.xml"), b"local change");
-        remote.put("2026-11-16.xml", b"remote change");
+        write(&local.join("2026-11-16.fd"), b"local change");
+        remote.put("2026-11-16.fd", b"remote change");
 
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
         assert_eq!(report.conflicts.len(), 1);
-        assert_eq!(report.conflicts[0].path, "2026-11-16.xml");
+        assert_eq!(report.conflicts[0].path, "2026-11-16.fd");
         assert_eq!(report.conflicts[0].kind, ConflictKind::BothChanged);
         assert_eq!(
-            fs::read(local.join("2026-11-16.xml")).unwrap(),
+            fs::read(local.join("2026-11-16.fd")).unwrap(),
             b"local change"
         );
-        assert_eq!(remote.get("2026-11-16.xml"), b"remote change");
+        assert_eq!(remote.get("2026-11-16.fd"), b"remote change");
 
         resolve(
             &request(&local, &config, "content://tree"),
             &remote,
-            "2026-11-16.xml",
+            "2026-11-16.fd",
             Resolution::Remote,
         )
         .unwrap();
         assert_eq!(
-            fs::read(local.join("2026-11-16.xml")).unwrap(),
+            fs::read(local.join("2026-11-16.fd")).unwrap(),
             b"remote change"
         );
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
@@ -1477,21 +1548,21 @@ mod tests {
     #[test]
     fn keeping_local_overwrites_the_folder() {
         let (local, config, remote) = setup("keep-local");
-        write(&local.join("2026-11-16.xml"), b"base");
+        write(&local.join("2026-11-16.fd"), b"base");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
 
-        write(&local.join("2026-11-16.xml"), b"local change");
-        remote.put("2026-11-16.xml", b"remote change");
+        write(&local.join("2026-11-16.fd"), b"local change");
+        remote.put("2026-11-16.fd", b"remote change");
         resolve(
             &request(&local, &config, "content://tree"),
             &remote,
-            "2026-11-16.xml",
+            "2026-11-16.fd",
             Resolution::Local,
         )
         .unwrap();
-        assert_eq!(remote.get("2026-11-16.xml"), b"local change");
+        assert_eq!(remote.get("2026-11-16.fd"), b"local change");
         assert_eq!(
-            fs::read(local.join("2026-11-16.xml")).unwrap(),
+            fs::read(local.join("2026-11-16.fd")).unwrap(),
             b"local change"
         );
         let _ = fs::remove_dir_all(local.parent().unwrap());
@@ -1500,19 +1571,19 @@ mod tests {
     #[test]
     fn one_sided_change_is_synced() {
         let (local, config, remote) = setup("one-sided");
-        write(&local.join("2026-11-16.xml"), b"base");
+        write(&local.join("2026-11-16.fd"), b"base");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
 
-        write(&local.join("2026-11-16.xml"), b"new local");
+        write(&local.join("2026-11-16.fd"), b"new local");
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
-        assert_eq!(report.pushed, vec!["2026-11-16.xml"]);
-        assert_eq!(remote.get("2026-11-16.xml"), b"new local");
+        assert_eq!(report.pushed, vec!["2026-11-16.fd"]);
+        assert_eq!(remote.get("2026-11-16.fd"), b"new local");
 
-        remote.put("2026-11-16.xml", b"new remote");
+        remote.put("2026-11-16.fd", b"new remote");
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
-        assert_eq!(report.pulled, vec!["2026-11-16.xml"]);
+        assert_eq!(report.pulled, vec!["2026-11-16.fd"]);
         assert_eq!(
-            fs::read(local.join("2026-11-16.xml")).unwrap(),
+            fs::read(local.join("2026-11-16.fd")).unwrap(),
             b"new remote"
         );
         let _ = fs::remove_dir_all(local.parent().unwrap());
@@ -1521,56 +1592,56 @@ mod tests {
     #[test]
     fn deleting_locally_removes_the_mirrored_copy() {
         let (local, config, remote) = setup("local-delete");
-        write(&local.join("2026-11-16.xml"), b"entry");
+        write(&local.join("2026-11-16.fd"), b"entry");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
 
-        fs::remove_file(local.join("2026-11-16.xml")).unwrap();
+        fs::remove_file(local.join("2026-11-16.fd")).unwrap();
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
         assert!(report.pulled.is_empty());
         assert!(report
             .notes
             .iter()
             .any(|note| note.contains("deleted locally")));
-        assert!(!remote.path("2026-11-16.xml").exists());
-        assert!(!local.join("2026-11-16.xml").exists());
+        assert!(!remote.path("2026-11-16.fd").exists());
+        assert!(!local.join("2026-11-16.fd").exists());
         let _ = fs::remove_dir_all(local.parent().unwrap());
     }
 
     #[test]
     fn deleting_remotely_restores_the_private_copy() {
         let (local, config, remote) = setup("remote-delete");
-        write(&local.join("2026-11-16.xml"), b"entry");
+        write(&local.join("2026-11-16.fd"), b"entry");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
 
-        remote.delete("2026-11-16.xml").unwrap();
+        remote.delete("2026-11-16.fd").unwrap();
         let report = sync(&request(&local, &config, "content://tree"), &remote).unwrap();
-        assert_eq!(report.pushed, vec!["2026-11-16.xml"]);
-        assert_eq!(remote.get("2026-11-16.xml"), b"entry");
-        assert_eq!(fs::read(local.join("2026-11-16.xml")).unwrap(), b"entry");
+        assert_eq!(report.pushed, vec!["2026-11-16.fd"]);
+        assert_eq!(remote.get("2026-11-16.fd"), b"entry");
+        assert_eq!(fs::read(local.join("2026-11-16.fd")).unwrap(), b"entry");
         let _ = fs::remove_dir_all(local.parent().unwrap());
     }
 
     #[test]
     fn an_empty_folder_does_not_delete_everything() {
         let (local, config, remote) = setup("empty-guard");
-        write(&local.join("2026-11-16.xml"), b"entry");
+        write(&local.join("2026-11-16.fd"), b"entry");
         sync(&request(&local, &config, "content://tree"), &remote).unwrap();
 
-        fs::remove_file(remote.path("2026-11-16.xml")).unwrap();
+        fs::remove_file(remote.path("2026-11-16.fd")).unwrap();
         fs::remove_file(remote.path("vault.xml")).unwrap();
         let error = sync(&request(&local, &config, "content://tree"), &remote).unwrap_err();
         assert!(error.contains("looks empty"), "got: {error}");
-        assert!(local.join("2026-11-16.xml").exists());
+        assert!(local.join("2026-11-16.fd").exists());
         let _ = fs::remove_dir_all(local.parent().unwrap());
     }
 
     #[test]
     fn adopt_swaps_the_vault_and_keeps_a_backup() {
         let (local, config, remote) = setup("adopt");
-        write(&local.join("2026-11-16.xml"), b"old local");
+        write(&local.join("2026-11-16.fd"), b"old local");
         let vault_xml = "<vault><vault-id>AAAAAAAAAAAAAAAAAAAAAA==</vault-id></vault>";
         remote.put("vault.xml", vault_xml.as_bytes());
-        remote.put("2026-11-17.xml", b"remote entry");
+        remote.put("2026-11-17.fd", b"remote entry");
 
         let adopted = adopt(&local, &config, "content://tree", &remote).unwrap();
         assert_eq!(adopted.vault_id, "AAAAAAAAAAAAAAAAAAAAAA==");
@@ -1580,10 +1651,10 @@ mod tests {
             vault_xml.as_bytes()
         );
         assert_eq!(
-            fs::read(local.join("2026-11-17.xml")).unwrap(),
+            fs::read(local.join("2026-11-17.fd")).unwrap(),
             b"remote entry"
         );
-        assert!(!local.join("2026-11-16.xml").exists());
+        assert!(!local.join("2026-11-16.fd").exists());
         let _ = fs::remove_dir_all(local.parent().unwrap());
     }
 }

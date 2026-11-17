@@ -114,10 +114,15 @@ fn entries_are_unreadable_without_the_key() {
     )
     .unwrap();
 
-    // The raw file must not leak the plaintext.
-    let raw = std::fs::read_to_string(dir.path().join("2026-10-23.xml")).unwrap();
-    assert!(!raw.contains("Secret title"));
-    assert!(!raw.contains("Secret body"));
+    // The raw sync record must not leak the plaintext.
+    let raw = std::fs::read(dir.path().join("2026-10-23.fd")).unwrap();
+    assert!(!raw
+        .windows(b"Secret title".len())
+        .any(|window| window == b"Secret title"));
+    assert!(!raw
+        .windows(b"Secret body".len())
+        .any(|window| window == b"Secret body"));
+    assert!(!dir.path().join("2026-10-23.xml").exists());
 
     // A key from a different vault cannot decrypt it either.
     let other = TempDir::new("other-vault");
@@ -205,18 +210,18 @@ fn favourites_survive_a_lock_and_unlock() {
 }
 
 #[test]
-fn rebuilding_the_index_recovers_from_a_deleted_index_file() {
+fn listing_entries_does_not_depend_on_a_legacy_index_file() {
     let dir = TempDir::new("rebuild");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
     db::write_entry(dir.path(), &key, "2026-10-23", "One", "a").unwrap();
     db::write_entry(dir.path(), &key, "2026-10-22", "Two", "b").unwrap();
 
-    // Simulate a lost index.
+    // The legacy index is irrelevant; the database is the source of truth.
     let _ = std::fs::remove_file(dir.path().join("index.xml"));
 
-    let rebuilt = db::list_entries(dir.path(), &key).unwrap();
-    assert_eq!(rebuilt.len(), 2);
-    assert_eq!(rebuilt[0].date, "2026-10-23");
+    let listed = db::list_entries(dir.path(), &key).unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].date, "2026-10-23");
 }
 
 #[test]

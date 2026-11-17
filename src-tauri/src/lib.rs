@@ -517,8 +517,9 @@ async fn storage_status(
 
 /// Build the SQLCipher database from the legacy XML files.
 ///
-/// The XML files are kept as the per-day sync replica. The caller must be
-/// unlocked: decrypting the old entries requires the diary key.
+/// Read legacy XML once and build the SQLCipher database. The caller must be
+/// unlocked: decrypting the old entries requires the diary key. On success the
+/// XML entry files are deleted and replaced by binary `.fd` sync records.
 #[tauri::command]
 async fn migrate_storage(
     app: tauri::AppHandle,
@@ -531,8 +532,8 @@ async fn migrate_storage(
     Ok(report)
 }
 
-/// Move an unreadable database aside and rebuild it from the daily XML
-/// replicas.
+/// Move an unreadable database aside and rebuild it from the encrypted per-day
+/// `.fd` sync records.
 ///
 /// Unlock already proved the diary key with `vault.xml`; a failure to open
 /// `diary.db` therefore means corruption or a foreign database, not a wrong
@@ -547,7 +548,7 @@ async fn rebuild_storage(
     let key = session_key(&session)?;
     let report = blocking("Rebuild storage", move || {
         let backup = db::move_corrupt_database(&dir)?;
-        let mut report = db::migrate_from_xml(&dir, &key)?;
+        let mut report = db::rebuild_from_sync_records(&dir, &key)?;
         report.database_backup = backup.map(|path| path.to_string_lossy().into_owned());
         Ok(report)
     })
@@ -618,8 +619,10 @@ async fn create_vault(
 #[serde(rename_all = "camelCase")]
 struct UnlockResult {
     legacy: bool,
+    /// The database is missing but the daily `.fd` records are present.
+    needs_rebuild: bool,
     /// Set when the diary key was accepted but `diary.db` cannot be opened.
-    /// The XML replicas can rebuild it.
+    /// The daily `.fd` sync records can rebuild it.
     database_error: Option<String>,
 }
 
@@ -639,17 +642,20 @@ async fn unlock(
 
     let verify_dir = dir.clone();
     let key_check = Zeroizing::new(*key);
-    let (legacy, database_error) = blocking("Check storage format", move || {
+    let (legacy, needs_rebuild, database_error) = blocking("Check storage format", move || {
         let status = db::format_status(&verify_dir);
-        if status.format == db::StorageFormat::Legacy {
-            return Ok((true, None));
+        match status.format {
+            db::StorageFormat::Legacy => return Ok((true, false, None)),
+            db::StorageFormat::NeedsRebuild => return Ok((false, true, None)),
+            db::StorageFormat::Empty => return Ok((false, false, None)),
+            db::StorageFormat::Sqlcipher => {}
         }
         if let Some(context) = storage::vault_context(&verify_dir)? {
             if let Err(error) = db::verify(&verify_dir, &key_check, &context) {
-                return Ok((false, Some(error)));
+                return Ok((false, false, Some(error)));
             }
         }
-        Ok((false, None))
+        Ok((false, false, None))
     })
     .await?;
 
@@ -663,6 +669,7 @@ async fn unlock(
     clear_search(&app);
     Ok(UnlockResult {
         legacy,
+        needs_rebuild,
         database_error,
     })
 }
@@ -856,7 +863,7 @@ async fn recover_vault(
     };
 
     let recover_dir = dir.clone();
-    let (key, legacy, database_error) = blocking("Recover vault", move || {
+    let (key, legacy, needs_rebuild, database_error) = blocking("Recover vault", move || {
         let diary_key = storage::recover_diary_key(&recover_dir, &phrase)?;
         storage::reset_passphrase(&recover_dir, &diary_key, &new_passphrase, params)?;
         // Opportunistically upgrade a legacy recovery sidecar now that both
@@ -864,15 +871,16 @@ async fn recover_vault(
         let _ = storage::rewrite_recovery(&recover_dir, &diary_key, &phrase);
         let status = db::format_status(&recover_dir);
         let legacy = status.format == db::StorageFormat::Legacy;
+        let needs_rebuild = status.format == db::StorageFormat::NeedsRebuild;
         let mut database_error = None;
-        if !legacy {
+        if status.format == db::StorageFormat::Sqlcipher {
             if let Some(context) = storage::vault_context(&recover_dir)? {
                 if let Err(error) = db::verify(&recover_dir, &diary_key, &context) {
                     database_error = Some(error);
                 }
             }
         }
-        Ok((diary_key, legacy, database_error))
+        Ok((diary_key, legacy, needs_rebuild, database_error))
     })
     .await?;
 
@@ -884,6 +892,7 @@ async fn recover_vault(
     clear_search(&app);
     Ok(UnlockResult {
         legacy,
+        needs_rebuild,
         database_error,
     })
 }
@@ -1290,14 +1299,31 @@ async fn export_broken_entry(
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let _ = date;
     let key = session_key(&session)?;
     let dir = diary_dir(&app)?;
+
+    let check_dir = dir.clone();
+    let check_key = Zeroizing::new(*key);
+    let check_date = date.clone();
+    let has_legacy = blocking("Check broken entry", move || {
+        Ok(db::legacy_broken_bytes(&check_dir, &check_key, &check_date)?.is_some())
+    })
+    .await?;
+
     let (tx, rx) = std::sync::mpsc::channel();
+    let file_name = if has_legacy {
+        format!("{date}.xml")
+    } else {
+        "diary-backup.db".to_string()
+    };
     app.dialog()
         .file()
-        .set_title("匯出日記資料庫備份")
-        .set_file_name("diary-backup.db")
+        .set_title(if has_legacy {
+            "匯出損壞的日記檔"
+        } else {
+            "匯出日記資料庫備份"
+        })
+        .set_file_name(file_name)
         .save_file(move |path| {
             let _ = tx.send(path);
         });
@@ -1308,8 +1334,15 @@ async fn export_broken_entry(
         return Ok(None);
     };
     let dest = PathBuf::from(dest.to_string());
-    blocking("Export database snapshot", move || {
-        db::snapshot(&dir, &key, &dest)?;
+    blocking("Export entry", move || {
+        if let Some(bytes) = db::legacy_broken_bytes(&dir, &key, &date)? {
+            // The raw legacy bytes are preserved inside SQLCipher; export them
+            // verbatim so a damaged day can still be rescued externally.
+            fsutil::write_private(&dest, bytes)
+                .map_err(|e| format!("Failed to export preserved entry {date}: {e}"))?;
+        } else {
+            db::snapshot(&dir, &key, &dest)?;
+        }
         Ok(dest.to_string_lossy().into_owned())
     })
     .await
@@ -1807,8 +1840,7 @@ async fn bind_sync_dir(
 
         let report = blocking("Bind sync folder", move || {
             let _guard = sync::SYNC_LOCK.lock().unwrap();
-            db::ensure_entry_mirrors(&dir, &key)?;
-            attachments::export_mirror_manifests(&dir, &key)?;
+            db::ensure_sync_records(&dir, &key)?;
             let remote = SafSyncRemote::new(app2, tree_uri.clone());
             remote.ensure_available()?;
 
@@ -1844,7 +1876,7 @@ async fn bind_sync_dir(
                 },
                 &remote,
             )?;
-            if let Ok(warnings) = db::import_replica_paths(&dir, &key, &report.pulled) {
+            if let Ok(warnings) = db::import_sync_paths(&dir, &key, &report.pulled) {
                 report.notes.extend(warnings);
             }
             Ok(report)
@@ -1936,8 +1968,7 @@ async fn sync_now(
 
         let report = blocking("Sync folder", move || {
             let _guard = sync::SYNC_LOCK.lock().unwrap();
-            db::ensure_entry_mirrors(&dir, &key)?;
-            attachments::export_mirror_manifests(&dir, &key)?;
+            db::ensure_sync_records(&dir, &key)?;
             let remote = SafSyncRemote::new(app2, config.tree_uri.clone());
             remote.ensure_available()?;
             let mut report = sync::sync(
@@ -1949,7 +1980,7 @@ async fn sync_now(
                 },
                 &remote,
             )?;
-            if let Ok(warnings) = db::import_replica_paths(&dir, &key, &report.pulled) {
+            if let Ok(warnings) = db::import_sync_paths(&dir, &key, &report.pulled) {
                 report.notes.extend(warnings);
             }
             Ok(report)
@@ -2009,7 +2040,7 @@ async fn resolve_sync_conflict(
                 resolution,
             )?;
             if matches!(resolution, sync::Resolution::Remote) {
-                let _ = db::import_replica_paths(&dir, &key, std::slice::from_ref(&path));
+                let _ = db::import_sync_paths(&dir, &key, std::slice::from_ref(&path));
             }
             Ok(())
         })

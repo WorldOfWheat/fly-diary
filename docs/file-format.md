@@ -6,12 +6,13 @@
 
 ## 檔案格式
 
-> **SQLCipher 版本的重要變更**：主要儲存現在是 `diary.db`。本文件描述的
-> `YYYY-MM-DD.xml`、`index.xml` 與 `manifest.xml` 是**舊格式與每日同步鏡像**；
-> 資料庫 schema、金鑰派生與遷移流程請見 [sqlcipher.md](sqlcipher.md)。
-> `index.xml` 已不再產生。
+> **SQLCipher 版本的重要變更**：除了 `vault.xml` 與 `recovery.xml`，本文件描述的
+> 日記 XML 格式**只作為一次性遷移的 legacy 參考**。新版本不再產生、也不再同步
+> `YYYY-MM-DD.xml`、`index.xml` 或 `manifest.xml`；每日同步改用加密二進位
+> `YYYY-MM-DD.fd`。完整的新格式、`.fd` 結構與遷移流程請見
+> [sqlcipher.md](sqlcipher.md)。
 
-每個日記檔（`YYYY-MM-DD.xml`）：
+每個 legacy 日記檔（`YYYY-MM-DD.xml`，只作為遷移輸入）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -116,7 +117,7 @@ Vault 檔（`vault.xml`）：
 - 用短語復原時只改寫 `vault.xml`（新 salt、新 master key 包裝同一把 diary key），此檔保持不變，所以短語仍然有效。
 - 備份必須包含這個檔案；只複製 `vault.xml` 與日記檔會讓短語失效。
 
-索引檔（`index.xml`）：
+legacy 索引檔（`index.xml`，新版本不再產生）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -141,9 +142,9 @@ v5 索引的 AAD 使用 `index` object kind 加上 `vault-id`／`key-id`；舊�
 magic "FDAT" | version u8 | IV 12 bytes | AES-256-GCM ciphertext + tag
 ```
 
-MIME 與顯示順序存在同資料夾的 `manifest.xml`；manifest 遺失時，解密後可由 magic bytes
-重新判斷 MIME。圖片與 manifest 都不會出現在 `list_entries`，因為掃描只處理頂層的
-`YYYY-MM-DD.xml`。
+MIME 與顯示順序存在 SQLCipher；legacy 遷移時仍會讀取資料夾內的 `manifest.xml`。
+manifest 遺失時，解密後可由 magic bytes 重新判斷 MIME。圖片不會出現在
+`list_entries`，DB 的 `entries` 與 `attachments` 是分開的。
 
 > 舊版（`version="1"`）vault 使用單次 SHA-256 派生金鑰，並以 `<verifier>` 驗證密碼。
 > 解鎖舊 vault 時會自動遷移：先以舊金鑰解密所有日記、用新的隨機 diary key 重新加密，
@@ -242,9 +243,9 @@ diary/
 - 新增中斷 → 留下未被 manifest 引用的圖片，下次載入時補到最後。
 - 刪除中斷 → manifest 指向不存在的圖片，顯示「圖片遺失」佔位，不會讓已刪除的圖復活。
 
-manifest 現在主要存在 SQLCipher 的 `attachments` 表；`manifest.xml` 只是同步鏡像。
+manifest 現在只存在 SQLCipher 的 `attachments` 表；不再有 `manifest.xml`。
 DB rows 遺失時會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；資料不會不見，
-但精確順序只能近似恢復。整個日期資料夾沒有對應 `YYYY-MM-DD.xml` 鏡像時視為孤兒，
+但精確順序只能近似恢復。整個日期資料夾沒有對應 `YYYY-MM-DD.fd` 時視為孤兒，
 可用 `list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除，不會自動刪除。
 
 刪除日記的順序是 **DB（entries 與 attachment rows 明確刪除）→ XML 鏡像 → 附件資料夾**；
@@ -314,17 +315,18 @@ Android 版的資料夾同步是額外功能，設定**不放在** `settings.xml
 ```text
 vault.xml
 recovery.xml
-YYYY-MM-DD.xml
-attachments/YYYY-MM-DD/manifest.xml
+YYYY-MM-DD.fd
 attachments/YYYY-MM-DD/<32 hex>.bin
 ```
 
-`index.xml` 已不再產生。SQLCipher 版本的本機主要儲存是 `diary.db`，**不同步**；
-同步的是由 DB 產生的每日 XML 鏡像。拉回 `YYYY-MM-DD.xml` 或
-`attachments/YYYY-MM-DD/manifest.xml` 後，`sync_now` / `bind_sync_dir` 會把內容匯入 DB。
+`diary.db` 是本機主要儲存，**不同步**。`YYYY-MM-DD.fd` 是從 DB 產生的每日加密
+二進位同步檔（格式見 [sqlcipher.md](sqlcipher.md)）；拉回後 `sync_now` /
+`bind_sync_dir` 會把內容匯入 DB。`index.xml`、`manifest.xml` 與
+`YYYY-MM-DD.xml` 都是 legacy 格式，新版本不再產生，同步時會清理：
+`index.xml` 與 `manifest.xml` 直接刪除；`YYYY-MM-DD.xml` 只在同一天已有 `.fd` 時刪除。
 `diary.db-wal`、`diary.db-shm`、`migration.journal`、`*.tmp-*`、`*.upgrade` 與其他檔案
 也會被忽略。兩邊都改過同一個檔案時不會自動覆蓋，而是在設定頁列出衝突，由使用者選擇
-保留哪一邊。刪除方向不對稱：本機刪除會同步刪除鏡像；資料夾少了檔案則會把本機版本
+保留哪一邊。刪除方向不對稱：本機刪除會同步刪除 `.fd`；資料夾少了檔案則會把本機版本
 重新上傳，只有使用者明確選擇「刪除本機」時才會移除私有 vault 的檔案。
 
 ## 日記儲存位置

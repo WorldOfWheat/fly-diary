@@ -89,10 +89,11 @@ key 必須一致、`index.html`、`main.js` 與 `attachments.js` 用到的 key �
 `aria-pressed`、muted／border 對比、placeholder、24px target size，以及 modal 的 Tab 循環與
 焦點還原。它們不能取代螢幕閱讀器實測，完整清單見 [accessibility.md](accessibility.md)。
 
-Rust 測試分三層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
-的日記生命週期整合測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
+Rust 測試分四層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
+的日記生命週期整合測試、`src-tauri/tests/sqlcipher_migration.rs` 的 XML→SQLCipher
+遷移與 `.fd` 救援測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
 （新增 → 排序 → 上鎖 → 解鎖 → 讀回 → 刪除）。涵蓋加解密 roundtrip、錯誤密碼、密文竄改偵測、
-XML 序列化、日期驗證、索引重建、匯入流程、manifest 重建與孤兒偵測。
+SQLCipher 開啟／完整性、legacy XML 遷移、日期驗證、匯入流程、附件 manifest 重建與孤兒偵測。
 
 Rust coverage 需要 `cargo-llvm-cov`：
 
@@ -128,15 +129,16 @@ generated 專案，仍保持 gitignored；重新產生後請用 `pnpm android:in
 - **不支援 `.txt` 資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
 - 選單列只在桌面建置（`build_menu` 包在 `#[cfg(desktop)]`），行動版沒有 `Edit` 選單可掛。
 
-其餘加密、SQLCipher 儲存與同步鏡像流程在桌面與行動版完全相同。Android 交叉編譯
+其餘加密、SQLCipher 儲存與 `.fd` 同步流程在桌面與行動版完全相同。Android 交叉編譯
 `bundled-sqlcipher-vendored-openssl` 需要 NDK 的 `CC_*`／`AR_*`／`RANLIB_*` 與
 `perl`；若 `pnpm android:dev` 在建置 OpenSSL 時失敗，先確認這些工具在 PATH 中。
 
 ### Android 資料夾同步外掛
 
 手機版的「資料夾同步」是 Android-only，桌面版不會連結這個外掛，也不會讀取它的設定。
-SQLCipher 的 `diary.db` 留在 App 私有資料夾；同步只複製每日 `YYYY-MM-DD.xml` 與
-`manifest.xml` 鏡像，拉回後再匯入 DB。`index.xml` 已不再產生，也不會同步。
+SQLCipher 的 `diary.db` 留在 App 私有資料夾；同步只複製每日 `YYYY-MM-DD.fd` 與
+`attachments/*/*.bin`，拉回後再匯入 DB。附件 manifest 在 DB 內，不再有
+`manifest.xml`；`index.xml` 與日記 XML 已完全廢除。
 
 - `src-tauri/plugins/saf-sync` 是自訂 Tauri Android plugin，Kotlin 端用 Storage Access Framework
   （`ACTION_OPEN_DOCUMENT_TREE` + `takePersistableUriPermission`）選資料夾與讀寫檔案。

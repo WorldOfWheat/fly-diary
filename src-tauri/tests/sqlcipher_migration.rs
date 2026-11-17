@@ -55,7 +55,7 @@ fn remove_database(dir: &Path) {
 const WEBP: &[u8] = b"RIFF\x24\x00\x00\x00WEBPVP8 migration";
 
 #[test]
-fn migrates_entries_and_keeps_the_xml_replica() {
+fn migrates_entries_and_deletes_the_xml_files() {
     let dir = TempDir::new("entries");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
 
@@ -88,12 +88,12 @@ fn migrates_entries_and_keeps_the_xml_replica() {
     assert_eq!(entry.title, "Second");
     assert_eq!(entry.content, "World");
 
-    // The XML files are still the per-day sync replica and remain readable.
-    let replica = storage::read_entry(dir.path(), &key, "2026-10-22")
-        .unwrap()
-        .unwrap();
-    assert_eq!(replica.content, "Hello");
-    assert!(dir.path().join("2026-10-23.xml").is_file());
+    // XML is a break change: after a successful migration the only XML left is
+    // vault/recovery, and each day has a binary `.fd` sync record.
+    assert!(!dir.path().join("2026-10-22.xml").exists());
+    assert!(!dir.path().join("2026-10-23.xml").exists());
+    assert!(dir.path().join("2026-10-22.fd").is_file());
+    assert!(dir.path().join("2026-10-23.fd").is_file());
     assert!(!dir.path().join("index.xml").is_file());
 
     // A second migration is a no-op.
@@ -127,7 +127,24 @@ fn migrates_attachment_order_from_the_encrypted_manifest() {
     )
     .unwrap();
 
+    // Simulate a pre-SQLCipher installation: an XML entry plus an encrypted
+    // XML manifest. The image sidecars stay exactly where they are.
+    storage::write_entry(dir.path(), &key, "2026-10-23", "", "").unwrap();
+    attachments::write_legacy_manifest(
+        dir.path(),
+        &key,
+        "2026-10-23",
+        &[
+            (second.id.clone(), "image/webp".to_string(), 640, 480),
+            (first.id.clone(), "image/webp".to_string(), 1000, 500),
+        ],
+    )
+    .unwrap();
+
     remove_database(dir.path());
+    // `save_attachment` also wrote the new `.fd` records. A true legacy vault
+    // would not have them, so remove them before exercising the XML migration.
+    db::remove_sync_records(dir.path()).unwrap();
     let report = db::migrate_from_xml(dir.path(), &key).unwrap();
     assert_eq!(report.migrated, 1);
     assert_eq!(report.attachments, 2);
@@ -138,6 +155,11 @@ fn migrates_attachment_order_from_the_encrypted_manifest() {
     assert_eq!(listed[1].id, first.id);
     let data = attachments::read_attachment(dir.path(), &key, "2026-10-23", &first.id).unwrap();
     assert_eq!(crypto::b64_decode(&data.data).unwrap(), WEBP);
+    assert!(dir.path().join("2026-10-23.fd").is_file());
+    assert!(!dir
+        .path()
+        .join("attachments/2026-10-23/manifest.xml")
+        .exists());
 }
 
 #[test]
@@ -157,8 +179,31 @@ fn a_broken_entry_is_reported_and_the_rest_still_migrate() {
     let entries = db::list_entries(dir.path(), &key).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].date, "2026-10-22");
-    // The damaged original is still there for manual rescue.
-    assert!(dir.path().join("2026-10-23.xml").is_file());
+
+    // The unreadable bytes are preserved inside the encrypted database, not as
+    // a stray XML file. The broken tab can still list and export them.
+    assert!(!dir.path().join("2026-10-23.xml").exists());
+    let broken = db::list_broken_entries(dir.path(), &key).unwrap();
+    assert_eq!(broken.len(), 1);
+    assert_eq!(broken[0].date, "2026-10-23");
+    assert_eq!(
+        db::legacy_broken_bytes(dir.path(), &key, "2026-10-23")
+            .unwrap()
+            .unwrap(),
+        b"not xml"
+    );
+    assert!(dir.path().join("2026-10-22.fd").is_file());
+    assert!(!dir.path().join("2026-10-23.fd").exists());
+
+    // The old broken-entry delete flow still works: it removes the preserved
+    // bytes from the encrypted database.
+    db::delete_entry(dir.path(), &key, "2026-10-23").unwrap();
+    assert!(db::list_broken_entries(dir.path(), &key)
+        .unwrap()
+        .is_empty());
+    assert!(db::legacy_broken_bytes(dir.path(), &key, "2026-10-23")
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -177,6 +222,8 @@ fn a_wrong_key_does_not_create_an_empty_database() {
         "unexpected error: {error}"
     );
     assert!(!dir.path().join("diary.db").is_file());
+    // A failed migration leaves the source untouched.
+    assert!(dir.path().join("2026-10-23.xml").is_file());
 }
 
 #[test]
@@ -198,6 +245,32 @@ fn snapshot_is_a_consistent_encrypted_copy() {
 }
 
 #[test]
+fn a_sync_only_folder_is_rebuilt_and_never_treated_as_legacy() {
+    let dir = TempDir::new("sync-only");
+    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "Sync only", "body").unwrap();
+    remove_database(dir.path());
+
+    assert_eq!(
+        db::format_status(dir.path()).format,
+        db::StorageFormat::NeedsRebuild
+    );
+
+    // XML migration must refuse rather than create an empty DB and then delete
+    // the only copy of the day from `.fd`.
+    let error = db::migrate_from_xml(dir.path(), &key).unwrap_err();
+    assert!(error.contains("rebuild"), "unexpected error: {error}");
+    assert!(dir.path().join("2026-10-23.fd").is_file());
+
+    let report = db::rebuild_from_sync_records(dir.path(), &key).unwrap();
+    assert_eq!(report.migrated, 1);
+    let entry = db::read_entry(dir.path(), &key, "2026-10-23")
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.title, "Sync only");
+}
+
+#[test]
 fn a_corrupt_database_can_be_moved_aside_and_rebuilt() {
     let dir = TempDir::new("rebuild");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
@@ -209,12 +282,13 @@ fn a_corrupt_database_can_be_moved_aside_and_rebuilt() {
     assert!(backup.as_ref().unwrap().is_file());
     assert!(!dir.path().join("diary.db").is_file());
 
-    let report = db::migrate_from_xml(dir.path(), &key).unwrap();
+    let report = db::rebuild_from_sync_records(dir.path(), &key).unwrap();
     assert_eq!(report.migrated, 1);
     let entry = db::read_entry(dir.path(), &key, "2026-10-23")
         .unwrap()
         .unwrap();
     assert_eq!(entry.title, "Rescued");
+    assert!(!dir.path().join("2026-10-23.xml").exists());
 }
 
 #[test]
@@ -228,10 +302,10 @@ fn integrity_check_passes_on_a_healthy_database() {
 }
 
 #[test]
-fn refreshing_mirrors_does_not_rewrite_fresh_files() {
-    let dir = TempDir::new("mirror-idempotent");
+fn refreshing_sync_records_does_not_rewrite_fresh_files() {
+    let dir = TempDir::new("sync-idempotent");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    db::write_entry(dir.path(), &key, "2026-10-23", "Mirror", "body").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "Record", "body").unwrap();
     attachments::save_attachment(
         dir.path(),
         &key,
@@ -243,21 +317,17 @@ fn refreshing_mirrors_does_not_rewrite_fresh_files() {
     )
     .unwrap();
 
-    let entry_before = std::fs::read(dir.path().join("2026-10-23.xml")).unwrap();
-    let manifest_before =
-        std::fs::read(dir.path().join("attachments/2026-10-23/manifest.xml")).unwrap();
-
-    db::ensure_entry_mirrors(dir.path(), &key).unwrap();
-    attachments::export_mirror_manifests(dir.path(), &key).unwrap();
+    let record_before = std::fs::read(dir.path().join("2026-10-23.fd")).unwrap();
+    db::ensure_sync_records(dir.path(), &key).unwrap();
 
     assert_eq!(
-        std::fs::read(dir.path().join("2026-10-23.xml")).unwrap(),
-        entry_before,
-        "a fresh entry mirror must not be re-encrypted before sync"
+        std::fs::read(dir.path().join("2026-10-23.fd")).unwrap(),
+        record_before,
+        "a fresh sync record must not be re-encrypted before sync"
     );
-    assert_eq!(
-        std::fs::read(dir.path().join("attachments/2026-10-23/manifest.xml")).unwrap(),
-        manifest_before,
-        "a fresh manifest mirror must not be re-encrypted before sync"
-    );
+    assert!(!dir.path().join("2026-10-23.xml").exists());
+    assert!(!dir
+        .path()
+        .join("attachments/2026-10-23/manifest.xml")
+        .exists());
 }

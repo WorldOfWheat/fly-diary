@@ -84,6 +84,8 @@ export function createLockScreen(deps) {
   let recoveryMode = false;
   /** Whether the selected vault still uses the legacy XML layout. */
   let legacyFormat = false;
+  /** Whether the vault has `.fd` records but the database is missing. */
+  let needsRebuildFormat = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
   /** Guard against double-clicking recovery while the workspace is committed. */
@@ -316,9 +318,11 @@ export function createLockScreen(deps) {
         legacyFormat = true;
         if (!(await offerMigration())) return;
       }
-      if (result?.databaseError) {
-        if (!(await offerRebuild(result.databaseError, els.recoveryUnlockError)))
-          return;
+      if (result?.needsRebuild || result?.databaseError) {
+        needsRebuildFormat = Boolean(result?.needsRebuild);
+        const message =
+          result?.databaseError ?? deps.t("lock.rebuildMissing");
+        if (!(await offerRebuild(message, els.recoveryUnlockError))) return;
       }
       await deps.enterApp();
     } catch (err) {
@@ -436,9 +440,11 @@ export function createLockScreen(deps) {
       // can only run after the passphrase has produced the diary key.
       els.lockSubtitle.textContent = legacyFormat
         ? deps.t("lock.subtitle.legacy")
-        : configured
-          ? deps.t("lock.subtitle.unlock")
-          : deps.t("lock.subtitle.existing");
+        : needsRebuildFormat
+          ? deps.t("lock.subtitle.rebuild")
+          : configured
+            ? deps.t("lock.subtitle.unlock")
+            : deps.t("lock.subtitle.existing");
       els.passphraseConfirm.hidden = true;
       els.passphrase.placeholder = deps.t("lock.passphrase");
       els.passphrase.autocomplete = "current-password";
@@ -506,6 +512,7 @@ export function createLockScreen(deps) {
             })
         : false;
       legacyFormat = false;
+      needsRebuildFormat = false;
       if (exists) {
         try {
           const status = await deps.invoke(
@@ -513,6 +520,7 @@ export function createLockScreen(deps) {
             path ? { path } : {}
           );
           legacyFormat = status?.format === "legacy";
+          needsRebuildFormat = status?.format === "needsRebuild";
         } catch (err) {
           // Older test doubles and older builds do not expose this command;
           // the post-unlock prompt still handles the migration.
@@ -524,6 +532,7 @@ export function createLockScreen(deps) {
       console.error("vault_exists failed:", err);
       recoveryAvailable = false;
       legacyFormat = false;
+      needsRebuildFormat = false;
       return false;
     }
   }
@@ -659,9 +668,9 @@ export function createLockScreen(deps) {
   }
 
   /**
-   * The passphrase was correct but `diary.db` cannot be opened. The daily XML
-   * replicas are the rescue path: move the unreadable database aside and build
-   * a fresh one from them.
+   * The passphrase was correct but `diary.db` cannot be opened. The daily
+   * encrypted `.fd` sync records are the rescue path: move the unreadable
+   * database aside and build a fresh one from them.
    */
   async function offerRebuild(databaseError, errorEl = els.lockError) {
     const rebuild =
@@ -672,6 +681,8 @@ export function createLockScreen(deps) {
         : true;
     if (!rebuild) {
       await deps.invoke("lock");
+      legacyFormat = false;
+      needsRebuildFormat = false;
       pickingWorkspace = true;
       showLockScreen();
       renderLockScreen();
@@ -766,8 +777,11 @@ export function createLockScreen(deps) {
         legacyFormat = true;
         if (!(await offerMigration())) return;
       }
-      if (unlockResult?.databaseError) {
-        if (!(await offerRebuild(unlockResult.databaseError))) return;
+      if (unlockResult?.needsRebuild || unlockResult?.databaseError) {
+        needsRebuildFormat = Boolean(unlockResult?.needsRebuild);
+        const message =
+          unlockResult?.databaseError ?? deps.t("lock.rebuildMissing");
+        if (!(await offerRebuild(message))) return;
       }
       await deps.enterApp();
     } catch (err) {

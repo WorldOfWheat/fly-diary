@@ -2,7 +2,11 @@
 
 [← 回到 README](../README.md) · [文件索引](README.md)
 
-Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼或回復短語」。以下說明金鑰階層、KDF、AAD、回復短語、記憶體保護、供應鏈防護與已知限制。
+Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼或回復短語」。主要儲存是 SQLCipher 的 `diary.db`；每日同步使用 HKDF 派生金鑰加密的 `.fd` 二進位檔。以下說明金鑰階層、KDF、AAD、回復短語、記憶體保護、供應鏈防護與已知限制。
+
+> **XML 已完全廢除**：除了 `vault.xml` 與 `recovery.xml`，App 不再讀寫任何日記 XML。
+> 舊格式只在一次性遷移時讀取，成功後刪除；無法解讀的原始位元組存進加密的
+> `legacy_broken` 表。新格式與救援流程見 [sqlcipher.md](sqlcipher.md)。
 
 ## 加密設計
 
@@ -43,7 +47,8 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 | 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗；SQLCipher 另以每頁 HMAC-SHA512 認證 |
 | 資料庫       | `diary.db` 以 SQLCipher raw key 加密；DB key 由 diary key 經 HKDF-SHA256 派生          |
 | 圖片附件     | v3 使用 HKDF 派生的 `attachment_key`，每張獨立 IV；舊 v1／v2 仍用 diary key             |
-| 附件 manifest | 主要存在 SQLCipher；同步鏡像 `manifest.xml` 仍用 diary key 與 AAD 綁日期              |
+| 附件 manifest | 存在 SQLCipher 的 `attachments` 表，沒有 XML 檔案                                    |
+| 每日同步檔   | `.fd` 使用 HKDF 派生的 `sync_key` + AES-256-GCM；AAD 綁 vault-id、key-id、日期與版本   |
 | 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
 | 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本 |
 | 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux／Android 排除 dump/fork、Windows 排除 WER dump；鎖定或關閉即抹除、解鎖、unmap |
@@ -58,16 +63,30 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - `vault-id`：這個日記本的身分；建立或首次解鎖舊 vault 時產生。
 - `key-id`：目前 diary key 的身分；未來輪換 diary key 時會更新。
 
-日記、索引、附件、manifest、recovery 與 wrapped diary key 的 AAD 都是 canonical、長度前綴的欄位：
+SQLCipher 以每頁 HMAC-SHA512 認證整個資料庫，`db_key` 由 diary key 經 HKDF 派生。
+`.fd` 同步檔另有自己的 AAD：
+
+```text
+"fly-diary/sync/v1" || 0x00 || vault-id || key-id || date || 0x00 || version
+```
+
+舊 XML 格式（只在遷移時讀取）與 `vault.xml`／`recovery.xml` 仍使用下列 canonical、
+長度前綴的 AAD：
 
 ```text
 "fly-diary/aad/v5" || kind || vault-id || key-id
   || len(field1) || field1 || len(field2) || field2 ...
 ```
 
-欄位包含 object kind（entry/index/manifest/attachment/recovery/vault-wrap）、日期、附件 id、格式版本；wrapped diary key 另外綁定 salt 與 KDF 參數。這樣把日記密文搬到別的日期、把索引當成日記、或把整組密文搬到另一個 vault，都會在 GCM 驗證時失敗。**不要**把 app 版本、檔案路徑、mtime 或裝置 id 放進 AAD，否則升級或同步後會解不開。
+欄位包含 object kind（legacy entry/manifest/attachment/recovery/vault-wrap）、日期、
+附件 id、格式版本；wrapped diary key 另外綁定 salt 與 KDF 參數。這樣把密文搬到別的
+日期、把不同 object 互換、或把整組密文搬到另一個 vault，都會在 GCM 驗證時失敗。
+**不要**把 app 版本、檔案路徑、mtime 或裝置 id 放進 AAD，否則升級或同步後會解不開。
 
-舊的 v4 entry、v4 index、v1 manifest/attachment 與 v1 recovery 仍可讀取；新寫入會使用 v5。舊 `recovery.xml` 因缺少短語無法自動重包裝，會維持 v1，直到下次成功復原或重新產生短語。AAD 只能證明上下文，不能防 replay／rollback；能改寫整個資料夾的攻擊者仍可把舊檔搬回來。
+舊的 v4 entry、v4 index、v1 manifest/attachment 與 v1 recovery 仍可讀取；新寫入不再
+產生 entry/index/manifest XML。舊 `recovery.xml` 因缺少短語無法自動重包裝，會維持
+v1，直到下次成功復原或重新產生短語。AAD 只能證明上下文，不能防 replay／rollback；
+能改寫整個資料夾的攻擊者仍可把舊檔搬回來。
 
 ### KDF 校準
 
@@ -145,22 +164,23 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 
 ### Android 資料夾同步
 
-Android 版可以把**密文**鏡像到使用者透過 SAF 選定的外部資料夾（例如 Syncthing 或雲端硬碟同步的目錄）。日記本體仍是 App 私有資料夾，`pick_diary_dir` 不會回傳外部路徑。
+Android 版可以把**密文**映到使用者透過 SAF 選定的外部資料夾（例如 Syncthing 或雲端硬碟同步的目錄）。日記本體仍是 App 私有資料夾，`pick_diary_dir` 不會回傳外部路徑。
 
-- **只搬密文**：同步不需要 diary key，entry、附件、`vault.xml` 與 `recovery.xml` 都以原始位元組複製。明文與搜尋索引不會離開 App；同步索引與附件 manifest 解密仍只在原本的解鎖流程發生。
-- **不可觸及 webview**：SAF 外掛沒有對 JavaScript 開放的 command，URI 只存在 Rust 端。外掛只接受 Rust 傳來的相對路徑，並在 Rust 端用嚴格白名單（`vault.xml`、`recovery.xml`、`YYYY-MM-DD.xml`、`attachments/...`）拒絕 `..`、絕對路徑與非預期檔名。
+- **只搬密文**：同步不需要 diary key，`.fd`、附件、`vault.xml` 與 `recovery.xml` 都以原始位元組複製。明文與搜尋索引不會離開 App；附件 manifest 在 DB 內，`.fd` 匯入時才解密。
+- **不可觸及 webview**：SAF 外掛沒有對 JavaScript 開放的 command，URI 只存在 Rust 端。外掛只接受 Rust 傳來的相對路徑，並在 Rust 端用嚴格白名單（`vault.xml`、`recovery.xml`、`YYYY-MM-DD.fd`、`attachments/.../*.bin`）拒絕 `..`、絕對路徑與非預期檔名。
 - **不自動覆蓋**：三向比較以 `sync-state.json` 的 SHA-256 判斷哪一邊改過。兩邊都改過、或一邊刪除另一邊修改時，同步停手並回報衝突，必須在設定頁選擇保留本機或保留資料夾。
-- **刪除方向不對稱**：本機刪除日記且資料夾自上次同步未改時，會一併刪除鏡像；資料夾少了檔案而本機未改時，會把本機版本重新上傳，**不會刪除私有 vault**。兩邊都改過、或一邊刪除另一邊修改時才列為衝突。資料夾整個變空會直接報錯，不會把全部日記刪掉。
+- **刪除方向不對稱**：本機刪除日記且資料夾自上次同步未改時，會一併刪除 `.fd`；資料夾少了檔案而本機未改時，會把本機版本重新上傳，**不會刪除私有 vault**。兩邊都改過、或一邊刪除另一邊修改時才列為衝突。資料夾整個變空會直接報錯，不會把全部日記刪掉。
+- **舊 XML 清理**：同步會刪除遠端 `index.xml` 與 `manifest.xml`；`YYYY-MM-DD.xml` 只有在同一天已有 `.fd` 時才刪除，避免讓尚未遷移的裝置失去唯一副本。
 - **外部資料夾的風險**：資料夾可能被其他 App、同步服務或使用者修改。AAD 會讓搬檔、跨 vault 搬移與降級改寫解密失敗，但**刪除與阻斷服務無法防止**；只選可信任的資料夾。
 - **SAF 權限會消失**：換手機、清除 App 資料或撤銷授權後，URI 權限不再有效。App 會回報資料夾無法存取，必須重新選擇；不會把它當成空資料夾而覆蓋。
 - **備份範圍不同**：Auto Backup 只涵蓋 App 私有資料，不包含 SAF 外部資料夾。外部副本要由使用者自己的同步／備份工具負責。
-- **還原會換 vault**：若選到的資料夾屬於另一個 vault，App 會要求先鎖定，再把目前私有資料夾改名為 `*.local-backup-<timestamp>`，然後匯入外部檔案。舊 vault 的檔案保留在備份目錄，不會刪除。
+- **還原會換 vault**：若選到的資料夾屬於另一個 vault，App 會要求先鎖定，再把目前私有資料夾改名為 `*.local-backup-<timestamp>`，然後匯入外部檔案。舊 vault 的檔案保留在備份目錄，不會刪除。還原後的資料夾只有 `.fd` 與附件，沒有 `diary.db`；解鎖後會直接詢問是否從 `.fd` 重建。
 - 同步狀態檔只記錄路徑、密文雜湊與時間，不含金鑰或明文；它與 `sync.xml` 都只有 App 自己可讀。
 
 ### 檔案系統防護
 
 - 暫存檔使用 `create_new` + `O_NOFOLLOW` + 隨機 suffix；避免在共用／同步資料夾中被預放 symlink，讓寫入轉向其他檔案。
-- `vault.xml`、`recovery.xml`、`index.xml`、entry、manifest 與 settings 都有硬讀取上限；超大的損壞檔會被視為 broken 或拒絕，不會讓 App OOM。
+- `vault.xml`、`recovery.xml`、`.fd` 與 settings 都有硬讀取上限；超大的損壞檔會被視為 broken 或拒絕，不會讓 App OOM。
 - 路徑中的 `..` 與 symlink 會被拒絕；Windows 共用磁碟／FAT 的 ACL 仍要由使用者確認。
 - 需要解鎖才能使用的命令（拖放圖片、剪貼簿、自動鎖定設定、匯出壞檔等）都要求 session；截圖保護的暫時關閉移到 Rust 的原生資料夾選擇器內。
 
@@ -197,28 +217,28 @@ Android 版可以把**密文**鏡像到使用者透過 SAF 選定的外部資料
 
 ## 已知限制
 
-- 日期為明文（檔名與 `<date>`），但標題與內容皆已加密。
+- 日期為明文（`.fd` 檔名與 header），但標題、內容、附件 metadata 皆已加密。
 - 舊版（SHA-256）vault 會在解鎖時自動遷移；v2 vault 會補上 `vault-id`／`key-id`。這些步驟仍需要重新加密 XML，完成前無法在設定頁變更密碼。遷移會先寫下 `migration.journal`（內含新 vault 的 salt 與包裝後的新 diary key）才開始改寫日記，所以中途斷電不會讓日記卡在「一半用舊金鑰、一半用新金鑰」；下次解鎖會偵測到 journal 並自動續跑。
-- 升級到 SQLCipher 後，舊 XML 的格式升級不再於解鎖後背景進行；`migrate_storage` 會一次讀取 v1–v4 並寫入 DB。這一步需要解鎖，且會先建立 `diary.db.migrating`，通過 `quick_check` 後才 rename；中斷只會留下可刪除的暫存 DB。
+- 升級到 SQLCipher 後，舊 XML 的格式升級不再於解鎖後背景進行；`migrate_storage` 會一次讀取 v1–v4 並寫入 DB。這一步需要解鎖，且會先建立 `diary.db.migrating`，通過 `quick_check` 後才 rename；成功後再寫出 `.fd` 並刪除 XML。中斷只會留下可刪除的暫存 DB。無法解讀的 XML 原始位元組會存進加密的 `legacy_broken`，不會留在磁碟上。
 - 閒置計時只在 App 視窗內計算；另外會在 Tauri 的 suspend／resume、`visibilitychange`、`pagehide` 與 Android 背景化時鎖定。若平台沒有送出 suspend 事件，切到其他視窗時 WebView 可能節流計時器，這時要等回到 App 後由 wall-clock deadline 立刻鎖定；休眠瞬間仍可能有極短空窗。
 - KDF 校準的結果取決於當下機器負載，忙碌時可能選到偏保守的參數；重新校準即可。
-- SQLCipher 的 `INSERT`／`UPDATE`／附件 manifest 更新都在單一 transaction 內完成；commit 後才重寫當天的 XML 同步鏡像。鏡像落後只會讓同步晚一步，DB 仍是權威來源，`ensure_entry_mirrors` 會在下次同步前補齊。
-- 上述順序保證的是「不會產生無法自癒的狀態」，不是「DB 與鏡像永遠一致」。若同步軟體在兩次寫入之間把資料夾同步出去，另一台裝置可能短暫看到較舊的鏡像；下次在任一裝置儲存或同步時會補上。
+- SQLCipher 的 `INSERT`／`UPDATE`／附件 manifest 更新都在單一 transaction 內完成；commit 後才重寫當天的 `.fd`。`.fd` 落後只會讓同步晚一步，DB 仍是權威來源，`ensure_sync_records` 會在下次同步前補齊。
+- 上述順序保證的是「不會產生無法自癒的狀態」，不是「DB 與 `.fd` 永遠一致」。若同步軟體在兩次寫入之間把資料夾同步出去，另一台裝置可能短暫看到較舊的 `.fd`；下次在任一裝置儲存或同步時會補上。
 - 原子寫入保證的是「檔案內容不會被截斷、且改名本身已 flush」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入；`fsync` 目錄同理，只把 flush 要求送到裝置。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
-- 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在 SQLCipher 與加密鏡像裡；DB 檔大小仍會透露大約的日記量。
-- 多裝置同時修改同一天的 manifest 時，同步工具可能產生衝突，順序以使用者選擇的版本為準。DB 是權威來源；未被引用的圖檔會在下次載入時補回，所以資料不會消失，但順序可能改變。manifest 遺失或損壞時只能依 mtime／檔名近似恢復順序。
-- 完整備份需要 `diary.db` + `vault.xml` + `recovery.xml` + `attachments/`。只複製 `diary.db` 打不開；執行中的 DB 請用 `VACUUM INTO`（`export_broken_entry` 現在匯出這種快照）或先 checkpoint + close。備份檔可能仍包含已刪除的 free page。
+- 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在 SQLCipher 與加密的 `.fd` 裡；DB 檔大小仍會透露大約的日記量。
+- 多裝置同時修改同一天的 `.fd` 時，同步工具可能產生衝突，順序以使用者選擇的版本為準。DB 是權威來源；未被引用的圖檔會在下次載入時補回，所以資料不會消失，但順序可能改變。`.fd` 遺失或損壞時只能依 mtime／檔名近似恢復順序。
+- 完整備份需要 `diary.db` + `vault.xml` + `recovery.xml` + `attachments/`。`.fd` 是從 DB 衍生的同步檔，不是備份的必要條件，但保留它有助於 DB 損壞時救援。只複製 `diary.db` 打不開；執行中的 DB 請用 `VACUUM INTO`（`export_broken_entry` 現在可能匯出這種快照）或先 checkpoint + close。備份檔可能仍包含已刪除的 free page。
 - 刪除後的 page 可能留在 SQLite free list；`secure_delete=ON` 會先把內容歸零再加密，但仍建議刪除後 checkpoint 並定期 `VACUUM`。
 - 圖片會在前端重新編碼成 1000px WebP，EXIF（含 GPS）會被移除；若 WebView 不支援 WebP 編碼，PNG／WebP 來源會 fallback PNG 保留透明，其他格式則 fallback JPEG（透明區填白）。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
 - 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。
-- 孤兒附件（整個日期資料夾沒有 `YYYY-MM-DD.xml` 鏡像）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免同步延遲時誤刪。
+- 孤兒附件（整個日期資料夾沒有 `YYYY-MM-DD.fd`）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免同步延遲時誤刪。
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
 - 行動版仍沒有「把日記本體放在外部資料夾」的選擇器，也沒有 `.txt` 資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。Android 的外部資料夾需求由下方的「資料夾同步」處理，日記本體不會搬出 App 私有空間。
 - Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。
 - 原生拖放（`onDragDropEvent`）與原生剪貼簿備援目前只在桌面版；行動版仍以檔案選擇器與 WebView 的 paste 事件為主。
 - 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
-- 平行掃描與舊 XML 遷移的加速幅度受磁碟限制；SQLCipher 寫入以單一 transaction 序列化，不會因核心數增加而亂序。
+- 平行掃描與舊 XML 遷移的加速幅度受磁碟限制；SQLCipher 寫入以單一 transaction 序列化，不會因核心數增加而亂序。DB 無法開啟時可用 `rebuild_storage` 從 `.fd` 重建；這不是備份的替代品，仍應定期匯出加密快照。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。
 - 目前只有繁體中文與英文兩種語言；後端回傳的錯誤訊息（例如 Rust 端的 `Failed to write entry ...`）仍是英文，尚未翻譯。
 - 變更日記路徑不會搬移既有檔案，需自行複製；新路徑若已有 vault 則會直接跳到解鎖畫面，沿用該 vault 的密碼。

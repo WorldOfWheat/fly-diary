@@ -1782,7 +1782,7 @@ async function afterSyncReport(report) {
   if (pulled.length > 0 || conflicts.length > 0) {
     await refreshList({ scanBroken: true });
   }
-  if (currentDate && pulled.includes(`${currentDate}.xml`)) {
+  if (currentDate && pulled.includes(`${currentDate}.fd`)) {
     await selectDate(currentDate);
   }
   if (conflicts.length > 0) {

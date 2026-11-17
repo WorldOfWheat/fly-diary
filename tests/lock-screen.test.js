@@ -1448,6 +1448,46 @@ test("a rejected recovery keeps the form open and shows the backend message", as
   );
 });
 
+test("a sync-only workspace is announced before unlock", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      await lock.detectVault();
+      lock.renderLockScreen();
+      assert.equal(els.lockSubtitle.textContent, "lock.subtitle.rebuild");
+    },
+    { invokeTable: { storage_status: { format: "needsRebuild" } } }
+  );
+});
+
+test("a sync-only workspace offers a rebuild after unlock", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => true;
+  try {
+    await withLock(
+      async ({ lock, deps, invoke, els }) => {
+        lock.setConfigured(true);
+        lock.setVaultInitialized(true);
+        els.passphrase.value = "a long enough passphrase";
+        await lock.handleUnlockSubmit(submitEvent());
+
+        assert.equal(invoke.commands().includes("rebuild_storage"), true);
+        assert.equal(deps.enterApp.calls.length, 1);
+      },
+      {
+        invokeTable: {
+          storage_status: { format: "needsRebuild" },
+          unlock: { needsRebuild: true },
+          rebuild_storage: { migrated: 2, attachments: 0, broken: [] },
+        },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Legacy XML -> SQLCipher migration
 // ---------------------------------------------------------------------------
@@ -1581,7 +1621,7 @@ test("recovering a legacy vault also offers the migration", async () => {
   }
 });
 
-test("an unreadable database offers a rebuild from the XML replicas", async () => {
+test("an unreadable database offers a rebuild from the daily sync records", async () => {
   const original = globalThis.confirm;
   globalThis.confirm = () => true;
   try {

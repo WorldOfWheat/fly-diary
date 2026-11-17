@@ -1,22 +1,28 @@
-//! Encrypted, XML-backed storage layer.
+//! Vault/recovery metadata and the **legacy** XML entry reader.
 //!
-//! Layout of the diary directory:
+//! The current diary store is `crate::db` (SQLCipher). This module still owns
+//! `vault.xml`, `recovery.xml`, KDF handling and the legacy XML reader used by
+//! the one-time `migrate_storage` command. Outside migration/tests, the app does
+//! not write `index.xml` or `YYYY-MM-DD.xml`; daily sync uses binary `.fd`
+//! records from `db.rs`.
+//!
+//! Layout of a pre-SQLCipher diary directory (migration input only):
 //!
 //! ```text
 //! diary/
 //! ├── vault.xml              # KDF params + wrapped diary key (no key material)
 //! ├── recovery.xml           # optional second wrapping of the diary key
-//! ├── index.xml              # encrypted {date, title} index for the sidebar
-//! ├── 2026-10-23.xml         # one encrypted entry per day
+//! ├── index.xml              # legacy encrypted {date, title} index
+//! ├── 2026-10-23.xml         # legacy encrypted entry
 //! └── 2026-10-22.xml
 //! ```
 //!
-//! Every entry file is an XML document holding `date`, `iv` and the
+//! Legacy entry files are XML documents holding `date`, `iv` and the
 //! AES-256-GCM encrypted `payload` (see [`crate::xml`]). The payload is the
 //! title and the body joined by [`FIELD_SEPARATOR`], so neither of them is
 //! readable on disk without the passphrase.
 //!
-//! ## Why an index?
+//! ## Legacy index (migration only)
 //!
 //! Titles live inside the encrypted payload, so listing the sidebar would
 //! otherwise require decrypting *every* entry file on every unlock. With a few
@@ -669,6 +675,7 @@ pub fn create_vault(
     // behind after `vault.xml` was removed.
     let _ = remove_recovery(dir);
     crate::db::remove_database(dir)?;
+    crate::db::remove_sync_records(dir)?;
 
     let salt_b64 = crypto::new_salt_b64();
     let salt = crypto::b64_decode(&salt_b64)?;
@@ -1026,8 +1033,8 @@ pub(crate) fn diary_key_matches(dir: &Path, key: &[u8; 32]) -> Result<bool, Stri
     // Once the vault has been migrated, the SQLCipher database is the
     // authoritative proof. A database copied from another vault will fail to
     // open with this key even if its wrapped key somehow matched. A *corrupt*
-    // database must not block recovery: the per-day XML replicas can still
-    // prove the key and be migrated into a fresh database.
+    // database must not block recovery: the legacy XML entries can still
+    // prove the key before a migration.
     if crate::db::database_exists(dir) && crate::db::key_matches(dir, key)? {
         return Ok(true);
     }

@@ -965,7 +965,7 @@ test("the sync section renders the folder, auto flag and conflicts", async () =>
 
       assert.equal(els.syncConflicts.hidden, false);
       const row = els.syncConflictList.children[0];
-      assert.equal(row.children[0].children[0].textContent, "2026-11-16.xml");
+      assert.equal(row.children[0].children[0].textContent, "2026-11-16.fd");
       assert.equal(row.children[0].children[1].textContent, "sync.conflictBoth");
       assert.deepEqual(
         row.children[1].children.map((button) => button.textContent),
@@ -983,7 +983,7 @@ test("the sync section renders the folder, auto flag and conflicts", async () =>
           lastSyncedAtMs: 0,
           conflicts: [
             {
-              path: "2026-11-16.xml",
+              path: "2026-11-16.fd",
               kind: "bothChanged",
               localSize: 10,
               remoteSize: 12,
@@ -999,7 +999,7 @@ test("syncNow flushes, syncs, renders the report and hands it back", async () =>
   const flushSave = spy();
   const afterSync = spy();
   const report = {
-    pushed: ["2026-11-16.xml"],
+    pushed: ["2026-11-16.fd"],
     pulled: [],
     conflicts: [],
     notes: [],
@@ -1080,9 +1080,9 @@ test("a sync conflict is resolved only after confirmation", async () => {
     globalThis.confirm = () => true;
     await withSettings(
       async ({ settings, invoke }) => {
-        await settings.resolveSyncConflict("2026-11-16.xml", "remote");
+        await settings.resolveSyncConflict("2026-11-16.fd", "remote");
         assert.deepEqual(invoke.argsOf("resolve_sync_conflict"), {
-          path: "2026-11-16.xml",
+          path: "2026-11-16.fd",
           keep: "remote",
         });
         assert.ok(invoke.commands().includes("sync_now"));
@@ -1103,7 +1103,7 @@ test("a sync conflict is resolved only after confirmation", async () => {
           resolve_sync_conflict: null,
           sync_now: {
             pushed: [],
-            pulled: ["2026-11-16.xml"],
+            pulled: ["2026-11-16.fd"],
             conflicts: [],
             notes: [],
             syncedAtMs: 1,

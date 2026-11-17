@@ -6,18 +6,16 @@
 //! diary/
 //! └── attachments/
 //!     └── 2026-10-23/
-//!         ├── manifest.xml
 //!         ├── 9f2c....bin
 //!         └── 4d8e....bin
 //! ```
 //!
-//! Each image is encrypted with the vault's diary key and a fresh IV. The
-//! manifest is an encrypted XML document that records the display order and the
-//! small pieces of metadata the gallery needs before decrypting every image.
+//! Each image is encrypted with an HKDF-derived attachment key and a fresh IV.
+//! The display order and metadata live in SQLCipher; the daily `.fd` sync record
+//! carries the same metadata. `manifest.xml` is read only by the one-time legacy
+//! migration and is never written by the current app.
 //!
-//! The manifest deliberately reuses the entry XML envelope (`<diary>`) so it
-//! goes through the same `xml`/`fsutil`/base64 path as `index.xml`. Its payload
-//! is a second XML document:
+//! Legacy `manifest.xml` payload (migration only):
 //!
 //! ```xml
 //! <manifest version="1" date="2026-10-23">
@@ -26,9 +24,9 @@
 //! </manifest>
 //! ```
 //!
-//! Element order is the display order. There is no separate `added-at` field:
-//! the order is the data, and a manifest that is lost can only be rebuilt with
-//! an approximate order (file mtime/name).
+//! In the legacy manifest, element order is the display order. There is no
+//! separate `added-at` field: the order is the data, and a manifest that is lost
+//! can only be rebuilt with an approximate order (file mtime/name).
 
 use std::collections::HashSet;
 use std::fs;
@@ -38,8 +36,8 @@ use std::time::UNIX_EPOCH;
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 use rand::RngCore;
 use rayon::prelude::*;
 use serde::Serialize;
@@ -54,7 +52,7 @@ use crate::xml::{self, EncryptedEntry};
 
 /// Directory under the diary root that holds all attachments.
 const ATTACHMENTS_DIR: &str = "attachments";
-/// Manifest file inside a per-date attachment directory.
+/// Manifest file inside a per-date attachment directory. Legacy migration only.
 const MANIFEST_FILE: &str = "manifest.xml";
 /// Magic bytes at the start of an encrypted attachment file.
 const ATTACHMENT_MAGIC: &[u8; 4] = b"FDAT";
@@ -251,16 +249,6 @@ fn manifest_path(dir: &Path, date: &str) -> Result<PathBuf, String> {
     Ok(attachment_dir(dir, date)?.join(MANIFEST_FILE))
 }
 
-fn mirror_mtime_ms(path: &Path) -> Option<i64> {
-    fs::metadata(path)
-        .ok()?
-        .modified()
-        .ok()?
-        .duration_since(UNIX_EPOCH)
-        .ok()
-        .map(|duration| duration.as_millis() as i64)
-}
-
 /// Validate a generated attachment id.
 ///
 /// The frontend never supplies a path, but every command that takes an id still
@@ -361,8 +349,10 @@ fn required_attr(e: &BytesStart<'_>, name: &str) -> Result<String, String> {
 }
 
 fn pack_manifest(date: &str, manifest: &Manifest) -> Result<Zeroizing<Vec<u8>>, String> {
-    let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
+    use quick_xml::events::{BytesDecl, BytesEnd};
+    use quick_xml::Writer;
 
+    let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
     writer
         .write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))
         .map_err(|e| format!("Failed to write manifest declaration: {e}"))?;
@@ -392,8 +382,7 @@ fn pack_manifest(date: &str, manifest: &Manifest) -> Result<Zeroizing<Vec<u8>>, 
         .write_event(Event::End(BytesEnd::new("manifest")))
         .map_err(|e| format!("Failed to close <manifest>: {e}"))?;
 
-    let bytes = writer.into_inner();
-    Ok(Zeroizing::new(bytes))
+    Ok(Zeroizing::new(writer.into_inner()))
 }
 
 fn unpack_manifest(plain: &[u8], expected_date: &str) -> Result<Manifest, String> {
@@ -502,8 +491,8 @@ fn rows_to_manifest(rows: &[db::AttachmentRow]) -> Manifest {
     }
 }
 
-/// Persist the manifest inside SQLCipher and refresh the per-day XML replica
-/// that the Android sync bridge copies.
+/// Persist the manifest inside SQLCipher and refresh the day's binary sync
+/// record that the Android sync bridge copies.
 fn write_manifest(
     dir: &Path,
     key: &[u8; 32],
@@ -511,39 +500,7 @@ fn write_manifest(
     manifest: &Manifest,
 ) -> Result<(), String> {
     db::replace_attachment_manifest(dir, key, date, &manifest_to_rows(manifest))?;
-    write_manifest_mirror(dir, key, date, manifest)
-}
-
-/// Write the legacy encrypted XML manifest used by folder sync and backups.
-fn write_manifest_mirror(
-    dir: &Path,
-    key: &[u8; 32],
-    date: &str,
-    manifest: &Manifest,
-) -> Result<(), String> {
-    let attachment_dir = attachment_dir(dir, date)?;
-    fsutil::create_private_dir(&attachment_dir)
-        .map_err(|e| format!("Failed to create attachment directory: {e}"))?;
-
-    let plain = pack_manifest(date, manifest)?;
-    let context = storage::vault_context(dir)?;
-    let (aad, envelope_version) = match context.as_ref() {
-        Some(context) => (
-            manifest_aad_v5(date, MANIFEST_VERSION, context),
-            xml::CURRENT_VERSION,
-        ),
-        None => (manifest_aad(date), 4),
-    };
-    let (iv, ciphertext) = crypto::encrypt_with_aad(key, &aad, &plain)?;
-    let mut envelope = EncryptedEntry::new(
-        date,
-        crypto::b64_encode(&iv),
-        crypto::b64_encode(&ciphertext),
-    );
-    envelope.version = envelope_version;
-    let document = xml::to_xml(&envelope)?;
-    fsutil::write_private(&manifest_path(dir, date)?, document)
-        .map_err(|e| format!("Failed to write attachment manifest: {e}"))
+    db::export_sync_record(dir, key, date)
 }
 
 /// Read the ordered attachment metadata from SQLCipher.
@@ -556,7 +513,8 @@ fn read_manifest(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Manife
     }
 }
 
-/// Read the encrypted XML manifest replica (legacy format).
+/// Read a legacy encrypted XML manifest. Only used by the one-time SQLCipher
+/// migration; the application never writes this file.
 fn read_manifest_mirror(
     dir: &Path,
     key: &[u8; 32],
@@ -737,21 +695,12 @@ fn scan_attachment_files(dir: &Path, date: &str) -> Result<Vec<AttachmentFile>, 
 
 /// Load a manifest from SQLCipher, repairing it from the files on disk when it
 /// is missing, or does not mention an attachment file.
-///
-/// The encrypted XML manifest is still maintained as the sync replica. If the
-/// database was rebuilt and has no rows yet, the replica is imported first.
 fn ensure_manifest(dir: &Path, key: &[u8; 32], date: &str) -> Result<Manifest, String> {
     let attachment_dir = attachment_dir(dir, date)?;
     let exists = attachment_dir.is_dir();
 
     let mut manifest = read_manifest(dir, key, date)?.unwrap_or_default();
     let mut changed = false;
-    if manifest.items.is_empty() {
-        if let Ok(Some(legacy)) = read_manifest_mirror(dir, key, date) {
-            manifest = legacy;
-            changed = true;
-        }
-    }
 
     if !exists {
         // No files means every referenced image is missing; do not create a new
@@ -775,7 +724,7 @@ fn ensure_manifest(dir: &Path, key: &[u8; 32], date: &str) -> Result<Manifest, S
         changed = true;
     }
 
-    if changed || !manifest_path(dir, date)?.is_file() {
+    if changed {
         write_manifest(dir, key, date, &manifest)?;
     }
     Ok(manifest)
@@ -1033,7 +982,7 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
         if storage::validate_date(date).is_err() {
             continue;
         }
-        if dir.join(format!("{date}.xml")).is_file() {
+        if dir.join(format!("{date}.{}", db::SYNC_EXTENSION)).is_file() {
             continue;
         }
         dirs.push((date.to_string(), path));
@@ -1069,14 +1018,60 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
 /// Delete an orphaned attachment directory. Refuses when an entry file exists.
 pub fn delete_orphan_attachments(dir: &Path, key: &[u8; 32], date: &str) -> Result<(), String> {
     storage::validate_date(date)?;
-    if dir.join(format!("{date}.xml")).is_file() {
+    if dir.join(format!("{date}.{}", db::SYNC_EXTENSION)).is_file() {
         return Err(format!("Entry {date} still exists"));
     }
     let _ = db::delete_attachment_rows(dir, key, date, None);
     delete_all_for_date(dir, date)
 }
 
-/// Read the manifest replica for migration, falling back to the image files.
+/// Write the legacy encrypted XML manifest.
+///
+/// The application never writes XML manifests; this is kept for migration
+/// compatibility tests that simulate an existing installation.
+#[doc(hidden)]
+pub fn write_legacy_manifest(
+    dir: &Path,
+    key: &[u8; 32],
+    date: &str,
+    items: &[(String, String, u32, u32)],
+) -> Result<(), String> {
+    let manifest = Manifest {
+        items: items
+            .iter()
+            .map(|(id, mime, width, height)| ManifestItem {
+                id: id.clone(),
+                mime: mime.clone(),
+                width: *width,
+                height: *height,
+            })
+            .collect(),
+    };
+    let attachment_dir = attachment_dir(dir, date)?;
+    fsutil::create_private_dir(&attachment_dir)
+        .map_err(|e| format!("Failed to create attachment directory: {e}"))?;
+    let plain = pack_manifest(date, &manifest)?;
+    let context = storage::vault_context(dir)?;
+    let (aad, envelope_version) = match context.as_ref() {
+        Some(context) => (
+            manifest_aad_v5(date, MANIFEST_VERSION, context),
+            xml::CURRENT_VERSION,
+        ),
+        None => (manifest_aad(date), 4),
+    };
+    let (iv, ciphertext) = crypto::encrypt_with_aad(key, &aad, &plain)?;
+    let mut envelope = EncryptedEntry::new(
+        date,
+        crypto::b64_encode(&iv),
+        crypto::b64_encode(&ciphertext),
+    );
+    envelope.version = envelope_version;
+    let document = xml::to_xml(&envelope)?;
+    fsutil::write_private(&manifest_path(dir, date)?, document)
+        .map_err(|e| format!("Failed to write legacy attachment manifest: {e}"))
+}
+
+/// Read a legacy manifest for migration, falling back to the image files.
 ///
 /// Used by the SQLCipher migration before the database exists.
 pub(crate) fn legacy_manifest_items(
@@ -1099,27 +1094,6 @@ pub(crate) fn legacy_manifest_items(
             (file.id, mime, 0, 0)
         })
         .collect())
-}
-
-/// Refresh the encrypted XML manifest replicas from SQLCipher.
-///
-/// Called before a folder-sync run so every attachment date has a current
-/// per-day manifest to upload, even if a previous replica write failed.
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-pub fn export_mirror_manifests(dir: &Path, key: &[u8; 32]) -> Result<(), String> {
-    for (date, updated_at) in db::attachment_manifest_updates(dir, key)? {
-        let path = manifest_path(dir, &date)?;
-        let fresh =
-            mirror_mtime_ms(&path).is_some_and(|mtime| mtime >= updated_at.saturating_sub(2_000));
-        if fresh {
-            continue;
-        }
-        let manifest = rows_to_manifest(&db::read_attachment_manifest(dir, key, &date)?);
-        if !manifest.items.is_empty() {
-            write_manifest_mirror(dir, key, &date, &manifest)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1301,18 +1275,23 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_manifest_is_rebuilt_from_files() {
+    fn missing_manifest_rows_are_rebuilt_from_files() {
         let dir = temp_dir("rebuild");
         let key = key(&dir);
         let a = save(&dir, &key, "2026-10-23", "image/webp", WEBP).unwrap();
         let b = save(&dir, &key, "2026-10-23", "image/jpeg", JPEG).unwrap();
-        fs::remove_file(manifest_path(&dir, "2026-10-23").unwrap()).unwrap();
+        db::delete_attachment_rows(&dir, &key, "2026-10-23", None).unwrap();
 
         let listed = list_attachments(&dir, &key, "2026-10-23").unwrap();
         assert_eq!(listed.len(), 2);
         assert!(listed.iter().any(|item| item.id == a.id));
         assert!(listed.iter().any(|item| item.id == b.id));
-        assert!(manifest_path(&dir, "2026-10-23").unwrap().is_file());
+        assert_eq!(
+            db::read_attachment_manifest(&dir, &key, "2026-10-23")
+                .unwrap()
+                .len(),
+            2
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1348,12 +1327,12 @@ mod tests {
         let key = key(&dir);
         save(&dir, &key, "2026-10-23", "image/webp", WEBP).unwrap();
         save(&dir, &key, "2026-10-22", "image/webp", WEBP).unwrap();
-        fs::remove_file(dir.join("2026-10-22.xml")).unwrap();
+        fs::remove_file(dir.join("2026-10-22.fd")).unwrap();
 
         let orphans = list_orphan_attachments(&dir).unwrap();
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].date, "2026-10-22");
-        assert_eq!(orphans[0].file_count, 2); // manifest + one image
+        assert_eq!(orphans[0].file_count, 1); // one image only
 
         delete_orphan_attachments(&dir, &key, "2026-10-22").unwrap();
         assert!(!attachment_dir(&dir, "2026-10-22").unwrap().exists());
@@ -1363,14 +1342,19 @@ mod tests {
     }
 
     #[test]
-    fn manifest_files_are_not_plaintext() {
+    fn sync_record_is_not_plaintext() {
         let dir = temp_dir("ciphertext");
         let key = key(&dir);
         let item = save(&dir, &key, "2026-10-23", "image/webp", WEBP).unwrap();
-        let manifest = fs::read_to_string(manifest_path(&dir, "2026-10-23").unwrap()).unwrap();
-        assert!(!manifest.contains(&item.id));
-        assert!(!manifest.contains("image/webp"));
-        assert!(manifest.contains("version=\"5\""));
+        let record = fs::read(dir.join("2026-10-23.fd")).unwrap();
+        assert!(record.starts_with(b"FDDAY"));
+        assert!(!record
+            .windows(item.id.len())
+            .any(|window| window == item.id.as_bytes()));
+        assert!(!record
+            .windows("image/webp".len())
+            .any(|window| window == b"image/webp"));
+        assert!(!dir.join("attachments/2026-10-23/manifest.xml").exists());
 
         let _ = fs::remove_dir_all(&dir);
     }
