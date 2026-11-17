@@ -24,7 +24,7 @@ jobs:
       # A release tag can point at any commit, including one on a branch that
       # predates the test suites (e.g. master, which has no tests/ or test.sh).
       # Check out the tag itself so the tests match the code being released.
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
@@ -40,9 +40,9 @@ jobs:
       # cannot resolve `pnpm store path`. The version comes from the
       # `packageManager` field in package.json; declaring it here as well makes
       # pnpm/action-setup fail with ERR_PNPM_BAD_PM_VERSION.
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.13.0
           cache: pnpm
@@ -85,7 +85,7 @@ jobs:
       # Check out the same ref the test job validated, otherwise a
       # workflow_dispatch run with a tag input can leave the workspace empty
       # and pnpm/action-setup then fails with "No pnpm version is specified".
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
           persist-credentials: false
@@ -104,11 +104,11 @@ jobs:
       # version there makes pnpm/action-setup fail with
       # ERR_PNPM_BAD_PM_VERSION, and omitting it entirely makes the action
       # fail with "No pnpm version is specified" if package.json is missing.
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         with:
           version: 9.15.4
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.13.0
           cache: pnpm
@@ -122,7 +122,7 @@ jobs:
       # No build cache here on purpose: release artifacts are built from a
       # clean target directory instead of restoring cache written by other
       # workflows.
-      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -134,6 +134,6 @@ jobs:
 
       # SLSA-style provenance for every bundle produced on this runner. Users
       # can verify the artifacts with `gh attestation verify`.
-      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.4.0
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: "src-tauri/target/release/bundle/**/*"
