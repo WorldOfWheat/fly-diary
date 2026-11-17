@@ -82,6 +82,8 @@ export function createLockScreen(deps) {
   let kdfDefaults = null;
   /** Whether the recovery-phrase form has replaced the passphrase form. */
   let recoveryMode = false;
+  /** Whether the selected vault still uses the legacy XML layout. */
+  let legacyFormat = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
   /** Guard against double-clicking recovery while the workspace is committed. */
@@ -302,7 +304,7 @@ export function createLockScreen(deps) {
         renderWorkspacePath();
       }
 
-      await deps.invoke("recover_vault", {
+      const result = await deps.invoke("recover_vault", {
         phrase,
         newPassphrase: next,
       });
@@ -310,6 +312,14 @@ export function createLockScreen(deps) {
       vaultInitialized = true;
       recoveryMode = false;
       clearRecoveryFields();
+      if (result?.legacy) {
+        legacyFormat = true;
+        if (!(await offerMigration())) return;
+      }
+      if (result?.databaseError) {
+        if (!(await offerRebuild(result.databaseError, els.recoveryUnlockError)))
+          return;
+      }
       await deps.enterApp();
     } catch (err) {
       console.error("recover_vault failed:", err);
@@ -422,9 +432,13 @@ export function createLockScreen(deps) {
 
     if (vaultInitialized) {
       // A vault exists at the selected location: ask for the passphrase only.
-      els.lockSubtitle.textContent = configured
-        ? deps.t("lock.subtitle.unlock")
-        : deps.t("lock.subtitle.existing");
+      // A legacy workspace gets an explicit note, because the migration prompt
+      // can only run after the passphrase has produced the diary key.
+      els.lockSubtitle.textContent = legacyFormat
+        ? deps.t("lock.subtitle.legacy")
+        : configured
+          ? deps.t("lock.subtitle.unlock")
+          : deps.t("lock.subtitle.existing");
       els.passphraseConfirm.hidden = true;
       els.passphrase.placeholder = deps.t("lock.passphrase");
       els.passphrase.autocomplete = "current-password";
@@ -491,10 +505,25 @@ export function createLockScreen(deps) {
               return false;
             })
         : false;
+      legacyFormat = false;
+      if (exists) {
+        try {
+          const status = await deps.invoke(
+            "storage_status",
+            path ? { path } : {}
+          );
+          legacyFormat = status?.format === "legacy";
+        } catch (err) {
+          // Older test doubles and older builds do not expose this command;
+          // the post-unlock prompt still handles the migration.
+          console.error("storage_status failed:", err);
+        }
+      }
       return exists;
     } catch (err) {
       console.error("vault_exists failed:", err);
       recoveryAvailable = false;
+      legacyFormat = false;
       return false;
     }
   }
@@ -581,6 +610,96 @@ export function createLockScreen(deps) {
     }
   }
 
+  /**
+   * Ask whether to migrate a legacy XML workspace to SQLCipher.
+   *
+   * Migration needs the diary key, so it can only run after a successful
+   * unlock. Declining locks again and reveals the workspace field, which is the
+   * only safe outcome: the SQLCipher build cannot read the legacy layout.
+   *
+   * Returns true when the caller should continue into the app.
+   */
+  async function offerMigration() {
+    if (!legacyFormat) return true;
+
+    const migrate =
+      typeof globalThis.confirm === "function"
+        ? globalThis.confirm(deps.t("lock.migrateConfirm"))
+        : true;
+    if (!migrate) {
+      await deps.invoke("lock");
+      legacyFormat = false;
+      pickingWorkspace = true;
+      showLockScreen();
+      renderLockScreen();
+      els.lockError.textContent = deps.t("lock.migrateDeclined");
+      return false;
+    }
+
+    els.lockError.textContent = deps.t("lock.migrateRunning");
+    try {
+      const report = await deps.invoke("migrate_storage");
+      legacyFormat = false;
+      const broken = report?.broken?.length ?? 0;
+      if (broken > 0) {
+        deps.setStatus?.(
+          deps.t("lock.migrateBroken", {
+            migrated: report?.migrated ?? 0,
+            broken,
+          })
+        );
+      }
+      return true;
+    } catch (err) {
+      console.error("migrate_storage failed:", err);
+      els.lockError.textContent =
+        typeof err === "string" ? err : deps.t("lock.migrateFailed");
+      return false;
+    }
+  }
+
+  /**
+   * The passphrase was correct but `diary.db` cannot be opened. The daily XML
+   * replicas are the rescue path: move the unreadable database aside and build
+   * a fresh one from them.
+   */
+  async function offerRebuild(databaseError, errorEl = els.lockError) {
+    const rebuild =
+      typeof globalThis.confirm === "function"
+        ? globalThis.confirm(
+            deps.t("lock.rebuildConfirm", { message: databaseError })
+          )
+        : true;
+    if (!rebuild) {
+      await deps.invoke("lock");
+      pickingWorkspace = true;
+      showLockScreen();
+      renderLockScreen();
+      els.lockError.textContent = deps.t("lock.rebuildDeclined");
+      return false;
+    }
+
+    els.lockError.textContent = deps.t("lock.rebuildRunning");
+    if (errorEl !== els.lockError) {
+      errorEl.textContent = deps.t("lock.rebuildRunning");
+    }
+    try {
+      const report = await deps.invoke("rebuild_storage");
+      const backup = report?.databaseBackup;
+      deps.setStatus?.(
+        backup
+          ? deps.t("lock.rebuildBackup", { path: backup })
+          : deps.t("lock.rebuildDone")
+      );
+      return true;
+    } catch (err) {
+      console.error("rebuild_storage failed:", err);
+      errorEl.textContent =
+        typeof err === "string" ? err : deps.t("lock.rebuildFailed");
+      return false;
+    }
+  }
+
   async function handleUnlockSubmit(event) {
     event.preventDefault();
     els.lockError.textContent = "";
@@ -625,8 +744,11 @@ export function createLockScreen(deps) {
         setLockSubmitBusy(true, !vaultInitialized);
       }
 
+      let unlockResult = { legacy: false };
       if (vaultInitialized) {
-        await deps.invoke("unlock", { passphrase });
+        unlockResult = (await deps.invoke("unlock", { passphrase })) ?? {
+          legacy: false,
+        };
       } else {
         const kdf = readKdfParams();
         if (
@@ -639,6 +761,13 @@ export function createLockScreen(deps) {
         }
         await deps.invoke("create_vault", { passphrase, kdf });
         vaultInitialized = true;
+      }
+      if (unlockResult?.legacy) {
+        legacyFormat = true;
+        if (!(await offerMigration())) return;
+      }
+      if (unlockResult?.databaseError) {
+        if (!(await offerRebuild(unlockResult.databaseError))) return;
       }
       await deps.enterApp();
     } catch (err) {

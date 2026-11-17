@@ -372,7 +372,7 @@ pub fn write_config(config_dir: &Path, config: &SyncConfig) -> Result<(), String
     xml.push_str(&quick_xml::escape::escape(&config.tree_uri));
     xml.push_str("</tree-uri>\n  <display-name>");
     xml.push_str(&quick_xml::escape::escape(
-        &config.display_name.chars().take(200).collect::<String>(),
+        config.display_name.chars().take(200).collect::<String>(),
     ));
     xml.push_str("</display-name>\n  <auto>");
     xml.push_str(if config.auto_sync { "1" } else { "0" });
@@ -800,15 +800,13 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
     // A folder that now belongs to another vault must not be merged: the user
     // has to choose "restore from folder" explicitly. `vault.xml` is tiny, so
     // it is checked on every run rather than trusting cached metadata.
-    if !req.vault_id.is_empty() {
-        if remote_map.contains_key("vault.xml") {
-            if let Some(id) = peek_remote_vault(remote, req.config_dir)? {
-                let remote_id = crypto::b64_encode(&id);
-                if remote_id != req.vault_id {
-                    return Err("The selected folder belongs to a different diary vault. \
-                         Use \"restore from folder\" to adopt it, or pick another folder."
-                        .to_string());
-                }
+    if !req.vault_id.is_empty() && remote_map.contains_key("vault.xml") {
+        if let Some(id) = peek_remote_vault(remote, req.config_dir)? {
+            let remote_id = crypto::b64_encode(&id);
+            if remote_id != req.vault_id {
+                return Err("The selected folder belongs to a different diary vault. \
+                     Use \"restore from folder\" to adopt it, or pick another folder."
+                    .to_string());
             }
         }
     }
@@ -982,17 +980,11 @@ pub fn sync(req: &SyncRequest<'_>, remote: &dyn Remote) -> Result<SyncReport, St
     }
 
     if index_dirty {
+        // SQLCipher no longer writes an index file. Removing a stale one left
+        // by a pre-migration device is still useful; a provider that refuses
+        // is not fatal because the database is authoritative.
         invalidate_index(req.local_dir)?;
-        // The other device's encrypted index is now stale. It is derived, so
-        // remove it instead of syncing it; the next launch rebuilds it from the
-        // entry files. A provider that refuses the delete is not fatal: the
-        // diary itself is correct, only the cached sidebar titles lag behind.
-        if let Err(error) = remote.delete(INDEX_FILE) {
-            report.notes.push(format!(
-                "The folder's index.xml could not be removed ({error}); the other device may \
-                 show stale titles until it rebuilds its index"
-            ));
-        }
+        let _ = remote.delete(INDEX_FILE);
     }
 
     // Refresh both sides so the state records the metadata the provider

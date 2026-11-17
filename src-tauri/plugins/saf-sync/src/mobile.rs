@@ -14,13 +14,16 @@ pub fn init<R: Runtime, C: DeserializeOwned>(
     _app: &AppHandle<R>,
     api: PluginApi<R, C>,
 ) -> Result<SafSync<R>> {
-    let handle =
-        api.register_android_plugin("com.flydiary.safsync", "SafSyncPlugin")?;
+    let handle = api.register_android_plugin("com.flydiary.safsync", "SafSyncPlugin")?;
     Ok(SafSync(handle))
 }
 
 impl<R: Runtime> SafSync<R> {
-    fn call<I: serde::Serialize, O: DeserializeOwned>(&self, command: &str, payload: I) -> Result<O> {
+    fn call<I: serde::Serialize, O: DeserializeOwned>(
+        &self,
+        command: &str,
+        payload: I,
+    ) -> Result<O> {
         self.0
             .run_mobile_plugin(command, payload)
             .map_err(|error| Error::Plugin(error.to_string()))

@@ -24,12 +24,16 @@ chrono = { version = "0.4", features = ["clock"] }
 # --- Encryption (RustCrypto) ---
 aes-gcm = "0.10"
 sha2 = "0.10"
+hkdf = "0.12"
 argon2 = "0.5"
 rand = "0.8"
 base64 = "0.22"
 zeroize = { version = "1", features = ["derive"] }
 
-# --- XML storage format ---
+# --- Encrypted SQLite storage (SQLCipher) ---
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# --- Legacy XML format (migration + per-day sync replica) ---
 quick-xml = "0.42"
 
 # --- Parallel import ---

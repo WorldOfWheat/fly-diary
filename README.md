@@ -1,20 +1,20 @@
 # Fly Diary
 
-一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **AES-256-GCM 加密的 XML** 檔案儲存。
+一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **SQLCipher 加密的 SQLite** 儲存，並保留每日 AES-256-GCM XML 同步鏡像。
 目前版本 `1.0.0`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
 把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
 
 ## 功能亮點
 
-- 一天一篇：檔名即日期（`YYYY-MM-DD.xml`），同一天再存只會覆寫，不會產生重複
-- **AES-256-GCM 加密**：內容以 RustCrypto 的 `aes-gcm` 加密，每次寫入使用新的隨機 IV
+- 一天一篇：SQLite 以 `entries.date` 為主鍵，同一天再存只會覆寫；每日同步鏡像仍是 `YYYY-MM-DD.xml`
+- **SQLCipher 加密**：資料庫以 page-level AES-256 + HMAC 加密，DB key 由 diary key 經 HKDF 派生
 - **密碼保護**：Argon2id 派生 master key，再包裝一把隨機 diary key；金鑰只存在記憶體，鎖定即清除
 - **可選的回復短語**：12 個 BIP39 英文單字，可離線重設密碼；只顯示一次、不可選取或複製，確認時在獨立視窗輸入指定單字（附前綴建議）
-- **標題也加密**：標題、內容與收藏旗標全在密文裡；側邊欄標題來自解密後的 `index.xml` 快取
+- **標題也加密**：SQLCipher 加密整個資料庫，標題、內容與收藏旗標都在加密頁面內；側邊欄直接查詢 DB
 - **多工作區**：解鎖畫面可直接切換日記資料夾；已有 vault 的資料夾會直接進入解鎖
 - 純 HTML/JS 前端，無框架、無打包步驟
 - 自動儲存、收藏、日期前後切換與**全螢幕月曆**
-- **全文搜尋**：解鎖後在 Rust 記憶體建立索引，可搜尋標題與內容；支援多關鍵字 AND、
+- **全文搜尋**：解鎖後從 SQLCipher 讀入 Rust 記憶體建立索引，可搜尋標題與內容；支援多關鍵字 AND、
   引號片語、日期與收藏頁內搜尋，結果附命中摘要。索引不落盤，鎖定時清除
 - **歷史上的今天**：在編輯器上方快速回顧 1 個月前、6 個月前、1 年前、3 年前與 5 年前的日記；
   可摺疊並記住展開狀態，只使用側邊欄已載入的日期與標題，不新增解密或落盤
@@ -22,10 +22,10 @@
 - **解鎖轉場**：按下解鎖立即顯示「解鎖中…」與旋轉指示，成功後鎖定畫面淡出、日記介面淡入；首次掃描同時進行，並尊重系統的減少動態偏好
 - **介面動態**：overlay 關閉淡出、手機列表／編輯器滑動、收藏星號彈跳、清單篩選過場、附件進場與排序、主題過場與儲存提示；全部尊重 `prefers-reduced-motion`
 - **從資料夾匯入** `YYYY-MM-DD.txt`：先掃描預覽再確認，並列出失敗檔案
-- **圖片相簿**：檔案選擇、**貼上**、**拖放**、刪除、拖曳／箭頭排序與點擊放大；圖片個別加密，
+- **圖片相簿**：檔案選擇、**貼上**、**拖放**、刪除、拖曳／箭頭排序與點擊放大；manifest 在 DB，圖片以 HKDF 派生的 `attachment_key` 個別加密，
   上傳前自動縮到長邊 1000px 並移除 EXIF
-- **唯讀開啟與損壞檔保護**：已寫過的日記先唯讀；壞檔不會拖垮清單，可匯出原始檔或確認後刪除
-- **Android 資料夾同步**：手機版可透過系統資料夾選擇器（SAF）把加密檔案鏡像到外部資料夾，
+- **唯讀開啟與完整性檢查**：已寫過的日記先唯讀；SQLCipher 以 `cipher_integrity_check` 驗證，舊格式壞檔在遷移報告中列出
+- **Android 資料夾同步**：手機版可透過系統資料夾選擇器（SAF）把每日 XML 鏡像與附件複製到外部資料夾，
   例如 Syncthing 或雲端硬碟同步的目錄。日記本體仍在 App 私有空間；只複製密文，兩邊都改過時
   不自動覆蓋，而是在設定頁逐一選擇保留哪一份
 - **設定頁**：儲存位置、匯入、統計、閒置自動鎖定、自動儲存延遲、變更密碼、Argon2id 參數，以及版本／commit／作者資訊
@@ -59,7 +59,8 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 | 文件                                      | 內容                                                        |
 | ----------------------------------------- | ----------------------------------------------------------- |
 | [security.md](docs/security.md)           | 金鑰階層、KDF、AAD 與版本、記憶體保護、供應鏈安全、已知限制 |
-| [file-format.md](docs/file-format.md)     | 日記／vault／索引／附件的檔案格式、設定檔與儲存位置         |
+| [sqlcipher.md](docs/sqlcipher.md)         | SQLCipher 儲存層、HKDF 子金鑰、每日同步鏡像與舊格式遷移     |
+| [file-format.md](docs/file-format.md)     | 日記 XML 鏡像／vault／附件的檔案格式、設定檔與儲存位置      |
 | [ui.md](docs/ui.md)                       | 唯讀、月曆、縮放、手機版、多語系、設定頁、主題              |
 | [css-reset.md](docs/css-reset.md)         | 瀏覽器 reset 的規則目的、載入順序與覆寫方式                 |
 | [accessibility.md](docs/accessibility.md) | WCAG 2.2 AA 目標、已完成項目、手動驗證與剩餘缺口            |
@@ -69,7 +70,7 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 
 ## 安全摘要
 
-- 日記以 AES-256-GCM 加密；AAD 綁定日期、版本與 vault／key id，搬檔、跨 vault 搬移或降級改寫都會解密失敗。
+- 日記以 SQLCipher 加密（DB key 由 diary key 經 HKDF 派生）；每日 XML 鏡像仍使用 AES-256-GCM，AAD 綁定日期、版本與 vault／key id，搬檔、跨 vault 搬移或降級改寫都會解密失敗。
 - master key 由密碼經 Argon2id 派生（新 vault 預設 64 MiB／3 iterations、密碼至少 12 字元），只用來包裝 diary key；改密碼只重包裝 32 bytes。
 - 回復短語是**另一把獨立金鑰**，包裝同一把 diary key；它存在 `recovery.xml`，不在 `vault.xml` 裡。
 - session key 放在專用鎖定頁（`mlock` / `VirtualLock`），Linux 另排除 dump 與 fork。

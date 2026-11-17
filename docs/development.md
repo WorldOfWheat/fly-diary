@@ -21,9 +21,14 @@ sudo apt install -y \
   libayatana-appindicator3-dev \
   librsvg2-dev \
   libdbus-1-dev \
-  pkg-config
+  pkg-config \
+  perl
 ```
 
+> SQLCipher 使用 `bundled-sqlcipher-vendored-openssl`，會從原始碼編譯
+> SQLite／SQLCipher 與 OpenSSL；需要 C 編譯器、`make` 與 `perl`（上面的
+> `build-essential` + `perl` 已包含）。第一次 `cargo build` 會明顯變慢。
+>
 > 其他發行版請參考 [Tauri 官方 Prerequisites](https://tauri.app/start/prerequisites/)。
 
 ## 安裝前端依賴
@@ -123,11 +128,15 @@ generated 專案，仍保持 gitignored；重新產生後請用 `pnpm android:in
 - **不支援 `.txt` 資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
 - 選單列只在桌面建置（`build_menu` 包在 `#[cfg(desktop)]`），行動版沒有 `Edit` 選單可掛。
 
-其餘加密、儲存、索引與背景升級流程在桌面與行動版完全相同。
+其餘加密、SQLCipher 儲存與同步鏡像流程在桌面與行動版完全相同。Android 交叉編譯
+`bundled-sqlcipher-vendored-openssl` 需要 NDK 的 `CC_*`／`AR_*`／`RANLIB_*` 與
+`perl`；若 `pnpm android:dev` 在建置 OpenSSL 時失敗，先確認這些工具在 PATH 中。
 
 ### Android 資料夾同步外掛
 
-手機版的「資料夾同步」是 Android-only，桌面版不會連結這個外掛，也不會讀取它的設定：
+手機版的「資料夾同步」是 Android-only，桌面版不會連結這個外掛，也不會讀取它的設定。
+SQLCipher 的 `diary.db` 留在 App 私有資料夾；同步只複製每日 `YYYY-MM-DD.xml` 與
+`manifest.xml` 鏡像，拉回後再匯入 DB。`index.xml` 已不再產生，也不會同步。
 
 - `src-tauri/plugins/saf-sync` 是自訂 Tauri Android plugin，Kotlin 端用 Storage Access Framework
   （`ACTION_OPEN_DOCUMENT_TREE` + `takePersistableUriPermission`）選資料夾與讀寫檔案。

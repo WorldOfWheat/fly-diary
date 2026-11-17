@@ -13,6 +13,7 @@
 use std::path::{Path, PathBuf};
 
 use fly_diary_lib::crypto;
+use fly_diary_lib::db;
 use fly_diary_lib::storage;
 
 /// A unique scratch directory, removed when the guard is dropped.
@@ -65,11 +66,11 @@ fn create_write_lock_unlock_read_roundtrip() {
     assert!(storage::vault_exists(dir.path()).unwrap());
 
     // 2. Write two entries.
-    storage::write_entry(dir.path(), &key, "2026-10-22", "First", "Hello").unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-23", "Second", "World").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-22", "First", "Hello").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "Second", "World").unwrap();
 
     // 3. The list is newest first and carries the decrypted titles.
-    let entries = storage::list_entries(dir.path(), &key).unwrap();
+    let entries = db::list_entries(dir.path(), &key).unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].date, "2026-10-23");
     assert_eq!(entries[0].title, "Second");
@@ -81,7 +82,7 @@ fn create_write_lock_unlock_read_roundtrip() {
     // 5. Unlocking with the right passphrase yields the same diary key, so the
     //    entries written before the lock are still readable.
     let reopened = storage::unlock_vault(dir.path(), passphrase).expect("unlock");
-    let entry = storage::read_entry(dir.path(), &reopened, "2026-10-23")
+    let entry = db::read_entry(dir.path(), &reopened, "2026-10-23")
         .unwrap()
         .expect("entry exists");
     assert_eq!(entry.title, "Second");
@@ -104,7 +105,7 @@ fn the_wrong_passphrase_cannot_unlock() {
 fn entries_are_unreadable_without_the_key() {
     let dir = TempDir::new("encrypted");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    storage::write_entry(
+    db::write_entry(
         dir.path(),
         &key,
         "2026-10-23",
@@ -121,14 +122,14 @@ fn entries_are_unreadable_without_the_key() {
     // A key from a different vault cannot decrypt it either.
     let other = TempDir::new("other-vault");
     let other_key = storage::create_vault(other.path(), "passphrase-123", fast()).unwrap();
-    assert!(storage::read_entry(dir.path(), &other_key, "2026-10-23").is_err());
+    assert!(db::read_entry(dir.path(), &other_key, "2026-10-23").is_err());
 }
 
 #[test]
 fn changing_the_passphrase_keeps_the_entries_and_invalidates_the_old_one() {
     let dir = TempDir::new("rewrap");
     let key = storage::create_vault(dir.path(), "old-passphrase-123", fast()).unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-23", "Kept", "Still here").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "Kept", "Still here").unwrap();
 
     // Re-wrap under a new passphrase. The diary key is unchanged.
     let same_key = storage::rewrap_vault(
@@ -144,7 +145,7 @@ fn changing_the_passphrase_keeps_the_entries_and_invalidates_the_old_one() {
     assert!(storage::unlock_vault(dir.path(), "old-passphrase-123").is_err());
     // ...and the new one does, with the entry intact.
     let reopened = storage::unlock_vault(dir.path(), "new-passphrase-123").unwrap();
-    let entry = storage::read_entry(dir.path(), &reopened, "2026-10-23")
+    let entry = db::read_entry(dir.path(), &reopened, "2026-10-23")
         .unwrap()
         .expect("entry survives the rewrap");
     assert_eq!(entry.content, "Still here");
@@ -177,15 +178,15 @@ fn a_short_passphrase_is_refused_at_creation() {
 fn deleting_an_entry_removes_it_from_the_list() {
     let dir = TempDir::new("delete");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-23", "Gone", "bye").unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-22", "Stays", "hi").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "Gone", "bye").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-22", "Stays", "hi").unwrap();
 
-    storage::delete_entry(dir.path(), &key, "2026-10-23").unwrap();
+    db::delete_entry(dir.path(), &key, "2026-10-23").unwrap();
 
-    let entries = storage::list_entries(dir.path(), &key).unwrap();
+    let entries = db::list_entries(dir.path(), &key).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].date, "2026-10-22");
-    assert!(storage::read_entry(dir.path(), &key, "2026-10-23")
+    assert!(db::read_entry(dir.path(), &key, "2026-10-23")
         .unwrap()
         .is_none());
 }
@@ -194,11 +195,11 @@ fn deleting_an_entry_removes_it_from_the_list() {
 fn favourites_survive_a_lock_and_unlock() {
     let dir = TempDir::new("favourite");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-23", "Starred", "body").unwrap();
-    storage::set_favourite(dir.path(), &key, "2026-10-23", true).unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "Starred", "body").unwrap();
+    db::set_favourite(dir.path(), &key, "2026-10-23", true).unwrap();
 
     let reopened = storage::unlock_vault(dir.path(), "passphrase-123").unwrap();
-    let favourites = storage::list_favourites(dir.path(), &reopened).unwrap();
+    let favourites = db::list_favourites(dir.path(), &reopened).unwrap();
     assert_eq!(favourites.len(), 1);
     assert_eq!(favourites[0].date, "2026-10-23");
 }
@@ -207,13 +208,13 @@ fn favourites_survive_a_lock_and_unlock() {
 fn rebuilding_the_index_recovers_from_a_deleted_index_file() {
     let dir = TempDir::new("rebuild");
     let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-23", "One", "a").unwrap();
-    storage::write_entry(dir.path(), &key, "2026-10-22", "Two", "b").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-23", "One", "a").unwrap();
+    db::write_entry(dir.path(), &key, "2026-10-22", "Two", "b").unwrap();
 
     // Simulate a lost index.
     let _ = std::fs::remove_file(dir.path().join("index.xml"));
 
-    let rebuilt = storage::rebuild_index(dir.path(), &key).unwrap();
+    let rebuilt = db::list_entries(dir.path(), &key).unwrap();
     assert_eq!(rebuilt.len(), 2);
     assert_eq!(rebuilt[0].date, "2026-10-23");
 }
@@ -245,7 +246,7 @@ fn a_full_import_cycle_lands_in_the_diary() {
     std::fs::write(source.path().join("notes.txt"), "not a date").unwrap();
 
     // Scan first, as the UI does.
-    let existing = storage::known_dates(diary.path(), &key).unwrap();
+    let existing = db::known_dates(diary.path(), &key).unwrap();
     let scan = storage::scan_import(source.path(), &existing).unwrap();
     let ready: Vec<String> = scan
         .files
@@ -256,12 +257,12 @@ fn a_full_import_cycle_lands_in_the_diary() {
     assert_eq!(ready.len(), 2);
 
     // Then import the confirmed dates.
-    let report = storage::import_entries(diary.path(), &key, source.path(), &ready, false).unwrap();
+    let report = db::import_entries(diary.path(), &key, source.path(), &ready, false).unwrap();
     assert_eq!(report.imported.len(), 2);
     assert!(report.skipped.is_empty());
     assert!(report.failed.is_empty());
 
-    let entries = storage::list_entries(diary.path(), &key).unwrap();
+    let entries = db::list_entries(diary.path(), &key).unwrap();
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].date, "2026-10-21");
 }

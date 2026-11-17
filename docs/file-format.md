@@ -6,6 +6,11 @@
 
 ## 檔案格式
 
+> **SQLCipher 版本的重要變更**：主要儲存現在是 `diary.db`。本文件描述的
+> `YYYY-MM-DD.xml`、`index.xml` 與 `manifest.xml` 是**舊格式與每日同步鏡像**；
+> 資料庫 schema、金鑰派生與遷移流程請見 [sqlcipher.md](sqlcipher.md)。
+> `index.xml` 已不再產生。
+
 每個日記檔（`YYYY-MM-DD.xml`）：
 
 ```xml
@@ -237,12 +242,13 @@ diary/
 - 新增中斷 → 留下未被 manifest 引用的圖片，下次載入時補到最後。
 - 刪除中斷 → manifest 指向不存在的圖片，顯示「圖片遺失」佔位，不會讓已刪除的圖復活。
 
-manifest 遺失或損壞時，會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；
-資料不會不見，但精確順序只能近似恢復。整個日期資料夾沒有對應 XML 時視為孤兒，
+manifest 現在主要存在 SQLCipher 的 `attachments` 表；`manifest.xml` 只是同步鏡像。
+DB rows 遺失時會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；資料不會不見，
+但精確順序只能近似恢復。整個日期資料夾沒有對應 `YYYY-MM-DD.xml` 鏡像時視為孤兒，
 可用 `list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除，不會自動刪除。
 
-刪除日記的順序是 **index → XML → 附件資料夾**；反過來先刪附件會在 crash 時留下
-「日記還在、圖片沒了」的更糟狀態。
+刪除日記的順序是 **DB（entries 與 attachment rows 明確刪除）→ XML 鏡像 → 附件資料夾**；
+反過來先刪附件會在 crash 時留下「日記還在、圖片沒了」的更糟狀態。
 
 ## 設定檔
 
@@ -313,12 +319,13 @@ attachments/YYYY-MM-DD/manifest.xml
 attachments/YYYY-MM-DD/<32 hex>.bin
 ```
 
-`index.xml` 是快取，**不同步**：日記有變動時，本機與資料夾兩邊的 `index.xml` 都會被刪除，
-讓各自的 App 下次啟動時依實際的日記檔重建（可能多花一次掃描時間，但不會顯示過期標題）。
-`migration.journal`、`*.tmp-*`、`*.upgrade` 與其他檔案也會被忽略。
-兩邊都改過同一個檔案時不會自動覆蓋，而是在設定頁列出衝突，由使用者選擇保留哪一邊。
-刪除方向不對稱：本機刪除會同步刪除鏡像；資料夾少了檔案則會把本機版本重新上傳，
-只有使用者明確選擇「刪除本機」時才會移除私有 vault 的檔案。
+`index.xml` 已不再產生。SQLCipher 版本的本機主要儲存是 `diary.db`，**不同步**；
+同步的是由 DB 產生的每日 XML 鏡像。拉回 `YYYY-MM-DD.xml` 或
+`attachments/YYYY-MM-DD/manifest.xml` 後，`sync_now` / `bind_sync_dir` 會把內容匯入 DB。
+`diary.db-wal`、`diary.db-shm`、`migration.journal`、`*.tmp-*`、`*.upgrade` 與其他檔案
+也會被忽略。兩邊都改過同一個檔案時不會自動覆蓋，而是在設定頁列出衝突，由使用者選擇
+保留哪一邊。刪除方向不對稱：本機刪除會同步刪除鏡像；資料夾少了檔案則會把本機版本
+重新上傳，只有使用者明確選擇「刪除本機」時才會移除私有 vault 的檔案。
 
 ## 日記儲存位置
 
@@ -330,8 +337,9 @@ attachments/YYYY-MM-DD/<32 hex>.bin
 - Windows：`%APPDATA%\com.flydiary.app\diary\`
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
-按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。整個資料夾可直接備份（含 `recovery.xml`，如果有），
-但**沒有密碼或回復短語就無法還原內容**。
+按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。整個資料夾可直接備份（含 `diary.db`、
+`vault.xml`、`recovery.xml`，以及舊格式的 `attachments/`），但**沒有密碼或回復短語就無法
+還原內容**；只複製 `diary.db` 也打不開，因為 DB key 來自 `vault.xml` 裡包裝的 diary key。
 
 行動版（Android／iOS）沒有檔案系統資料夾選擇器，日記固定存放在 App 私有資料夾：解鎖畫面只在
 第一次啟動時顯示唯讀路徑，不提供「瀏覽…」或「切換工作區」；設定頁也不顯示變更路徑按鈕。

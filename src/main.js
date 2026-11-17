@@ -2365,6 +2365,7 @@ function createControllers() {
     els,
     invoke,
     t,
+    setStatus,
     setAutoLockMinutes,
     setAutosaveDelay,
     enterApp,
