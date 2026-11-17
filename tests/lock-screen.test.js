@@ -27,6 +27,7 @@ const LOCK_IDS = [
   "lockError",
   "lockSubtitle",
   "lockSubmit",
+  "lockRestore",
   "passphrase",
   "passphraseConfirm",
   "workspaceRow",
@@ -103,12 +104,6 @@ function harness(overrides = {}) {
     lock: null,
     recover_vault: null,
     migrate_storage: { migrated: 0, attachments: 0, broken: [] },
-    rebuild_storage: {
-      migrated: 1,
-      attachments: 0,
-      broken: [],
-      databaseBackup: "/home/u/diary/diary.db.corrupt-20261117-090000",
-    },
     pick_diary_dir: "/home/u/other",
     ...(overrides.invokeTable ?? {}),
   });
@@ -1448,46 +1443,6 @@ test("a rejected recovery keeps the form open and shows the backend message", as
   );
 });
 
-test("a sync-only workspace is announced before unlock", async () => {
-  await withLock(
-    async ({ lock, els }) => {
-      lock.setConfigured(true);
-      lock.setVaultInitialized(true);
-      await lock.detectVault();
-      lock.renderLockScreen();
-      assert.equal(els.lockSubtitle.textContent, "lock.subtitle.rebuild");
-    },
-    { invokeTable: { storage_status: { format: "needsRebuild" } } }
-  );
-});
-
-test("a sync-only workspace offers a rebuild after unlock", async () => {
-  const original = globalThis.confirm;
-  globalThis.confirm = () => true;
-  try {
-    await withLock(
-      async ({ lock, deps, invoke, els }) => {
-        lock.setConfigured(true);
-        lock.setVaultInitialized(true);
-        els.passphrase.value = "a long enough passphrase";
-        await lock.handleUnlockSubmit(submitEvent());
-
-        assert.equal(invoke.commands().includes("rebuild_storage"), true);
-        assert.equal(deps.enterApp.calls.length, 1);
-      },
-      {
-        invokeTable: {
-          storage_status: { format: "needsRebuild" },
-          unlock: { needsRebuild: true },
-          rebuild_storage: { migrated: 2, attachments: 0, broken: [] },
-        },
-      }
-    );
-  } finally {
-    globalThis.confirm = original;
-  }
-});
-
 // ---------------------------------------------------------------------------
 // Legacy XML -> SQLCipher migration
 // ---------------------------------------------------------------------------
@@ -1621,91 +1576,48 @@ test("recovering a legacy vault also offers the migration", async () => {
   }
 });
 
-test("an unreadable database offers a rebuild from the daily sync records", async () => {
-  const original = globalThis.confirm;
-  globalThis.confirm = () => true;
-  try {
-    await withLock(
-      async ({ lock, deps, invoke, els }) => {
-        lock.setConfigured(true);
-        lock.setVaultInitialized(true);
-        els.passphrase.value = "a long enough passphrase";
-        await lock.handleUnlockSubmit(submitEvent());
+test("an unreadable database tells the user to restore a backup", async () => {
+  await withLock(
+    async ({ lock, deps, invoke, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      els.passphrase.value = "a long enough passphrase";
+      await lock.handleUnlockSubmit(submitEvent());
 
-        assert.equal(invoke.commands().includes("rebuild_storage"), true);
-        assert.equal(deps.enterApp.calls.length, 1);
-        assert.match(deps.setStatus.calls[0].args[0], /diary\.db\.corrupt/);
+      assert.equal(invoke.commands().includes("lock"), true);
+      assert.equal(deps.enterApp.calls.length, 0);
+      assert.match(els.lockError.textContent, /lock\.databaseError/);
+    },
+    {
+      invokeTable: {
+        unlock: { databaseError: "file is not a database" },
       },
-      {
-        invokeTable: {
-          unlock: { databaseError: "file is not a database" },
-          rebuild_storage: {
-            migrated: 1,
-            attachments: 0,
-            broken: [],
-            databaseBackup: "/home/u/diary/diary.db.corrupt-20261117-090000",
-          },
-        },
-      }
-    );
-  } finally {
-    globalThis.confirm = original;
-  }
+    }
+  );
 });
 
-test("declining a rebuild locks and offers another workspace", async () => {
-  const original = globalThis.confirm;
-  globalThis.confirm = () => false;
-  try {
-    await withLock(
-      async ({ lock, deps, invoke, els }) => {
-        lock.setConfigured(true);
-        lock.setVaultInitialized(true);
-        els.passphrase.value = "a long enough passphrase";
-        await lock.handleUnlockSubmit(submitEvent());
+test("a broken database offers restoring an encrypted backup", async () => {
+  await withLock(
+    async ({ lock, deps, invoke, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      els.passphrase.value = "a long enough passphrase";
+      await lock.handleUnlockSubmit(submitEvent());
 
-        assert.equal(invoke.commands().includes("lock"), true);
-        assert.equal(invoke.commands().includes("rebuild_storage"), false);
-        assert.equal(deps.enterApp.calls.length, 0);
-        assert.equal(els.lockError.textContent, "lock.rebuildDeclined");
+      assert.equal(els.lockRestore.hidden, false);
+
+      await lock.restoreFromLock();
+
+      assert.equal(invoke.commands().includes("restore_backup"), true);
+      assert.equal(deps.enterApp.calls.length, 1);
+    },
+    {
+      invokeTable: {
+        unlock: { databaseError: "file is not a database" },
+        restore_backup: "/home/u/diary.local-backup-1",
       },
-      {
-        invokeTable: {
-          unlock: { databaseError: "file is not a database" },
-        },
-      }
-    );
-  } finally {
-    globalThis.confirm = original;
-  }
-});
-
-test("a failed rebuild keeps the lock screen and does not enter", async () => {
-  const original = globalThis.confirm;
-  globalThis.confirm = () => true;
-  try {
-    await withLock(
-      async ({ lock, deps, els }) => {
-        lock.setConfigured(true);
-        lock.setVaultInitialized(true);
-        els.passphrase.value = "a long enough passphrase";
-        await lock.handleUnlockSubmit(submitEvent());
-
-        assert.equal(deps.enterApp.calls.length, 0);
-        assert.equal(els.lockError.textContent, "boom");
-      },
-      {
-        invokeTable: {
-          unlock: { databaseError: "file is not a database" },
-          rebuild_storage: () => {
-            throw "boom";
-          },
-        },
-      }
-    );
-  } finally {
-    globalThis.confirm = original;
-  }
+    }
+  );
 });
 
 /** Shared deps for the tests that build a second controller. */

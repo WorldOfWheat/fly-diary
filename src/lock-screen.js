@@ -84,8 +84,11 @@ export function createLockScreen(deps) {
   let recoveryMode = false;
   /** Whether the selected vault still uses the legacy XML layout. */
   let legacyFormat = false;
-  /** Whether the vault has `.fd` records but the database is missing. */
-  let needsRebuildFormat = false;
+  /**
+   * Whether the last unlock accepted the passphrase but could not open
+   * `diary.db`. The lock screen then offers an encrypted backup restore.
+   */
+  let databaseBroken = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
   /** Guard against double-clicking recovery while the workspace is committed. */
@@ -178,6 +181,8 @@ export function createLockScreen(deps) {
     els.lockError.textContent = message;
     els.passphrase.value = "";
     els.passphraseConfirm.value = "";
+    databaseBroken = false;
+    if (els.lockRestore) els.lockRestore.hidden = true;
     recoveryMode = false;
     clearRecoveryFields();
     renderLockScreen();
@@ -318,11 +323,14 @@ export function createLockScreen(deps) {
         legacyFormat = true;
         if (!(await offerMigration())) return;
       }
-      if (result?.needsRebuild || result?.databaseError) {
-        needsRebuildFormat = Boolean(result?.needsRebuild);
-        const message =
-          result?.databaseError ?? deps.t("lock.rebuildMissing");
-        if (!(await offerRebuild(message, els.recoveryUnlockError))) return;
+      if (result?.databaseError) {
+        databaseBroken = true;
+        if (els.lockRestore) els.lockRestore.hidden = false;
+        els.recoveryUnlockError.textContent = deps.t("lock.databaseError", {
+          message: result.databaseError,
+        });
+        await deps.invoke("lock");
+        return;
       }
       await deps.enterApp();
     } catch (err) {
@@ -440,11 +448,9 @@ export function createLockScreen(deps) {
       // can only run after the passphrase has produced the diary key.
       els.lockSubtitle.textContent = legacyFormat
         ? deps.t("lock.subtitle.legacy")
-        : needsRebuildFormat
-          ? deps.t("lock.subtitle.rebuild")
-          : configured
-            ? deps.t("lock.subtitle.unlock")
-            : deps.t("lock.subtitle.existing");
+        : configured
+          ? deps.t("lock.subtitle.unlock")
+          : deps.t("lock.subtitle.existing");
       els.passphraseConfirm.hidden = true;
       els.passphrase.placeholder = deps.t("lock.passphrase");
       els.passphrase.autocomplete = "current-password";
@@ -512,7 +518,8 @@ export function createLockScreen(deps) {
             })
         : false;
       legacyFormat = false;
-      needsRebuildFormat = false;
+      databaseBroken = false;
+      if (els.lockRestore) els.lockRestore.hidden = true;
       if (exists) {
         try {
           const status = await deps.invoke(
@@ -520,7 +527,6 @@ export function createLockScreen(deps) {
             path ? { path } : {}
           );
           legacyFormat = status?.format === "legacy";
-          needsRebuildFormat = status?.format === "needsRebuild";
         } catch (err) {
           // Older test doubles and older builds do not expose this command;
           // the post-unlock prompt still handles the migration.
@@ -532,7 +538,6 @@ export function createLockScreen(deps) {
       console.error("vault_exists failed:", err);
       recoveryAvailable = false;
       legacyFormat = false;
-      needsRebuildFormat = false;
       return false;
     }
   }
@@ -668,46 +673,47 @@ export function createLockScreen(deps) {
   }
 
   /**
-   * The passphrase was correct but `diary.db` cannot be opened. The daily
-   * encrypted `.fd` sync records are the rescue path: move the unreadable
-   * database aside and build a fresh one from them.
+   * Restore an encrypted backup while the lock screen is showing.
+   *
+   * Reached only after `unlock` accepted the passphrase but `diary.db` could
+   * not be opened. The key was wiped by the earlier `lock`; pressing this
+   * button derives it again, then immediately replaces the database and enters
+   * the diary. Cancelling the file picker locks again.
    */
-  async function offerRebuild(databaseError, errorEl = els.lockError) {
-    const rebuild =
-      typeof globalThis.confirm === "function"
-        ? globalThis.confirm(
-            deps.t("lock.rebuildConfirm", { message: databaseError })
-          )
-        : true;
-    if (!rebuild) {
-      await deps.invoke("lock");
-      legacyFormat = false;
-      needsRebuildFormat = false;
-      pickingWorkspace = true;
-      showLockScreen();
-      renderLockScreen();
-      els.lockError.textContent = deps.t("lock.rebuildDeclined");
-      return false;
+  async function restoreFromLock() {
+    if (!els.lockRestore || els.lockRestore.disabled) return;
+    const passphrase = els.passphrase.value;
+    if (!passphrase) {
+      els.lockError.textContent = deps.t("lock.errNoPassphrase");
+      return;
     }
-
-    els.lockError.textContent = deps.t("lock.rebuildRunning");
-    if (errorEl !== els.lockError) {
-      errorEl.textContent = deps.t("lock.rebuildRunning");
-    }
+    els.lockRestore.disabled = true;
+    els.lockError.textContent = "";
+    deps.beginNativePicker?.();
     try {
-      const report = await deps.invoke("rebuild_storage");
-      const backup = report?.databaseBackup;
-      deps.setStatus?.(
-        backup
-          ? deps.t("lock.rebuildBackup", { path: backup })
-          : deps.t("lock.rebuildDone")
-      );
-      return true;
+      const result = await deps.invoke("unlock", { passphrase });
+      if (!result?.databaseError) {
+        await deps.enterApp();
+        return;
+      }
+      const path = await deps.invoke("restore_backup");
+      if (!path) {
+        await deps.invoke("lock");
+        els.lockError.textContent = deps.t("lock.databaseError", {
+          message: result.databaseError,
+        });
+        return;
+      }
+      databaseBroken = false;
+      if (els.lockRestore) els.lockRestore.hidden = true;
+      await deps.enterApp();
     } catch (err) {
-      console.error("rebuild_storage failed:", err);
-      errorEl.textContent =
-        typeof err === "string" ? err : deps.t("lock.rebuildFailed");
-      return false;
+      await deps.invoke("lock").catch(() => {});
+      els.lockError.textContent =
+        typeof err === "string" ? err : deps.t("lock.errUnlockFailed");
+    } finally {
+      deps.endNativePicker?.();
+      els.lockRestore.disabled = false;
     }
   }
 
@@ -777,11 +783,14 @@ export function createLockScreen(deps) {
         legacyFormat = true;
         if (!(await offerMigration())) return;
       }
-      if (unlockResult?.needsRebuild || unlockResult?.databaseError) {
-        needsRebuildFormat = Boolean(unlockResult?.needsRebuild);
-        const message =
-          unlockResult?.databaseError ?? deps.t("lock.rebuildMissing");
-        if (!(await offerRebuild(message))) return;
+      if (unlockResult?.databaseError) {
+        databaseBroken = true;
+        if (els.lockRestore) els.lockRestore.hidden = false;
+        els.lockError.textContent = deps.t("lock.databaseError", {
+          message: unlockResult.databaseError,
+        });
+        await deps.invoke("lock");
+        return;
       }
       await deps.enterApp();
     } catch (err) {
@@ -880,6 +889,7 @@ export function createLockScreen(deps) {
     openWorkspacePicker,
     cancelWorkspacePicker,
     handleUnlockSubmit,
+    restoreFromLock,
     browseForDir,
     changeDiaryDir,
     lockNow,

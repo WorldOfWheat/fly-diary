@@ -7,10 +7,9 @@
 ## 檔案格式
 
 > **SQLCipher 版本的重要變更**：除了 `vault.xml` 與 `recovery.xml`，本文件描述的
-> 日記 XML 格式**只作為一次性遷移的 legacy 參考**。新版本不再產生、也不再同步
-> `YYYY-MM-DD.xml`、`index.xml` 或 `manifest.xml`；每日同步改用加密二進位
-> `YYYY-MM-DD.fd`。完整的新格式、`.fd` 結構與遷移流程請見
-> [sqlcipher.md](sqlcipher.md)。
+> 日記 XML 格式**只作為一次性遷移的 legacy 參考**。新版本不再產生
+> `YYYY-MM-DD.xml`、`index.xml`、`manifest.xml` 或每日 `.fd`；完整的新格式、
+> 加密備份 `.tar` 與遷移流程請見 [sqlcipher.md](sqlcipher.md)。
 
 每個 legacy 日記檔（`YYYY-MM-DD.xml`，只作為遷移輸入）：
 
@@ -245,10 +244,10 @@ diary/
 
 manifest 現在只存在 SQLCipher 的 `attachments` 表；不再有 `manifest.xml`。
 DB rows 遺失時會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；資料不會不見，
-但精確順序只能近似恢復。整個日期資料夾沒有對應 `YYYY-MM-DD.fd` 時視為孤兒，
+但精確順序只能近似恢復。整個日期資料夾沒有對應的 `entries` 列時視為孤兒，
 可用 `list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除，不會自動刪除。
 
-刪除日記的順序是 **DB（entries 與 attachment rows 明確刪除）→ XML 鏡像 → 附件資料夾**；
+刪除日記的順序是 **DB（entries 與 attachment rows 明確刪除）→ 附件資料夾**；
 反過來先刪附件會在 crash 時留下「日記還在、圖片沒了」的更糟狀態。
 
 ## 設定檔
@@ -274,60 +273,27 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 缺少元素時自動套用預設值（分別是 10 分鐘與 800 毫秒），下次寫入即升級為 `version="3"`；
 但元素存在而內容不合法時會直接報錯，不會默默改成預設值。
 
-### Android 資料夾同步（`sync.xml` / `sync-state.json`）
+### 加密備份（`.tar`）
 
-Android 版的資料夾同步是額外功能，設定**不放在** `settings.xml`，桌面版也不會讀寫這兩個檔案：
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<sync version="1">
-  <tree-uri>content://com.android.externalstorage.documents/tree/primary%3ADiary</tree-uri>
-  <display-name>Diary</display-name>
-  <auto>0</auto>
-</sync>
-```
-
-- `tree-uri` 是 SAF（Storage Access Framework）的資料夾 URI，不是檔案系統路徑。App 只透過
-  `ContentResolver` 存取，日記本體仍留在 App 私有目錄。
-- `display-name` 只用於顯示；所有路徑都從 URI 重新列舉，不信任這個名稱。
-- `auto` 為 `1` 時，App 會在解鎖後與每次存檔後（延遲約 2.5 秒）自動同步；`0` 時只能手動按
-  「立即同步」。
-
-三向同步狀態存在同一個 App 設定目錄的 `sync-state.json`：
-
-```json
-{
-  "treeUri": "content://...",
-  "vaultId": "BASE64(16 bytes)",
-  "lastSyncedAtMs": 1763280000000,
-  "files": {
-    "2026-11-16.xml": {
-      "hash": "SHA-256 of the ciphertext, hex",
-      "remoteSize": 512,
-      "remoteMtimeMs": 1763279999000
-    }
-  }
-}
-```
-
-它只用來判斷「上次同步後哪一邊改過」，不含金鑰或明文。被同步的檔案只有：
+設定頁匯出的備份是未壓縮的 tar，沒有額外的 manifest 檔，結構固定：
 
 ```text
-vault.xml
-recovery.xml
-YYYY-MM-DD.fd
+diary.db                     # VACUUM INTO 快照（SQLCipher 密文）
+vault.xml                    # Argon2id 包裝的 diary key
+recovery.xml                 # 選用；有啟用回復短語時才存在
 attachments/YYYY-MM-DD/<32 hex>.bin
 ```
 
-`diary.db` 是本機主要儲存，**不同步**。`YYYY-MM-DD.fd` 是從 DB 產生的每日加密
-二進位同步檔（格式見 [sqlcipher.md](sqlcipher.md)）；拉回後 `sync_now` /
-`bind_sync_dir` 會把內容匯入 DB。`index.xml`、`manifest.xml` 與
-`YYYY-MM-DD.xml` 都是 legacy 格式，新版本不再產生，同步時會清理：
-`index.xml` 與 `manifest.xml` 直接刪除；`YYYY-MM-DD.xml` 只在同一天已有 `.fd` 時刪除。
-`diary.db-wal`、`diary.db-shm`、`migration.journal`、`*.tmp-*`、`*.upgrade` 與其他檔案
-也會被忽略。兩邊都改過同一個檔案時不會自動覆蓋，而是在設定頁列出衝突，由使用者選擇
-保留哪一邊。刪除方向不對稱：本機刪除會同步刪除 `.fd`；資料夾少了檔案則會把本機版本
-重新上傳，只有使用者明確選擇「刪除本機」時才會移除私有 vault 的檔案。
+- 檔名建議為 `fly-diary-backup-YYYY-MM-DD.tar`，但 App 不依賴檔名。
+- `diary.db` 是 `VACUUM INTO` 的輸出，等同一致快照；不含 `-wal`／`-shm`。
+- `vault.xml` 與 `recovery.xml` 讓備份在 App 無法解鎖時仍可手動救援；App 內還原
+  會驗證但不會覆寫目前的包裝檔。
+- 解壓時只接受上述路徑；`..`、絕對路徑、重複路徑、非預期檔名與超過大小上限的
+  項目都會被拒絕。
+- 還原只替換 `diary.db` 與 `attachments/`，舊資料移至
+  `<diary>.local-backup-<timestamp>`；`diary.db-wal`、`diary.db-shm`、
+  `migration.journal` 與暫存檔不會進備份。
+- 備份不是同步：沒有三方比較、衝突清單或自動上傳。
 
 ## 日記儲存位置
 
@@ -339,13 +305,14 @@ attachments/YYYY-MM-DD/<32 hex>.bin
 - Windows：`%APPDATA%\com.flydiary.app\diary\`
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
-按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。整個資料夾可直接備份（含 `diary.db`、
-`vault.xml`、`recovery.xml`，以及舊格式的 `attachments/`），但**沒有密碼或回復短語就無法
-還原內容**；只複製 `diary.db` 也打不開，因為 DB key 來自 `vault.xml` 裡包裝的 diary key。
+按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。資料夾內是 `diary.db`、`vault.xml`、
+`recovery.xml` 與 `attachments/`；備份請用設定頁的「匯出備份」，不要直接複製執行中的
+`diary.db`。**沒有密碼或回復短語就無法還原內容**；只複製 `diary.db` 也打不開，因為 DB key
+來自 `vault.xml` 裡包裝的 diary key。
 
 行動版（Android／iOS）沒有檔案系統資料夾選擇器，日記固定存放在 App 私有資料夾：解鎖畫面只在
 第一次啟動時顯示唯讀路徑，不提供「瀏覽…」或「切換工作區」；設定頁也不顯示變更路徑按鈕。
-Android 的外部資料夾只作為加密鏡像，透過設定頁的 SAF 同步功能綁定，不會改變日記本體位置。
+備份檔可透過系統檔案選擇器存到 SAF 可寫入的位置。
 
 ### 切換工作區
 

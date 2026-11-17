@@ -442,55 +442,6 @@ html[data-input-modality="keyboard"] .settings-select:focus {
   border-radius: var(--radius);
 }
 
-/* One row per sync conflict: the path and kind on the left, the two explicit
-   resolutions on the right. Nothing is overwritten until one is pressed. */
-.sync-conflict-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.375rem;
-  margin: 0.5rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sync-conflict {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.5rem 0.625rem;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.sync-conflict-text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  min-width: 0;
-}
-
-.sync-conflict-path {
-  font-family: var(--mono);
-  font-size: 0.6875rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sync-conflict-kind {
-  font-size: 0.6875rem;
-  color: var(--text-muted);
-}
-
-.sync-conflict-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.375rem;
-}
-
 .settings-kdf:empty {
   display: none;
 }

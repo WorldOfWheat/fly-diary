@@ -11,9 +11,9 @@
 //! ```
 //!
 //! Each image is encrypted with an HKDF-derived attachment key and a fresh IV.
-//! The display order and metadata live in SQLCipher; the daily `.fd` sync record
-//! carries the same metadata. `manifest.xml` is read only by the one-time legacy
-//! migration and is never written by the current app.
+//! The display order and metadata live in SQLCipher; backups copy the sidecars
+//! together with a database snapshot. `manifest.xml` is read only by the
+//! one-time legacy migration and is never written by the current app.
 //!
 //! Legacy `manifest.xml` payload (migration only):
 //!
@@ -491,16 +491,14 @@ fn rows_to_manifest(rows: &[db::AttachmentRow]) -> Manifest {
     }
 }
 
-/// Persist the manifest inside SQLCipher and refresh the day's binary sync
-/// record that the Android sync bridge copies.
+/// Persist the ordered attachment metadata inside SQLCipher.
 fn write_manifest(
     dir: &Path,
     key: &[u8; 32],
     date: &str,
     manifest: &Manifest,
 ) -> Result<(), String> {
-    db::replace_attachment_manifest(dir, key, date, &manifest_to_rows(manifest))?;
-    db::export_sync_record(dir, key, date)
+    db::replace_attachment_manifest(dir, key, date, &manifest_to_rows(manifest))
 }
 
 /// Read the ordered attachment metadata from SQLCipher.
@@ -957,11 +955,16 @@ pub fn delete_all_for_date(dir: &Path, date: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Find attachment directories whose entry file no longer exists.
+/// Find attachment directories whose entry no longer exists in the database.
 ///
-/// The check is deliberately based on file existence, not decryptability: a
-/// broken entry still owns its images and must not be reported as an orphan.
-pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, String> {
+/// The database is authoritative, so a directory is an orphan when there is no
+/// `entries` row for its date. A broken/unreadable entry has no row either, but
+/// it cannot own images after migration; the legacy migration preserves the
+/// image metadata in the database before the XML entry is removed.
+pub fn list_orphan_attachments(
+    dir: &Path,
+    key: &[u8; 32],
+) -> Result<Vec<OrphanAttachment>, String> {
     let root = attachments_root(dir);
     let read_dir = match fs::read_dir(&root) {
         Ok(read_dir) => read_dir,
@@ -969,6 +972,7 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
         Err(e) => return Err(format!("Failed to read attachment root: {e}")),
     };
 
+    let entries = db::entry_dates(dir, key)?;
     let mut dirs = Vec::new();
     for item in read_dir {
         let item = item.map_err(|e| format!("Failed to read attachment root: {e}"))?;
@@ -979,10 +983,7 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
         let Some(date) = path.file_name().and_then(|s| s.to_str()) else {
             continue;
         };
-        if storage::validate_date(date).is_err() {
-            continue;
-        }
-        if dir.join(format!("{date}.{}", db::SYNC_EXTENSION)).is_file() {
+        if storage::validate_date(date).is_err() || entries.contains(date) {
             continue;
         }
         dirs.push((date.to_string(), path));
@@ -1015,10 +1016,10 @@ pub fn list_orphan_attachments(dir: &Path) -> Result<Vec<OrphanAttachment>, Stri
     Ok(orphans)
 }
 
-/// Delete an orphaned attachment directory. Refuses when an entry file exists.
+/// Delete an orphaned attachment directory. Refuses when the entry still exists.
 pub fn delete_orphan_attachments(dir: &Path, key: &[u8; 32], date: &str) -> Result<(), String> {
     storage::validate_date(date)?;
-    if dir.join(format!("{date}.{}", db::SYNC_EXTENSION)).is_file() {
+    if db::entry_dates(dir, key)?.contains(date) {
         return Err(format!("Entry {date} still exists"));
     }
     let _ = db::delete_attachment_rows(dir, key, date, None);
@@ -1326,13 +1327,19 @@ mod tests {
         let dir = temp_dir("orphan");
         let key = key(&dir);
         save(&dir, &key, "2026-10-23", "image/webp", WEBP).unwrap();
-        save(&dir, &key, "2026-10-22", "image/webp", WEBP).unwrap();
-        fs::remove_file(dir.join("2026-10-22.fd")).unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "Day", "body").unwrap();
 
-        let orphans = list_orphan_attachments(&dir).unwrap();
+        // A directory without an entry row is what a crashed delete leaves
+        // behind. `save_attachment` never creates one: it makes sure the day
+        // has an entry so its images stay reachable.
+        let orphan = attachment_dir(&dir, "2026-10-22").unwrap();
+        fs::create_dir_all(&orphan).unwrap();
+        fs::write(orphan.join("dummy.bin"), b"orphan").unwrap();
+
+        let orphans = list_orphan_attachments(&dir, &key).unwrap();
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].date, "2026-10-22");
-        assert_eq!(orphans[0].file_count, 1); // one image only
+        assert_eq!(orphans[0].file_count, 1);
 
         delete_orphan_attachments(&dir, &key, "2026-10-22").unwrap();
         assert!(!attachment_dir(&dir, "2026-10-22").unwrap().exists());
@@ -1342,16 +1349,21 @@ mod tests {
     }
 
     #[test]
-    fn sync_record_is_not_plaintext() {
+    fn saved_attachment_bytes_are_not_plaintext() {
         let dir = temp_dir("ciphertext");
         let key = key(&dir);
         let item = save(&dir, &key, "2026-10-23", "image/webp", WEBP).unwrap();
-        let record = fs::read(dir.join("2026-10-23.fd")).unwrap();
-        assert!(record.starts_with(b"FDDAY"));
-        assert!(!record
+        let envelope = fs::read(
+            attachment_dir(&dir, "2026-10-23")
+                .unwrap()
+                .join(format!("{}.bin", item.id)),
+        )
+        .unwrap();
+        assert!(envelope.starts_with(b"FDAT"));
+        assert!(!envelope
             .windows(item.id.len())
             .any(|window| window == item.id.as_bytes()));
-        assert!(!record
+        assert!(!envelope
             .windows("image/webp".len())
             .any(|window| window == b"image/webp"));
         assert!(!dir.join("attachments/2026-10-23/manifest.xml").exists());

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["clock"] }
@@ -33,7 +34,7 @@ zeroize = { version = "1", features = ["derive"] }
 # --- Encrypted SQLite storage (SQLCipher) ---
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
 
-# --- Legacy XML format (migration + per-day sync replica) ---
+# --- Legacy XML format (one-time migration only) ---
 quick-xml = "0.42"
 
 # --- Parallel import ---
@@ -47,10 +48,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # --- Disabling core dumps (Unix only) ---
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-# --- Android-only SAF folder sync bridge ---
-[target.'cfg(target_os = "android")'.dependencies]
-tauri-plugin-saf-sync = { path = "plugins/saf-sync" }
 
 [profile.release]
 codegen-units = 1

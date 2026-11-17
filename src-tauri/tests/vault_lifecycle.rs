@@ -114,8 +114,8 @@ fn entries_are_unreadable_without_the_key() {
     )
     .unwrap();
 
-    // The raw sync record must not leak the plaintext.
-    let raw = std::fs::read(dir.path().join("2026-10-23.fd")).unwrap();
+    // The database pages must not leak the plaintext.
+    let raw = std::fs::read(dir.path().join("diary.db")).unwrap();
     assert!(!raw
         .windows(b"Secret title".len())
         .any(|window| window == b"Secret title"));

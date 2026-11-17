@@ -71,6 +71,7 @@ function fakeTarget(extra = {}) {
 /** Every element id `wiring.js` touches, so the fake table is complete. */
 const ELEMENT_IDS = [
   "lockForm",
+  "lockRestore",
   "browseDir",
   "switchWorkspace",
   "cancelWorkspace",
@@ -188,6 +189,7 @@ function harness(overrides = {}) {
   const deps = {
     els,
     handleUnlockSubmit: spy("handleUnlockSubmit"),
+    restoreFromLock: spy("restoreFromLock"),
     browseForDir: spy("browseForDir"),
     openWorkspacePicker: spy("openWorkspacePicker"),
     cancelWorkspacePicker: spy("cancelWorkspacePicker"),

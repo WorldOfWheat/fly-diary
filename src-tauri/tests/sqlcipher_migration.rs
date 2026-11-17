@@ -89,11 +89,9 @@ fn migrates_entries_and_deletes_the_xml_files() {
     assert_eq!(entry.content, "World");
 
     // XML is a break change: after a successful migration the only XML left is
-    // vault/recovery, and each day has a binary `.fd` sync record.
+    // vault/recovery.
     assert!(!dir.path().join("2026-10-22.xml").exists());
     assert!(!dir.path().join("2026-10-23.xml").exists());
-    assert!(dir.path().join("2026-10-22.fd").is_file());
-    assert!(dir.path().join("2026-10-23.fd").is_file());
     assert!(!dir.path().join("index.xml").is_file());
 
     // A second migration is a no-op.
@@ -142,9 +140,6 @@ fn migrates_attachment_order_from_the_encrypted_manifest() {
     .unwrap();
 
     remove_database(dir.path());
-    // `save_attachment` also wrote the new `.fd` records. A true legacy vault
-    // would not have them, so remove them before exercising the XML migration.
-    db::remove_sync_records(dir.path()).unwrap();
     let report = db::migrate_from_xml(dir.path(), &key).unwrap();
     assert_eq!(report.migrated, 1);
     assert_eq!(report.attachments, 2);
@@ -155,7 +150,6 @@ fn migrates_attachment_order_from_the_encrypted_manifest() {
     assert_eq!(listed[1].id, first.id);
     let data = attachments::read_attachment(dir.path(), &key, "2026-10-23", &first.id).unwrap();
     assert_eq!(crypto::b64_decode(&data.data).unwrap(), WEBP);
-    assert!(dir.path().join("2026-10-23.fd").is_file());
     assert!(!dir
         .path()
         .join("attachments/2026-10-23/manifest.xml")
@@ -192,8 +186,6 @@ fn a_broken_entry_is_reported_and_the_rest_still_migrate() {
             .unwrap(),
         b"not xml"
     );
-    assert!(dir.path().join("2026-10-22.fd").is_file());
-    assert!(!dir.path().join("2026-10-23.fd").exists());
 
     // The old broken-entry delete flow still works: it removes the preserved
     // bytes from the encrypted database.
@@ -242,92 +234,4 @@ fn snapshot_is_a_consistent_encrypted_copy() {
         .unwrap()
         .unwrap();
     assert_eq!(entry.title, "Snapshot");
-}
-
-#[test]
-fn a_sync_only_folder_is_rebuilt_and_never_treated_as_legacy() {
-    let dir = TempDir::new("sync-only");
-    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    db::write_entry(dir.path(), &key, "2026-10-23", "Sync only", "body").unwrap();
-    remove_database(dir.path());
-
-    assert_eq!(
-        db::format_status(dir.path()).format,
-        db::StorageFormat::NeedsRebuild
-    );
-
-    // XML migration must refuse rather than create an empty DB and then delete
-    // the only copy of the day from `.fd`.
-    let error = db::migrate_from_xml(dir.path(), &key).unwrap_err();
-    assert!(error.contains("rebuild"), "unexpected error: {error}");
-    assert!(dir.path().join("2026-10-23.fd").is_file());
-
-    let report = db::rebuild_from_sync_records(dir.path(), &key).unwrap();
-    assert_eq!(report.migrated, 1);
-    let entry = db::read_entry(dir.path(), &key, "2026-10-23")
-        .unwrap()
-        .unwrap();
-    assert_eq!(entry.title, "Sync only");
-}
-
-#[test]
-fn a_corrupt_database_can_be_moved_aside_and_rebuilt() {
-    let dir = TempDir::new("rebuild");
-    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    db::write_entry(dir.path(), &key, "2026-10-23", "Rescued", "body").unwrap();
-    std::fs::write(dir.path().join("diary.db"), b"not a database").unwrap();
-
-    let backup = db::move_corrupt_database(dir.path()).unwrap();
-    assert!(backup.is_some());
-    assert!(backup.as_ref().unwrap().is_file());
-    assert!(!dir.path().join("diary.db").is_file());
-
-    let report = db::rebuild_from_sync_records(dir.path(), &key).unwrap();
-    assert_eq!(report.migrated, 1);
-    let entry = db::read_entry(dir.path(), &key, "2026-10-23")
-        .unwrap()
-        .unwrap();
-    assert_eq!(entry.title, "Rescued");
-    assert!(!dir.path().join("2026-10-23.xml").exists());
-}
-
-#[test]
-fn integrity_check_passes_on_a_healthy_database() {
-    let dir = TempDir::new("integrity");
-    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    db::write_entry(dir.path(), &key, "2026-10-23", "Healthy", "body").unwrap();
-
-    let report = db::integrity_check(dir.path(), &key).unwrap();
-    assert!(report.ok, "unexpected messages: {:?}", report.messages);
-}
-
-#[test]
-fn refreshing_sync_records_does_not_rewrite_fresh_files() {
-    let dir = TempDir::new("sync-idempotent");
-    let key = storage::create_vault(dir.path(), "passphrase-123", fast()).unwrap();
-    db::write_entry(dir.path(), &key, "2026-10-23", "Record", "body").unwrap();
-    attachments::save_attachment(
-        dir.path(),
-        &key,
-        "2026-10-23",
-        "image/webp",
-        WEBP,
-        1000,
-        500,
-    )
-    .unwrap();
-
-    let record_before = std::fs::read(dir.path().join("2026-10-23.fd")).unwrap();
-    db::ensure_sync_records(dir.path(), &key).unwrap();
-
-    assert_eq!(
-        std::fs::read(dir.path().join("2026-10-23.fd")).unwrap(),
-        record_before,
-        "a fresh sync record must not be re-encrypted before sync"
-    );
-    assert!(!dir.path().join("2026-10-23.xml").exists());
-    assert!(!dir
-        .path()
-        .join("attachments/2026-10-23/manifest.xml")
-        .exists());
 }

@@ -53,8 +53,6 @@ const zhHant = {
     "第一次使用：選擇日記儲存位置，並設定一組密碼來加密日記",
   "lock.subtitle.legacy":
     "此工作區使用舊版 XML 格式，解鎖後可遷移為加密的 SQLite",
-  "lock.subtitle.rebuild":
-    "此工作區只有每日同步檔，解鎖後可重建加密資料庫",
   "lock.migrateConfirm":
     "此日記本使用舊版 XML 儲存。要現在遷移為加密的 SQLite 嗎？遷移成功後會刪除每日 XML 檔（只保留 vault 與 recovery）。",
   "lock.migrateRunning": "正在遷移日記格式…",
@@ -63,16 +61,9 @@ const zhHant = {
   "lock.migrateFailed": "遷移失敗，日記仍保持原樣，請再試一次",
   "lock.migrateBroken":
     "已遷移 {migrated} 篇；{broken} 篇無法讀取，原始位元組已保留在加密資料庫中。",
-  "lock.rebuildConfirm":
-    "密碼正確，但加密資料庫無法開啟（{message}）。要用每日加密同步檔（.fd）重建嗎？舊資料庫會保留為 diary.db.corrupt-*。",
-  "lock.rebuildRunning": "正在從每日加密同步檔重建資料庫…",
-  "lock.rebuildDeclined":
-    "未重建。請更換其他 workspace，或在此資料夾新建日記本。",
-  "lock.rebuildFailed": "重建失敗，舊資料庫仍保留，請再試一次",
-  "lock.rebuildMissing":
-    "此資料夾只有每日同步檔，還沒有加密資料庫",
-  "lock.rebuildDone": "已從每日加密同步檔重建資料庫。",
-  "lock.rebuildBackup": "已從每日加密同步檔重建資料庫；舊檔保留在 {path}。",
+  "lock.databaseError":
+    "密碼正確，但加密資料庫無法開啟（{message}）。請還原先前匯出的加密備份。",
+  "lock.restoreBackup": "還原加密備份",
   "lock.pathLabel": "日記儲存資料夾",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "瀏覽…",
@@ -174,39 +165,17 @@ const zhHant = {
   "settings.errNoChange": "沒有需要變更的項目",
   "settings.errCalibrate": "量測失敗：{message}",
   "settings.errSave": "儲存失敗：{message}",
-  "sync.heading": "資料夾同步（Android）",
-  "sync.hint":
-    "把加密檔案同步到一個外部資料夾（例如 Syncthing 或雲端硬碟同步的資料夾）。日記本體仍留在 App 的私有空間，這裡只複製密文，不會上傳任何明文。",
-  "sync.unboundHint": "尚未連結資料夾。選擇一個空資料夾，或同一個日記本的資料夾。",
-  "sync.pick": "選擇資料夾",
-  "sync.folderLabel": "資料夾",
-  "sync.lastSyncedLabel": "上次同步",
-  "sync.auto": "自動同步",
-  "sync.now": "立即同步",
-  "sync.unbind": "解除連結",
-  "sync.never": "尚未同步",
-  "sync.bound": "已連結資料夾。",
-  "sync.running": "同步中…",
-  "sync.upToDate": "兩邊都已是最新狀態。",
-  "sync.result": "已上傳 {pushed} 個、下載 {pulled} 個檔案，{conflicts} 個衝突。",
-  "sync.conflictCount": "有 {n} 個同步衝突需要在設定頁處理。",
-  "sync.conflictsHeading": "需要處理的衝突",
-  "sync.conflictsHint":
-    "兩邊都改過同一個檔案時，同步不會覆蓋任何一邊。請選擇要保留哪一份。",
-  "sync.conflictBoth": "兩邊都修改過",
-  "sync.conflictLocalDeleted": "本機已刪除，資料夾有修改",
-  "sync.conflictRemoteDeleted": "資料夾已刪除，本機有修改",
-  "sync.keepLocal": "保留本機",
-  "sync.keepRemote": "保留資料夾",
-  "sync.deleteLocal": "刪除本機",
-  "sync.deleteRemote": "刪除資料夾檔案",
-  "sync.resolveConfirm": "要針對 {path} 套用這個選擇嗎？這會覆蓋另一邊。",
-  "sync.unbindConfirm":
-    "解除連結只會停止同步，不會刪除日記或資料夾裡的檔案。確定要解除嗎？",
-  "sync.restoreConfirm":
-    "「{name}」是另一個日記本，不是目前解鎖的這一個。\n\n要改用它的資料嗎？目前的日記會先鎖定，並保留一份本機備份。",
-  "sync.restoreFailed": "從資料夾還原失敗：{message}",
-  "sync.failed": "同步失敗：{message}",
+  "settings.backup": "備份",
+  "settings.backupHint":
+    "匯出一個加密備份檔，內含資料庫快照、金鑰包裝檔與所有附件。檔案本身仍是密文；沒有密碼或回復短語依然無法讀取。",
+  "settings.backupExport": "匯出備份",
+  "settings.backupRestore": "還原備份",
+  "backup.exported": "備份已匯出到 {path}",
+  "backup.exportFailed": "匯出失敗：{message}",
+  "backup.restoreConfirm":
+    "還原會以備份中的資料庫與附件取代目前內容。目前的資料會保留在日記資料夾旁的 local-backup 目錄。要繼續嗎？",
+  "backup.restored": "已還原備份；還原前的資料保留在 {path}",
+  "backup.restoreFailed": "還原失敗：{message}",
   "recovery.settingsTitle": "回復短語",
   "recovery.settingsHint":
     "啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。",
@@ -479,8 +448,6 @@ const en = {
     "First run: choose where to store the diary, then set a passphrase to encrypt it",
   "lock.subtitle.legacy":
     "This workspace uses the legacy XML format. Unlock it to migrate to encrypted SQLite.",
-  "lock.subtitle.rebuild":
-    "This workspace has daily sync records but no database. Unlock it to rebuild.",
   "lock.migrateConfirm":
     "This diary uses the legacy XML storage. Migrate it to encrypted SQLite now? A successful migration deletes the daily XML files (only vault and recovery are kept).",
   "lock.migrateRunning": "Migrating diary storage…",
@@ -490,18 +457,9 @@ const en = {
     "Migration failed. The diary was left unchanged; please try again.",
   "lock.migrateBroken":
     "Migrated {migrated} entries; {broken} could not be read and their raw bytes were preserved in the encrypted database.",
-  "lock.rebuildConfirm":
-    "The passphrase is correct, but the encrypted database cannot be opened ({message}). Rebuild it from the daily encrypted sync records (.fd)? The old database will be kept as diary.db.corrupt-*.",
-  "lock.rebuildRunning": "Rebuilding the database from the daily encrypted sync records…",
-  "lock.rebuildDeclined":
-    "Not rebuilt. Switch to another workspace, or create a new diary in this folder.",
-  "lock.rebuildFailed":
-    "Rebuild failed. The old database was kept; please try again.",
-  "lock.rebuildMissing":
-    "This folder has daily sync records but no encrypted database.",
-  "lock.rebuildDone": "Rebuilt the database from the daily encrypted sync records.",
-  "lock.rebuildBackup":
-    "Rebuilt the database from the daily encrypted sync records; the old file was kept at {path}.",
+  "lock.databaseError":
+    "The passphrase is correct, but the encrypted database cannot be opened ({message}). Restore an encrypted backup.",
+  "lock.restoreBackup": "Restore encrypted backup",
   "lock.pathLabel": "Diary folder",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "Browse…",
@@ -607,43 +565,17 @@ const en = {
   "settings.errNoChange": "Nothing to change",
   "settings.errCalibrate": "Measurement failed: {message}",
   "settings.errSave": "Could not save: {message}",
-  "sync.heading": "Folder sync (Android)",
-  "sync.hint":
-    "Mirror the encrypted files to an external folder, such as one synced by Syncthing or a cloud drive. The diary itself stays in the app's private storage; only ciphertext is copied and no plaintext is uploaded.",
-  "sync.unboundHint":
-    "No folder is linked yet. Pick an empty folder, or the folder of the same vault.",
-  "sync.pick": "Choose folder",
-  "sync.folderLabel": "Folder",
-  "sync.lastSyncedLabel": "Last sync",
-  "sync.auto": "Sync automatically",
-  "sync.now": "Sync now",
-  "sync.unbind": "Unlink",
-  "sync.never": "Never",
-  "sync.bound": "Folder linked.",
-  "sync.running": "Syncing…",
-  "sync.upToDate": "Both sides are already up to date.",
-  "sync.result":
-    "Uploaded {pushed}, downloaded {pulled}, {conflicts} conflicts.",
-  "sync.conflictCount":
-    "{n} sync conflicts need attention in settings.",
-  "sync.conflictsHeading": "Conflicts to resolve",
-  "sync.conflictsHint":
-    "When the same file changed on both sides, sync overwrites neither. Choose which copy to keep.",
-  "sync.conflictBoth": "Changed on both sides",
-  "sync.conflictLocalDeleted": "Deleted locally, changed in the folder",
-  "sync.conflictRemoteDeleted": "Deleted in the folder, changed locally",
-  "sync.keepLocal": "Keep local",
-  "sync.keepRemote": "Keep folder copy",
-  "sync.deleteLocal": "Delete local",
-  "sync.deleteRemote": "Delete folder copy",
-  "sync.resolveConfirm":
-    "Apply this choice to {path}? It overwrites the other copy.",
-  "sync.unbindConfirm":
-    "Unlinking only stops syncing; it deletes neither the diary nor the folder. Unlink?",
-  "sync.restoreConfirm":
-    "\"{name}\" belongs to a different diary vault than the one currently unlocked.\n\nAdopt its data? The current diary will lock first and a local backup will be kept.",
-  "sync.restoreFailed": "Could not restore from the folder: {message}",
-  "sync.failed": "Sync failed: {message}",
+  "settings.backup": "Backup",
+  "settings.backupHint":
+    "Export one encrypted archive containing a database snapshot, the key wrappers and every attachment. The archive stays ciphertext; it cannot be read without the passphrase or recovery phrase.",
+  "settings.backupExport": "Export backup",
+  "settings.backupRestore": "Restore backup",
+  "backup.exported": "Backup exported to {path}",
+  "backup.exportFailed": "Export failed: {message}",
+  "backup.restoreConfirm":
+    "Restoring replaces the current database and attachments with the backup. The current data is kept in a local-backup folder next to the diary. Continue?",
+  "backup.restored": "Backup restored; the previous data is kept at {path}",
+  "backup.restoreFailed": "Restore failed: {message}",
   "recovery.settingsTitle": "Recovery phrase",
   "recovery.settingsHint":
     "When enabled, the app generates 12 BIP39 English words. Write them on paper and store them away from the diary; they can reset the passphrase if you forget it. The phrase is a second key: anyone who has it and the diary files can read everything.",

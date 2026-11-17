@@ -1,8 +1,8 @@
 # 架構與設計重點
 
 > **SQLCipher 版本的重要變更**：`storage.rs` 仍是 vault／recovery 與 legacy XML 的
-> 遷移讀取層，但一般日記讀寫已改由新的 `db.rs`（SQLCipher）負責；每日同步改用
-> 加密二進位 `YYYY-MM-DD.fd`，不再產生任何日記 XML。詳見
+> 遷移讀取層，但一般日記讀寫已改由新的 `db.rs`（SQLCipher）負責；備份改由
+> `backup.rs` 匯出加密快照 `.tar`，不再產生每日同步檔或任何日記 XML。詳見
 > [sqlcipher.md](sqlcipher.md)。
 
 [← 回到 README](../README.md) · [文件索引](README.md)
@@ -94,11 +94,11 @@ fly-diary/
 │   │   ├── vault_lifecycle.rs      # 整合測試：建立→寫入→上鎖→解鎖→讀回
 │   │   ├── sqlcipher_migration.rs  # XML→SQLCipher 遷移、壞檔、快照
 │   │   └── attachments_lifecycle.rs # 附件：新增→排序→上鎖→解鎖→刪除
-│   ├── plugins/saf-sync/   # Android-only Tauri plugin（Kotlin SAF 存取，無 JS commands）
 │   └── src/
 │       ├── main.rs         # 進入點；關閉 core dump 與同使用者記憶體存取
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
 │       ├── db.rs           # SQLCipher 主要儲存：HKDF、schema、遷移、完整性、快照
+│       ├── backup.rs       # 加密備份 tar：串流寫入／解壓、路徑驗證、原子換入
 │       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM、recovery key 展開
 │       ├── bip39.rs        # BIP39 英文單字編碼／解碼、checksum、確認位置、wordlist 查詢
@@ -110,7 +110,6 @@ fly-diary/
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
 │       ├── pool.rs         # 受限的 Rayon vault I/O pool（最多 4 執行緒）
 │       ├── search.rs       # 解鎖期間的記憶體全文索引（不落盤，鎖定即清除）
-│       ├── sync.rs         # Android 資料夾同步：三向比較、衝突、還原；平台中立可測試
 │       └── storage.rs      # vault／recovery 與 legacy XML 遷移讀取
 ├── docs/                   # 文件（security / file-format / ui / accessibility / architecture / development / reference）
 ├── .github/
@@ -128,23 +127,22 @@ fly-diary/
 ## 設計重點
 
 - **設定與資料分離**：設定檔（`settings.xml`）只存日記路徑，放在平台 config 目錄；日記本體放在使用者指定的資料夾，兩者可分別備份或搬移。
-- **同步與儲存分離（Android）**：資料夾同步以「一天一個檔」為單位。SQLCipher 是主要儲存，`YYYY-MM-DD.fd` 是每日加密同步檔；`sync.rs` 只複製 `.fd` 與 attachment sidecars，拉回後由 `db::import_sync_paths` 匯入資料庫。舊 XML 只在遷移時讀取，同步時會清理已有 `.fd` 對應的 legacy XML。SAF 細節封裝在 `plugins/saf-sync`，桌面 build 不連結該外掛。
+- **儲存與備份分離**：SQLCipher 是唯一儲存，沒有每日衍生檔。備份由 `backup.rs` 產生單一 `.tar`：`db::snapshot` 以 `VACUUM INTO` 寫出加密快照，再串流加入 `vault.xml`、`recovery.xml` 與附件 sidecar。還原先解到 cache、用目前 key 驗證 `vault_id`／`key_id` 與完整性，成功後才把 DB 與附件換入，舊資料留在 `*.local-backup-*`。
 - **路徑驗證**：`settings::validate_diary_dir` 要求絕對路徑且不得為檔案系統根目錄，避免工作目錄變動導致日記「消失」。
-- **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`）。DB 以 `date TEXT PRIMARY KEY` 儲存，一天一列；`.fd` 檔名仍由日期推導。
+- **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`）。DB 以 `date TEXT PRIMARY KEY` 儲存，一天一列；附件資料夾名稱也由日期推導。
 - **標題也加密**：SQLCipher 加密整個 DB，標題與內容都在加密頁面內；`list_entries` 必須先以 diary key 開啟 DB。鎖定時側邊欄會清空，避免殘留任何標題。
 - **資料庫即索引**：`entries.date` 主鍵與 `(favourite, date DESC)` 索引取代 `index.xml`。列出日記是一個 SQL query，不再需要解密一份索引檔；舊 `index.xml` 只可能在未遷移的資料夾看到，SQLCipher 版本不再產生它。
 - **全文搜尋不落盤**：搜尋需要明文，所以 `scan_vault` 在解鎖後從 DB 讀出 entries 並建立記憶體索引（原文 + 小寫副本），只回傳命中摘要。索引是衍生狀態，`lock()`、切換 workspace 或重新解鎖時直接清除並 zeroize；不新增任何明文檔案。SQLCipher 的 DB 本身在磁碟上仍是密文。
-- **收藏旗標在 DB 裡**：`entries.favourite` 是資料的一部分；普通存檔的 `ON CONFLICT DO UPDATE` 不會覆寫它，`set_favourite` 只改這個欄位並重寫當天 `.fd`。
+- **收藏旗標在 DB 裡**：`entries.favourite` 是資料的一部分；普通存檔的 `ON CONFLICT DO UPDATE` 不會覆寫它，`set_favourite` 只改這個欄位。
 - **壞檔逐篇隔離已移除**：SQLCipher 是 page-level 加密 + HMAC，單一壞頁可能讓整個 DB 無法開啟，沒有「列出第 N 篇壞檔」的概念。完整性由 `check_vault_integrity`（`cipher_integrity_check` + `integrity_check`）負責。遷移時無法解讀的 XML 原始位元組會存進加密的 `legacy_broken` 表，舊的「損壞」分頁仍可列出與匯出。
-- **救援靠每日同步檔**：DB 若無法開啟，`YYYY-MM-DD.fd` 仍包含當天 entry 與附件 metadata；`rebuild_storage` 會把壞 DB 移到 `diary.db.corrupt-*`，再從 `.fd` 重建。圖片 sidecar 不動。
+- **救援靠備份**：DB 若無法開啟，App 不會建立空 DB；使用者要從設定頁還原先前匯出的加密 `.tar`。`backup::install` 只替換 DB 與附件，舊資料保留在 `*.local-backup-*`。
 - **受限的平行 I/O**：舊 XML 的掃描、遷移與匯入來源檔仍可走 `pool.rs` 的專用 Rayon pool（上限 `min(4, cores)`）；SQLCipher 寫入本身以單一連線／transaction 序列化，避免多個 writer 互相鎖住。平行結果最後才合併，輸出穩定。
 - **搜尋查詢的平行門檻**：`SearchIndex` 記錄原始文字總量，低於 2 MiB 時循序掃描（避免 Rayon 喚醒成本），超過才把文件分給同一個 I/O pool；收集後一律依日期新到舊排序。
 - **壞檔唯讀鎖定**：`selectDate` 在載入前先查壞檔清單，命中就直接鎖定、完全不呼叫 `get_entry`；`saveNow` 與 `scheduleSave` 也都在 `lockedDate` 有值時提早返回。三層防線確保空白編輯器不可能覆蓋掉一個只是暫時解不開的檔案——這是壞檔處理裡唯一會造成永久資料損失的路徑。
 - **匯出保留兩種路徑**：`export_broken_entry` 若該日期有 `legacy_broken` 列，會原樣匯出遷移時保存的 XML bytes；否則用 `VACUUM INTO` 匯出一份相同 SQLCipher key 的 `diary-backup.db`。
-- **附件 sidecar、manifest 進 DB**：圖片放在 `attachments/YYYY-MM-DD/<id>.bin`，順序／MIME／尺寸在 DB 的 `attachments` 表；`.fd` 只帶 metadata，沒有 `manifest.xml`。DB 不會因幾百張 5 MiB 圖片膨脹，圖片仍可單張延遲解密。
-- **固定順序是資料，不是檔名**：DB 的 `position` 欄位就是顯示順序。新增 append、拖曳只更新 DB 的 position 並重寫當天 `.fd`；不依賴 mtime、檔名或 `added-at`。
-- **每張圖獨立加密**：圖片各自有 IV 與 AAD（綁日期、id、版本），單張損壞不會影響其他圖片。新圖片用 HKDF 派生的 `attachment_key`（版本 3）；舊 v1／v2 用 diary key，讀取時依 header 版本選金鑰。
-- **附件刪除方向固定**：新增是「圖片 → DB manifest → `.fd`」，刪除是「DB row → 圖片 → `.fd` 重寫」；crash 只會留下未引用圖片（會被補回）或遺失佔位。`attachments` 沒有 foreign key（孤兒資料夾是既有功能），刪除日記時由 `db::delete_entry` 明確刪除 attachment rows，再刪 `.fd` 與附件資料夾。
+- **附件 sidecar、manifest 進 DB**：圖片放在 `attachments/YYYY-MM-DD/<id>.bin`，順序／MIME／尺寸在 DB 的 `attachments` 表；備份會把 sidecar 一起打包，沒有 `manifest.xml`。DB 不會因幾百張 5 MiB 圖片膨脹，圖片仍可單張延遲解密。
+- **固定順序是資料，不是檔名**：DB 的 `position` 欄位就是顯示順序。新增 append、拖曳只更新 DB 的 position；不依賴 mtime、檔名或 `added-at`。
+- **附件刪除方向固定**：新增是「圖片 → DB manifest」，刪除是「DB row → 圖片」；crash 只會留下未引用圖片（會被補回）或遺失佔位。`attachments` 沒有 foreign key（孤兒資料夾是既有功能），刪除日記時由 `db::delete_entry` 明確刪除 attachment rows，再刪附件資料夾。
 - **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan）。列高不再一律相同：`lib/list-rows.js` 先建立「月份標題列 + 日記列」的平面模型並算出每列絕對位移，`main.js` 再用二分搜尋找出視窗內的區段。兩個高度都由 CSS 的 `--row-h`／`--month-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高與月份標題會一起縮放，捲動不會錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
 - **年份跳轉**：`entry-scroll` 頂端有一個 sticky 年份選單，選項只包含目前可見清單（全部／收藏／搜尋結果）實際存在的年份；跳轉時直接定位到該年第一篇前面的月份標題列。它是捲動容器內的元素，JS 會把它的高度從可見視窗扣除，因此 sticky 列不會遮住第一筆資料。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
@@ -155,7 +153,7 @@ fly-diary/
 - **匯入分兩階段**：`scan_import` 只讀不寫，把每個檔案分類成「可匯入／已存在／失敗」並附上原因；使用者確認後才由 `run_import` 寫入。檔名是日期與標題的唯一來源，不是合法 `YYYY-MM-DD` 就判為失敗，不做猜測。
 - **檔名即標題**：匯入時 `2026-10-23.txt` 的標題就是 `2026-10-23`，整份檔案（去掉 BOM、統一換行）原封不動成為內容。不從內容偷一行當標題，匯入因此是無損的，標題也永遠是資料夾裡看得到的東西。
 - **匯入容錯**：單一檔案失敗不會中斷整批，報告會分別列出成功、略過與失敗的檔案。
-- **匯入是一個 transaction**：`db::import_entries_with_progress` 把整批 insert 放在同一個 SQLite transaction，最後只 commit 一次；寫入後才補每日 `.fd`。不再有 N 次索引重寫。
+- **匯入是一個 transaction**：`db::import_entries_with_progress` 把整批 insert 放在同一個 SQLite transaction，最後只 commit 一次。不再有 N 次索引重寫。
 - **不卡 UI**：`scan_import` 與 `run_import` 都是 `async` 命令，透過 `spawn_blocking` 把整批工作移出主執行緒；`run_import` 另以 `import-progress` 事件回報 `{done, total}`，對話框按鈕會顯示「匯入中… 12/340」。
 - **金鑰階層**：密碼只派生 master key，master key 只包裝隨機的 diary key。改密碼或升級 KDF 時只需重新包裝 diary key，不必動到任何日記檔。
 - **可調 KDF**：首次建立 vault 時可在「進階選項」調整 Argon2id 的記憶體／迭代／平行度，參數寫入 `vault.xml`，之後解鎖沿用同一組參數；設定頁可隨時再調整。
@@ -166,17 +164,17 @@ fly-diary/
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
 - **抹除貫穿整條金鑰路徑**：`unlock_vault` / `create_vault` / `rewrap_vault` / `migrate_legacy_vault` 都直接回傳 `Zeroizing<[u8; 32]>`；`crypto::decrypt` / `decrypt_with_aad` 回傳 `Zeroizing<Vec<u8>>`。SQLCipher 的 raw-key SQL 字串也用 `Zeroizing<String>` 包住並在 `PRAGMA key` 後立即抹除；`Entry` 實作 `Drop` 抹除 `title` 與 `content`。`run_import` 從 session 取出的金鑰副本也包在 `Zeroizing` 裡。
 - **關閉 core dump**：`main()` 在 Unix 上把 `RLIMIT_CORE` 設為 0；Linux／Android 另外設定 `PR_SET_DUMPABLE = 0`，讓同使用者無法用 `ptrace` 或 `/proc/<pid>/mem` 讀取行程記憶體。兩者一起擋掉「崩潰後把金鑰寫到磁碟」與「其他行程直接讀記憶體」。
-- **DB 用 page-level 認證（SQLCipher）**：每一頁以 AES-256-CBC + HMAC-SHA512 加密／認證，key 由 HKDF 從 diary key 派生；換頁、跨 DB 搬移或錯誤 key 都會失敗。`.fd` 使用另一把 HKDF 派生金鑰與 AES-256-GCM，AAD 綁定日期／版本／vault-id／key-id。
+- **DB 用 page-level 認證（SQLCipher）**：每一頁以 AES-256-CBC + HMAC-SHA512 加密／認證，key 由 HKDF 從 diary key 派生；換頁、跨 DB 搬移或錯誤 key 都會失敗。備份是同一把 key 的 `VACUUM INTO` 快照，沒有第二種格式。
 - **格式升級已內建在遷移**：舊 XML 的 v1–v4 在 `migrate_storage` 一次讀取並轉成 DB；不再有背景 `upgrade_entries` 改寫。該 command 保留為 no-op，讓舊前端仍可呼叫。
-- **所有寫入都是原子的**：`fsutil::write_private` 一律「寫同目錄暫存檔 → `sync_all()` → `rename` 覆蓋」。`rename` 在 POSIX 上是原子操作，所以斷電、磁碟滿、行程被 kill 都只會留下「完整的舊檔」或「完整的新檔」，不會出現截斷的檔案。`sync_all()` 不可省：少了它，`rename` 可能先於資料落地，斷電後會得到一個檔名正確但內容為空的檔案。暫存檔名帶有 pid 與遞增序號，因此平行匯入（rayon 池同時寫多篇）不會互撞同一個暫存檔。失敗路徑會清掉暫存檔，不留下垃圾。這對 `vault.xml` 尤其關鍵——它只有幾百 bytes，卻裝著 salt、KDF 參數與包裝後的金鑰，一旦截斷就等於日記永久無法解鎖。附件圖片與每日 `.fd` 也走同一條路徑，所以新增／排序／刪除不會留下半截檔案。
-- **`rename` 之後再 fsync 目錄**：`sync_all()` 只保證「檔案內容」落地，`rename` 改的是**目錄項目**，那是另一份中繼資料。少了目錄的 flush，斷電後可能出現「新內容在磁碟上、但檔名還指向舊 inode」的狀態。`fsutil::replace` 因此在 `rename` 之後對父目錄做一次 `fsync`（`fsutil::sync_dir`）。這在多裝置同步下格外重要：同步軟體是照目錄項目決定要上傳哪個版本，若改名沒落地，另一台裝置可能把舊檔「復活」回來，覆蓋掉剛寫好的新內容。
+- **所有寫入都是原子的**：`fsutil::write_private` 一律「寫同目錄暫存檔 → `sync_all()` → `rename` 覆蓋」。`rename` 在 POSIX 上是原子操作，所以斷電、磁碟滿、行程被 kill 都只會留下「完整的舊檔」或「完整的新檔」，不會出現截斷的檔案。`sync_all()` 不可省：少了它，`rename` 可能先於資料落地，斷電後會得到一個檔名正確但內容為空的檔案。暫存檔名帶有 pid 與遞增序號，因此平行匯入（rayon 池同時寫多篇）不會互撞同一個暫存檔。失敗路徑會清掉暫存檔，不留下垃圾。這對 `vault.xml` 尤其關鍵——它只有幾百 bytes，卻裝著 salt、KDF 參數與包裝後的金鑰，一旦截斷就等於日記永久無法解鎖。附件圖片也走同一條路徑，所以新增／排序／刪除不會留下半截檔案。
+- **`rename` 之後再 fsync 目錄**：`sync_all()` 只保證「檔案內容」落地，`rename` 改的是**目錄項目**，那是另一份中繼資料。少了目錄的 flush，斷電後可能出現「新內容在磁碟上、但檔名還指向舊 inode」的狀態。`fsutil::replace` 因此在 `rename` 之後對父目錄做一次 `fsync`（`fsutil::sync_dir`）。這對備份還原的換檔也一樣重要。
 - **Windows 用 `ReplaceFileW` 換檔**：Windows 的 `rename` 不能覆蓋既有檔案，舊做法是「先刪再改名」，中間存在「兩者都不存在」的空窗。現在 `fsutil::replace` 在 Windows 上直接呼叫 `ReplaceFileW` 並帶 `REPLACEFILE_WRITE_THROUGH`，由核心一次完成替換並寫穿，空窗消失。因為 `libc` 只是 Unix 的依賴，這段 FFI 是手動宣告的（`#[link(name = "kernel32")]`），只編譯在 Windows 上。
 - **檔案權限收緊**：所有寫入都走 `fsutil::write_private`，Unix 上檔案固定 `0600`、目錄 `0700`，不依賴行程 umask。`OpenOptions::mode` 只在建立檔案時生效，因此 `rename` 之後會再 `set_permissions` 一次，把舊版留下的 `0644` 一併收緊；已存在的日記資料夾（例如使用者自己挑的 `0775` 資料夾）也會清掉 group/other 位元。`vault.xml` 內含 salt、KDF 參數與包裝後的金鑰，是離線暴力破解的完整材料，因此最需要這層保護。
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
-- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
+- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`restore_backup`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
 - **Argon2id 一定離開主執行緒**：`unlock`、`create_vault`、`change_passphrase` 各要跑一到兩次刻意放慢的 Argon2id 派生（單次約一秒），是最容易讓人感覺到凍結的地方。三者都改為 `async` 並把派生交給 `blocking()`；session 只在工作回傳後才寫入，因為 `tauri::State` 無法 move 進 `spawn_blocking`。
 - **金鑰先複製再交給背景執行緒**：`MutexGuard` 不是 `Send`，也不能讓鎖跨越整個寫入過程（會擋住 `lock` 與其他命令）。所有需要金鑰的命令都先用 `session_key()` 把 `[u8; 32]` 複製出來，再 move 進閉包；鎖只持有到複製完成為止。
-- **存檔的資料庫往返**：寫入一篇日記包含讀取舊列（保留收藏旗標）、`INSERT ... ON CONFLICT` 寫入、以及（內容有變時）重寫當天 `.fd`。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，必須離開主執行緒；raw key 沒有 KDF，每次開啟 DB 的成本很低。
+- **存檔的資料庫往返**：寫入一篇日記包含讀取舊列（保留收藏旗標）與 `INSERT ... ON CONFLICT` 寫入。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，必須離開主執行緒；raw key 沒有 KDF，每次開啟 DB 的成本很低。
 - **資料安全**：自動儲存 + 切換日期前強制存檔 + 鎖定前強制存檔。

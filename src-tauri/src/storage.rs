@@ -3,8 +3,8 @@
 //! The current diary store is `crate::db` (SQLCipher). This module still owns
 //! `vault.xml`, `recovery.xml`, KDF handling and the legacy XML reader used by
 //! the one-time `migrate_storage` command. Outside migration/tests, the app does
-//! not write `index.xml` or `YYYY-MM-DD.xml`; daily sync uses binary `.fd`
-//! records from `db.rs`.
+//! not write `index.xml` or `YYYY-MM-DD.xml`; backups are exported by
+//! `crate::backup`.
 //!
 //! Layout of a pre-SQLCipher diary directory (migration input only):
 //!
@@ -675,7 +675,6 @@ pub fn create_vault(
     // behind after `vault.xml` was removed.
     let _ = remove_recovery(dir);
     crate::db::remove_database(dir)?;
-    crate::db::remove_sync_records(dir)?;
 
     let salt_b64 = crypto::new_salt_b64();
     let salt = crypto::b64_decode(&salt_b64)?;

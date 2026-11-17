@@ -31,9 +31,7 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   openRecovery       — () => void | Promise<void>
 //   flushSave          — () => Promise<void>
 //   flushAndLock       — () => Promise<void>
-//   afterRestore       — () => Promise<void>
-//   afterSync          — (report: object) => void | Promise<void>
-//   setSyncAutoEnabled — (enabled: boolean) => void
+//   afterRestore       — () => Promise<void>, reloads after a backup restore
 //   beginNativePicker  — () => void, marks a native folder picker as open
 //   endNativePicker    — () => void, marks it as closed
 
@@ -59,9 +57,6 @@ export function createSettingsDialog(deps) {
    * passphrase fields are empty.
    */
   let vaultKdf = null;
-
-  /** Last sync result, so the conflict list survives reopening the dialog. */
-  let lastSyncReport = null;
 
   /** Whether the settings dialog is open. */
   function isSettingsOpen() {
@@ -232,269 +227,81 @@ export function createSettingsDialog(deps) {
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Android folder sync
-  // -------------------------------------------------------------------------
-  //
-  // Hidden on desktop: `get_sync_status` reports `supported: false` there, and
-  // none of the other sync commands exist in a desktop build either.
 
-  /** Human label for the kind of conflict. */
-  function conflictLabel(kind) {
-    if (kind === "localEditedRemoteDeleted") {
-      return deps.t("sync.conflictLocalDeleted");
-    }
-    if (kind === "remoteEditedLocalDeleted") {
-      return deps.t("sync.conflictRemoteDeleted");
-    }
-    return deps.t("sync.conflictBoth");
-  }
-
-  /** Format a sync timestamp, falling back to "never". */
-  function formatSyncTime(ms) {
-    if (!ms) return deps.t("sync.never");
-    try {
-      return new Date(ms).toLocaleString();
-    } catch {
-      return deps.t("sync.never");
-    }
-  }
-
-  /** Render the list of unresolved conflicts with per-file buttons. */
-  function renderSyncConflicts(conflicts) {
-    if (!els.syncConflicts || !els.syncConflictList) return;
-    const list = Array.isArray(conflicts) ? conflicts : [];
-    els.syncConflictList.replaceChildren();
-
-    for (const conflict of list) {
-      const item = document.createElement("li");
-      item.className = "sync-conflict";
-
-      const text = document.createElement("div");
-      text.className = "sync-conflict-text";
-      const path = document.createElement("span");
-      path.className = "sync-conflict-path";
-      path.textContent = conflict.path;
-      const kind = document.createElement("span");
-      kind.className = "sync-conflict-kind";
-      kind.textContent = conflictLabel(conflict.kind);
-      text.append(path, kind);
-
-      const actions = document.createElement("div");
-      actions.className = "sync-conflict-actions";
-      for (const keep of ["local", "remote"]) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "btn-browse";
-        button.dataset.path = conflict.path;
-        button.dataset.keep = keep;
-        if (keep === "local") {
-          // A missing remote side means "keep local" deletes from the folder,
-          // so label the action by its consequence rather than by its side.
-          button.textContent =
-            conflict.remoteSize == null
-              ? deps.t("sync.deleteRemote")
-              : deps.t("sync.keepLocal");
-        } else {
-          button.textContent =
-            conflict.localSize == null
-              ? deps.t("sync.deleteLocal")
-              : deps.t("sync.keepRemote");
-        }
-        actions.append(button);
-      }
-
-      item.append(text, actions);
-      els.syncConflictList.append(item);
-    }
-
-    els.syncConflicts.hidden = list.length === 0;
-  }
-
-  /** Show the outcome of one sync run. */
-  function renderSyncReport(report) {
-    lastSyncReport = report ?? null;
-    const pushed = report?.pushed?.length ?? 0;
-    const pulled = report?.pulled?.length ?? 0;
-    const conflicts = report?.conflicts ?? [];
-
-    renderSyncConflicts(conflicts);
-    if (els.syncStatus) {
-      els.syncStatus.textContent =
-        pushed || pulled || conflicts.length
-          ? deps.t("sync.result", {
-              pushed,
-              pulled,
-              conflicts: conflicts.length,
-            })
-          : deps.t("sync.upToDate");
-    }
-    if (els.syncLast && report?.syncedAtMs) {
-      els.syncLast.textContent = formatSyncTime(report.syncedAtMs);
-    }
-  }
-
-  /** Read the binding and last run from the backend. */
-  async function refreshSyncStatus() {
-    if (!els.syncSection) return;
-    try {
-      const status = await deps.invoke("get_sync_status");
-      if (!status?.supported) {
-        els.syncSection.hidden = true;
-        return;
-      }
-
-      els.syncSection.hidden = false;
-      const bound = Boolean(status.bound);
-      if (els.syncUnbound) els.syncUnbound.hidden = bound;
-      if (els.syncBound) els.syncBound.hidden = !bound;
-      if (els.syncDisplayName) {
-        els.syncDisplayName.textContent = status.displayName || "";
-        els.syncDisplayName.title = status.treeUri || "";
-      }
-      if (els.syncAuto) els.syncAuto.checked = Boolean(status.autoSync);
-      deps.setSyncAutoEnabled?.(Boolean(status.autoSync));
-      if (els.syncLast) {
-        els.syncLast.textContent = formatSyncTime(status.lastSyncedAtMs);
-      }
-      if (els.syncStatus) {
-        els.syncStatus.textContent = bound
-          ? lastSyncReport
-            ? els.syncStatus.textContent
-            : deps.t("sync.bound")
-          : "";
-      }
-      renderSyncConflicts(status.conflicts ?? []);
-      if (els.syncError) els.syncError.textContent = "";
-    } catch (err) {
-      console.error("get_sync_status failed:", err);
-      els.syncSection.hidden = true;
-    }
-  }
-
-  /** Show a sync error beneath the section. */
-  function showSyncError(err) {
-    if (!els.syncError) return;
-    els.syncError.textContent = deps.t("sync.failed", {
-      message: typeof err === "string" ? err : String(err),
-    });
+  /** Write a one-line result under the backup buttons. */
+  function showBackupStatus(text, saved = false) {
+    if (!els.settingsBackupStatus) return;
+    els.settingsBackupStatus.textContent = text;
+    els.settingsBackupStatus.classList.toggle("is-saved", saved);
   }
 
   /**
-   * Pick a folder and either merge into it or adopt it.
+   * Export an encrypted snapshot archive.
    *
-   * Adopting replaces the private vault, so the session is locked first and the
-   * caller resets the UI to the lock screen afterwards.
+   * The pending autosave is flushed first so the archive cannot miss the last
+   * keystrokes. Cancelling the save dialog is not an error.
    */
-  async function pickSyncDir() {
-    if (els.syncError) els.syncError.textContent = "";
-    deps.beginNativePicker?.();
+  async function exportBackup() {
+    if (!els.settingsBackupBtn) return;
+    els.settingsBackupBtn.disabled = true;
+    showBackupStatus("");
     try {
-      const picked = await deps.invoke("pick_sync_dir");
-      if (!picked) return;
-
-      const inspection = await deps.invoke("inspect_sync_dir", {
-        treeUri: picked.uri,
-      });
-
-      if (inspection?.hasVault && !inspection.sameVault) {
-        if (!confirm(deps.t("sync.restoreConfirm", { name: picked.name }))) {
-          return;
-        }
-        await deps.flushAndLock?.();
-        try {
-          await deps.invoke("restore_from_sync_dir", {
-            treeUri: picked.uri,
-            displayName: picked.name,
-          });
-        } catch (err) {
-          console.error("restore_from_sync_dir failed:", err);
-          await deps.afterRestore?.();
-          globalThis.alert?.(
-            deps.t("sync.restoreFailed", {
-              message: typeof err === "string" ? err : String(err),
-            })
-          );
-          return;
-        }
-        await deps.afterRestore?.();
-        return;
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("export_backup");
+      } finally {
+        deps.endNativePicker?.();
       }
-
-      const report = await deps.invoke("bind_sync_dir", {
-        treeUri: picked.uri,
-        displayName: picked.name,
-      });
-      renderSyncReport(report);
-      await refreshSyncStatus();
-      await deps.afterSync?.(report);
+      if (path) {
+        showBackupStatus(deps.t("backup.exported", { path }), true);
+      }
     } catch (err) {
-      console.error("pick_sync_dir failed:", err);
-      showSyncError(err);
+      console.error("export_backup failed:", err);
+      showBackupStatus(
+        deps.t("backup.exportFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
     } finally {
-      deps.endNativePicker?.();
+      els.settingsBackupBtn.disabled = false;
     }
   }
 
-  /** Mirror the vault and the folder now. */
-  async function syncNow() {
-    if (!els.syncNowBtn) return;
-    els.syncNowBtn.disabled = true;
-    if (els.syncError) els.syncError.textContent = "";
-    if (els.syncStatus) els.syncStatus.textContent = deps.t("sync.running");
-    try {
-      // Flush first so unsaved typing becomes part of the comparison instead
-      // of being overwritten by a pull that happened "before" it.
-      await deps.flushSave?.();
-      const report = await deps.invoke("sync_now");
-      renderSyncReport(report);
-      await refreshSyncStatus();
-      await deps.afterSync?.(report);
-    } catch (err) {
-      console.error("sync_now failed:", err);
-      showSyncError(err);
-    } finally {
-      els.syncNowBtn.disabled = false;
-    }
-  }
-
-  /** Stop mirroring to the folder. */
-  async function unbindSyncDir() {
-    if (!confirm(deps.t("sync.unbindConfirm"))) return;
-    try {
-      await deps.invoke("unbind_sync_dir");
-      lastSyncReport = null;
-      await refreshSyncStatus();
-    } catch (err) {
-      console.error("unbind_sync_dir failed:", err);
-      showSyncError(err);
-    }
-  }
-
-  /** Toggle the automatic sync hooks. */
-  async function setSyncAuto(enabled) {
-    try {
-      await deps.invoke("set_sync_auto", { enabled });
-      deps.setSyncAutoEnabled?.(enabled);
-      if (els.syncError) els.syncError.textContent = "";
-    } catch (err) {
-      console.error("set_sync_auto failed:", err);
-      if (els.syncAuto) els.syncAuto.checked = !enabled;
-      showSyncError(err);
-    }
-  }
-
-  /** Resolve one conflict and then refresh the report. */
-  async function resolveSyncConflict(path, keep) {
-    if (!path || (keep !== "local" && keep !== "remote")) return;
-    if (!confirm(deps.t("sync.resolveConfirm", { path }))) return;
+  /**
+   * Replace the database and attachments with an encrypted backup.
+   *
+   * The current database and attachments are kept in a sibling backup folder,
+   * so the confirmation can honestly say the old data is recoverable.
+   */
+  async function restoreBackup() {
+    if (!els.settingsRestoreBtn) return;
+    if (!confirm(deps.t("backup.restoreConfirm"))) return;
+    els.settingsRestoreBtn.disabled = true;
+    showBackupStatus("");
     try {
       await deps.flushSave?.();
-      await deps.invoke("resolve_sync_conflict", { path, keep });
-      await syncNow();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("restore_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        await deps.afterRestore?.();
+        showBackupStatus(deps.t("backup.restored", { path }), true);
+      }
     } catch (err) {
-      console.error("resolve_sync_conflict failed:", err);
-      showSyncError(err);
+      console.error("restore_backup failed:", err);
+      showBackupStatus(
+        deps.t("backup.restoreFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsRestoreBtn.disabled = false;
     }
   }
 
@@ -505,10 +312,11 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    showBackupStatus("");
 
     // Not awaited: the path and build info are informational, so the dialog
     // should not wait on extra round trips before it appears.
-    await Promise.all([renderDiaryPath(), renderAppInfo(), refreshSyncStatus()]);
+    await Promise.all([renderDiaryPath(), renderAppInfo()]);
 
     let mobile = false;
     try {
@@ -691,12 +499,8 @@ export function createSettingsDialog(deps) {
     refreshRecoveryStatus,
     removeRecovery,
     openRecovery,
-    refreshSyncStatus,
-    pickSyncDir,
-    syncNow,
-    unbindSyncDir,
-    setSyncAuto,
-    resolveSyncConflict,
+    exportBackup,
+    restoreBackup,
     openImport: () => handOver(deps.openImport),
     openStats: () => handOver(deps.openStats),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),

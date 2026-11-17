@@ -1,6 +1,7 @@
 // `crypto`, `storage` and `attachments` are public so the integration tests in
 // `tests/` can drive the vault lifecycle through the same API the commands use.
 pub mod attachments;
+mod backup;
 mod bip39;
 mod clipboard;
 pub mod crypto;
@@ -11,7 +12,6 @@ mod search;
 mod secure_memory;
 mod settings;
 pub mod storage;
-mod sync;
 mod xml;
 
 use std::path::PathBuf;
@@ -34,6 +34,25 @@ fn config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
         .map_err(|e| format!("Failed to resolve config dir: {e}"))
+}
+
+/// Scratch space for backup staging. Never inside the diary folder, so a
+/// failed export or restore cannot look like part of the vault.
+fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to resolve cache dir: {e}"))?;
+    fsutil::create_private_dir(&dir).map_err(|e| format!("Failed to create the cache dir: {e}"))?;
+    Ok(dir)
+}
+
+fn unique_scratch_name(prefix: &str, suffix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{}-{nanos}{suffix}", std::process::id())
 }
 
 /// Default diary location offered on first run.
@@ -515,11 +534,9 @@ async fn storage_status(
     blocking("Storage status", move || Ok(db::format_status(&dir))).await
 }
 
-/// Build the SQLCipher database from the legacy XML files.
-///
 /// Read legacy XML once and build the SQLCipher database. The caller must be
 /// unlocked: decrypting the old entries requires the diary key. On success the
-/// XML entry files are deleted and replaced by binary `.fd` sync records.
+/// XML entry files are deleted.
 #[tauri::command]
 async fn migrate_storage(
     app: tauri::AppHandle,
@@ -528,31 +545,6 @@ async fn migrate_storage(
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
     let report = blocking("Migrate storage", move || db::migrate_from_xml(&dir, &key)).await?;
-    clear_search(&app);
-    Ok(report)
-}
-
-/// Move an unreadable database aside and rebuild it from the encrypted per-day
-/// `.fd` sync records.
-///
-/// Unlock already proved the diary key with `vault.xml`; a failure to open
-/// `diary.db` therefore means corruption or a foreign database, not a wrong
-/// passphrase. The original DB and its WAL files are kept as
-/// `diary.db.corrupt-*` for forensics.
-#[tauri::command]
-async fn rebuild_storage(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-) -> Result<db::MigrationReport, String> {
-    let dir = diary_dir(&app)?;
-    let key = session_key(&session)?;
-    let report = blocking("Rebuild storage", move || {
-        let backup = db::move_corrupt_database(&dir)?;
-        let mut report = db::rebuild_from_sync_records(&dir, &key)?;
-        report.database_backup = backup.map(|path| path.to_string_lossy().into_owned());
-        Ok(report)
-    })
-    .await?;
     clear_search(&app);
     Ok(report)
 }
@@ -619,10 +611,8 @@ async fn create_vault(
 #[serde(rename_all = "camelCase")]
 struct UnlockResult {
     legacy: bool,
-    /// The database is missing but the daily `.fd` records are present.
-    needs_rebuild: bool,
     /// Set when the diary key was accepted but `diary.db` cannot be opened.
-    /// The daily `.fd` sync records can rebuild it.
+    /// The frontend tells the user to restore an encrypted backup.
     database_error: Option<String>,
 }
 
@@ -642,20 +632,19 @@ async fn unlock(
 
     let verify_dir = dir.clone();
     let key_check = Zeroizing::new(*key);
-    let (legacy, needs_rebuild, database_error) = blocking("Check storage format", move || {
+    let (legacy, database_error) = blocking("Check storage format", move || {
         let status = db::format_status(&verify_dir);
         match status.format {
-            db::StorageFormat::Legacy => return Ok((true, false, None)),
-            db::StorageFormat::NeedsRebuild => return Ok((false, true, None)),
-            db::StorageFormat::Empty => return Ok((false, false, None)),
+            db::StorageFormat::Legacy => return Ok((true, None)),
+            db::StorageFormat::Empty => return Ok((false, None)),
             db::StorageFormat::Sqlcipher => {}
         }
         if let Some(context) = storage::vault_context(&verify_dir)? {
             if let Err(error) = db::verify(&verify_dir, &key_check, &context) {
-                return Ok((false, false, Some(error)));
+                return Ok((false, Some(error)));
             }
         }
-        Ok((false, false, None))
+        Ok((false, None))
     })
     .await?;
 
@@ -669,7 +658,6 @@ async fn unlock(
     clear_search(&app);
     Ok(UnlockResult {
         legacy,
-        needs_rebuild,
         database_error,
     })
 }
@@ -863,7 +851,7 @@ async fn recover_vault(
     };
 
     let recover_dir = dir.clone();
-    let (key, legacy, needs_rebuild, database_error) = blocking("Recover vault", move || {
+    let (key, legacy, database_error) = blocking("Recover vault", move || {
         let diary_key = storage::recover_diary_key(&recover_dir, &phrase)?;
         storage::reset_passphrase(&recover_dir, &diary_key, &new_passphrase, params)?;
         // Opportunistically upgrade a legacy recovery sidecar now that both
@@ -871,7 +859,6 @@ async fn recover_vault(
         let _ = storage::rewrite_recovery(&recover_dir, &diary_key, &phrase);
         let status = db::format_status(&recover_dir);
         let legacy = status.format == db::StorageFormat::Legacy;
-        let needs_rebuild = status.format == db::StorageFormat::NeedsRebuild;
         let mut database_error = None;
         if status.format == db::StorageFormat::Sqlcipher {
             if let Some(context) = storage::vault_context(&recover_dir)? {
@@ -880,19 +867,18 @@ async fn recover_vault(
                 }
             }
         }
-        Ok((diary_key, legacy, needs_rebuild, database_error))
+        Ok((diary_key, legacy, database_error))
     })
     .await?;
 
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
-    // Recovery keeps the same diary key, but rebuilding is cheap compared with
-    // risking a stale index from a different vault.
+    // Recovery keeps the same diary key, but rebuilding the index is cheap
+    // compared with risking a stale index from a different vault.
     clear_search(&app);
     Ok(UnlockResult {
         legacy,
-        needs_rebuild,
         database_error,
     })
 }
@@ -1098,12 +1084,12 @@ async fn list_orphan_attachments(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
 ) -> Result<Vec<OrphanAttachment>, String> {
-    // Metadata-only, but still require an unlocked session: the directory name
-    // is the date of a diary entry.
-    let _ = session_key(&session)?;
+    // The date is a directory name, so the database is needed to tell whether
+    // it still has an entry.
+    let key = session_key(&session)?;
     let dir = diary_dir(&app)?;
     blocking("List orphan attachments", move || {
-        attachments::list_orphan_attachments(&dir)
+        attachments::list_orphan_attachments(&dir, &key)
     })
     .await
 }
@@ -1349,6 +1335,144 @@ async fn export_broken_entry(
     .map(Some)
 }
 
+/// Export a self-contained encrypted backup archive.
+///
+/// The archive holds a `VACUUM INTO` snapshot of `diary.db`, the key wrappers
+/// and every attachment sidecar. Nothing is decrypted on disk; the snapshot is
+/// encrypted with the same SQLCipher key as the live database.
+#[tauri::command]
+async fn export_backup(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let key = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("匯出加密備份")
+        .add_filter("Fly Diary backup", &["tar"])
+        .set_file_name(backup::suggested_name())
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let picked = rx.recv().map_err(|e| format!("Save dialog failed: {e}"))?;
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let cache = cache_dir(&app)?;
+    let snapshot = cache.join(unique_scratch_name("backup", ".db"));
+    let app2 = app.clone();
+    let display = path.to_string();
+    blocking("Export backup", move || {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        let mut file = app2
+            .fs()
+            .open(path, options)
+            .map_err(|e| format!("Failed to open the backup file: {e}"))?;
+        backup::export(&dir, &key, &snapshot, &mut file)?;
+        // SAF providers may not support fsync on a content:// descriptor.
+        // Closing the file still flushes the userspace buffer; a failed fsync
+        // is only fatal on desktop file systems.
+        #[cfg(target_os = "android")]
+        {
+            let _ = file.sync_all();
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            file.sync_all()
+                .map_err(|e| format!("Failed to flush the backup file: {e}"))
+        }
+    })
+    .await?;
+    Ok(Some(display))
+}
+
+/// Replace the diary database and attachments with an encrypted backup.
+///
+/// The current database and attachments are kept in a sibling
+/// `<diary>.local-backup-*` folder. `vault.xml` and `recovery.xml` are not
+/// replaced: the archive contains them for manual rescue, but the unlocked
+/// session already proved the current key wrappers work.
+#[tauri::command]
+async fn restore_backup(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let key = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    let current = storage::vault_context(&dir)?
+        .ok_or_else(|| "This workspace has no upgraded vault to restore into".to_string())?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("還原加密備份")
+        .add_filter("Fly Diary backup", &["tar"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let picked = rx.recv().map_err(|e| format!("File picker failed: {e}"))?;
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let cache = cache_dir(&app)?;
+    let staging = cache.join(unique_scratch_name("restore", ""));
+    let staging_cleanup = staging.clone();
+    let app2 = app.clone();
+
+    let result = blocking("Restore backup", move || {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        let mut file = app2
+            .fs()
+            .open(path, options)
+            .map_err(|e| format!("Failed to open the backup file: {e}"))?;
+        backup::extract(&mut file, &staging)?;
+
+        let context = storage::vault_context(&staging)?
+            .ok_or_else(|| "The backup does not contain vault.xml".to_string())?;
+        if context.vault_id != current.vault_id || context.key_id != current.key_id {
+            return Err("This backup belongs to a different diary vault".to_string());
+        }
+        db::verify_snapshot(&staging, &key, &context)?;
+        let integrity = db::integrity_check_snapshot(&staging, &key)?;
+        if !integrity.ok {
+            return Err(format!(
+                "The backup database failed its integrity check: {}",
+                integrity.messages.join("; ")
+            ));
+        }
+        let backup = backup::install(&staging, &dir)?;
+        Ok(backup.to_string_lossy().into_owned())
+    })
+    .await;
+
+    match result {
+        Ok(path) => {
+            clear_search(&app);
+            Ok(Some(path))
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_cleanup);
+            Err(error)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Import commands
 // ---------------------------------------------------------------------------
@@ -1489,632 +1613,6 @@ async fn diary_path(app: tauri::AppHandle) -> Result<String, String> {
     .await
 }
 
-// ---------------------------------------------------------------------------
-// Android folder sync
-// ---------------------------------------------------------------------------
-//
-// The private vault stays authoritative; this bridge only mirrors encrypted
-// files to a folder the user picked through Android's Storage Access Framework.
-// It is deliberately absent on desktop: every command below reports
-// `supported: false` (or an explicit error) outside the Android build, and the
-// settings section is hidden.
-
-/// Last sync report, kept in memory so the settings dialog can list conflicts
-/// without re-running the sync. The three-way hashes live in `sync-state.json`.
-#[derive(Default)]
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-struct SyncRuntime {
-    last_report: Option<sync::SyncReport>,
-}
-
-type SharedSync = Arc<Mutex<SyncRuntime>>;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncStatusView {
-    supported: bool,
-    bound: bool,
-    display_name: String,
-    tree_uri: Option<String>,
-    auto_sync: bool,
-    last_synced_at_ms: i64,
-    conflicts: Vec<sync::SyncConflict>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SyncInspectionView {
-    has_vault: bool,
-    same_vault: bool,
-    entries: usize,
-    attachments: usize,
-    files: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PickedSyncDir {
-    uri: String,
-    name: String,
-}
-
-fn unsupported_sync_status() -> SyncStatusView {
-    SyncStatusView {
-        supported: false,
-        bound: false,
-        display_name: String::new(),
-        tree_uri: None,
-        auto_sync: false,
-        last_synced_at_ms: 0,
-        conflicts: Vec::new(),
-    }
-}
-
-/// Base64 vault id of the private vault.
-///
-/// Legacy v2 vaults have no ids until they are unlocked once; syncing them
-/// would make the cross-vault check meaningless, so the user is asked to
-/// unlock first.
-#[cfg(target_os = "android")]
-fn local_vault_id(dir: &std::path::Path) -> Result<String, String> {
-    match storage::vault_context(dir)? {
-        Some(context) => Ok(crypto::b64_encode(&context.vault_id)),
-        None => Err(
-            "This diary vault still uses the legacy format. Unlock it once so it can \
-             be upgraded before syncing."
-                .to_string(),
-        ),
-    }
-}
-
-/// SAF-backed implementation of the platform-neutral [`sync::Remote`] trait.
-#[cfg(target_os = "android")]
-struct SafSyncRemote {
-    app: tauri::AppHandle,
-    tree_uri: String,
-}
-
-#[cfg(target_os = "android")]
-impl SafSyncRemote {
-    fn new(app: tauri::AppHandle, tree_uri: String) -> Self {
-        Self { app, tree_uri }
-    }
-
-    fn ensure_available(&self) -> Result<(), String> {
-        use tauri_plugin_saf_sync::SafSyncExt;
-
-        let check = self
-            .app
-            .saf_sync()
-            .check_directory(&self.tree_uri)
-            .map_err(|error| error.to_string())?;
-        if check.available {
-            Ok(())
-        } else {
-            Err("The sync folder is no longer accessible. Pick it again in settings.".to_string())
-        }
-    }
-}
-
-#[cfg(target_os = "android")]
-impl sync::Remote for SafSyncRemote {
-    fn list(&self) -> Result<Vec<sync::RemoteFile>, String> {
-        use tauri_plugin_saf_sync::SafSyncExt;
-
-        let files = self
-            .app
-            .saf_sync()
-            .list_files(&self.tree_uri)
-            .map_err(|error| error.to_string())?;
-        Ok(files
-            .into_iter()
-            .map(|file| sync::RemoteFile {
-                path: file.path,
-                size: file.size,
-                mtime_ms: file.mtime_ms,
-            })
-            .collect())
-    }
-
-    fn copy_to_local(&self, remote_path: &str, local_path: &std::path::Path) -> Result<(), String> {
-        use tauri_plugin_saf_sync::SafSyncExt;
-
-        let local = local_path
-            .to_str()
-            .ok_or_else(|| "Local sync path is not valid UTF-8".to_string())?;
-        self.app
-            .saf_sync()
-            .copy_to_local(
-                &self.tree_uri,
-                remote_path,
-                local,
-                sync::MAX_SYNC_FILE_BYTES,
-            )
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    fn copy_from_local(
-        &self,
-        local_path: &std::path::Path,
-        remote_path: &str,
-    ) -> Result<(), String> {
-        use tauri_plugin_saf_sync::SafSyncExt;
-
-        let local = local_path
-            .to_str()
-            .ok_or_else(|| "Local sync path is not valid UTF-8".to_string())?;
-        self.app
-            .saf_sync()
-            .copy_from_local(&self.tree_uri, local, remote_path)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    }
-
-    fn delete(&self, remote_path: &str) -> Result<(), String> {
-        use tauri_plugin_saf_sync::SafSyncExt;
-
-        self.app
-            .saf_sync()
-            .delete(&self.tree_uri, remote_path)
-            .map_err(|error| error.to_string())
-    }
-}
-
-#[cfg(target_os = "android")]
-fn remember_sync_report(app: &tauri::AppHandle, report: &sync::SyncReport) {
-    let runtime = app.state::<SharedSync>().inner().clone();
-    runtime.lock().unwrap().last_report = Some(report.clone());
-}
-
-#[cfg(target_os = "android")]
-fn sync_clears_search(app: &tauri::AppHandle, report: &sync::SyncReport) {
-    if report.pulled.iter().any(|path| sync::is_entry_path(path)) {
-        // The decrypted index is stale until `scan_vault` runs again; dropping
-        // it forces the next list/search to rebuild instead of serving titles
-        // that no longer match disk.
-        clear_search(app);
-    }
-}
-
-/// Whether this build has the Android folder-sync bridge. The settings UI uses
-/// this to hide the section on desktop.
-#[tauri::command]
-async fn get_sync_status(app: tauri::AppHandle) -> Result<SyncStatusView, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(unsupported_sync_status())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        let config_dir = config_dir(&app)?;
-        let conflicts = app
-            .state::<SharedSync>()
-            .inner()
-            .lock()
-            .unwrap()
-            .last_report
-            .as_ref()
-            .map(|report| report.conflicts.clone())
-            .unwrap_or_default();
-
-        blocking("Sync status", move || {
-            let config = sync::read_config(&config_dir)?;
-            let state = sync::read_state(&config_dir);
-            Ok(match config {
-                Some(config) => SyncStatusView {
-                    supported: true,
-                    bound: true,
-                    display_name: config.display_name,
-                    tree_uri: Some(config.tree_uri.clone()),
-                    auto_sync: config.auto_sync,
-                    last_synced_at_ms: if state.tree_uri == config.tree_uri {
-                        state.last_synced_at_ms
-                    } else {
-                        0
-                    },
-                    conflicts,
-                },
-                None => SyncStatusView {
-                    supported: true,
-                    ..unsupported_sync_status()
-                },
-            })
-        })
-        .await
-    }
-}
-
-/// Open the SAF folder picker. Returns `None` when the user cancels.
-#[tauri::command]
-async fn pick_sync_dir(app: tauri::AppHandle) -> Result<Option<PickedSyncDir>, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app;
-        Ok(None)
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        use tauri_plugin_saf_sync::SafSyncExt;
-
-        let app2 = app.clone();
-        blocking("Pick sync folder", move || {
-            let picked = app2
-                .saf_sync()
-                .pick_directory()
-                .map_err(|error| error.to_string())?;
-            Ok(match (picked.uri, picked.name) {
-                (Some(uri), name) => Some(PickedSyncDir {
-                    uri,
-                    name: name.unwrap_or_else(|| "Sync folder".to_string()),
-                }),
-                _ => None,
-            })
-        })
-        .await
-    }
-}
-
-/// Inspect a folder before binding it, so the UI can warn when it belongs to a
-/// different vault.
-#[tauri::command]
-async fn inspect_sync_dir(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-    tree_uri: String,
-) -> Result<SyncInspectionView, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session, tree_uri);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        require_unlocked(&session)?;
-        sync::validate_tree_uri(&tree_uri)?;
-        let dir = diary_dir(&app)?;
-        let config_dir = config_dir(&app)?;
-        let local_id = local_vault_id(&dir)?;
-        let app2 = app.clone();
-
-        blocking("Inspect sync folder", move || {
-            let remote = SafSyncRemote::new(app2, tree_uri);
-            remote.ensure_available()?;
-            let inspection = sync::inspect(&remote, &config_dir)?;
-            let same_vault = inspection
-                .vault_id
-                .as_deref()
-                .map(|id| id == local_id)
-                .unwrap_or(false);
-            Ok(SyncInspectionView {
-                has_vault: inspection.has_vault,
-                same_vault,
-                entries: inspection.entries,
-                attachments: inspection.attachments,
-                files: inspection.files,
-            })
-        })
-        .await
-    }
-}
-
-/// Bind a folder and run the first merge. The folder must be empty or hold the
-/// same vault; adopting a different vault goes through `restore_from_sync_dir`.
-#[tauri::command]
-async fn bind_sync_dir(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-    tree_uri: String,
-    display_name: Option<String>,
-) -> Result<sync::SyncReport, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session, tree_uri, display_name);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        require_unlocked(&session)?;
-        sync::validate_tree_uri(&tree_uri)?;
-        let dir = diary_dir(&app)?;
-        let config_dir = config_dir(&app)?;
-        let vault_id = local_vault_id(&dir)?;
-        let key = session_key(&session)?;
-        let name = display_name
-            .unwrap_or_else(|| "Sync folder".to_string())
-            .trim()
-            .chars()
-            .take(200)
-            .collect::<String>();
-        let name = if name.is_empty() {
-            "Sync folder".to_string()
-        } else {
-            name
-        };
-        let app2 = app.clone();
-
-        let report = blocking("Bind sync folder", move || {
-            let _guard = sync::SYNC_LOCK.lock().unwrap();
-            db::ensure_sync_records(&dir, &key)?;
-            let remote = SafSyncRemote::new(app2, tree_uri.clone());
-            remote.ensure_available()?;
-
-            let inspection = sync::inspect(&remote, &config_dir)?;
-            if inspection.has_vault {
-                let remote_id = inspection.vault_id.ok_or_else(|| {
-                    "The folder's vault is too old to identify. Unlock it on a device \
-                     that can upgrade it, then bind again."
-                        .to_string()
-                })?;
-                if remote_id != vault_id {
-                    return Err("The folder belongs to a different diary vault. Use \
-                         \"restore from folder\" if you want to adopt it."
-                        .to_string());
-                }
-            }
-
-            let existing = sync::read_config(&config_dir)?;
-            let config = sync::SyncConfig {
-                tree_uri,
-                display_name: name,
-                auto_sync: existing.map(|config| config.auto_sync).unwrap_or(false),
-            };
-            sync::write_config(&config_dir, &config)?;
-            sync::clear_state(&config_dir)?;
-
-            let mut report = sync::sync(
-                &sync::SyncRequest {
-                    local_dir: &dir,
-                    config_dir: &config_dir,
-                    tree_uri: &config.tree_uri,
-                    vault_id: &vault_id,
-                },
-                &remote,
-            )?;
-            if let Ok(warnings) = db::import_sync_paths(&dir, &key, &report.pulled) {
-                report.notes.extend(warnings);
-            }
-            Ok(report)
-        })
-        .await?;
-
-        remember_sync_report(&app, &report);
-        sync_clears_search(&app, &report);
-        Ok(report)
-    }
-}
-
-/// Stop mirroring to the folder. The private vault is untouched.
-#[tauri::command]
-async fn unbind_sync_dir(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-) -> Result<(), String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        require_unlocked(&session)?;
-        let config_dir = config_dir(&app)?;
-        blocking("Unbind sync folder", move || {
-            let _guard = sync::SYNC_LOCK.lock().unwrap();
-            sync::clear_config(&config_dir)
-        })
-        .await?;
-        let runtime = app.state::<SharedSync>().inner().clone();
-        runtime.lock().unwrap().last_report = None;
-        Ok(())
-    }
-}
-
-/// Turn the automatic sync hooks on or off. Manual sync always works.
-#[tauri::command]
-async fn set_sync_auto(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-    enabled: bool,
-) -> Result<(), String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session, enabled);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        require_unlocked(&session)?;
-        let config_dir = config_dir(&app)?;
-        blocking("Set sync auto", move || {
-            let mut config = sync::read_config(&config_dir)?
-                .ok_or_else(|| "No sync folder is linked".to_string())?;
-            config.auto_sync = enabled;
-            sync::write_config(&config_dir, &config)
-        })
-        .await
-    }
-}
-
-/// Mirror the private vault and the folder now.
-#[tauri::command]
-async fn sync_now(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-) -> Result<sync::SyncReport, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        require_unlocked(&session)?;
-        let dir = diary_dir(&app)?;
-        let config_dir = config_dir(&app)?;
-        let config = sync::read_config(&config_dir)?
-            .ok_or_else(|| "No sync folder is linked".to_string())?;
-        let vault_id = local_vault_id(&dir)?;
-        let key = session_key(&session)?;
-        let app2 = app.clone();
-
-        let report = blocking("Sync folder", move || {
-            let _guard = sync::SYNC_LOCK.lock().unwrap();
-            db::ensure_sync_records(&dir, &key)?;
-            let remote = SafSyncRemote::new(app2, config.tree_uri.clone());
-            remote.ensure_available()?;
-            let mut report = sync::sync(
-                &sync::SyncRequest {
-                    local_dir: &dir,
-                    config_dir: &config_dir,
-                    tree_uri: &config.tree_uri,
-                    vault_id: &vault_id,
-                },
-                &remote,
-            )?;
-            if let Ok(warnings) = db::import_sync_paths(&dir, &key, &report.pulled) {
-                report.notes.extend(warnings);
-            }
-            Ok(report)
-        })
-        .await?;
-
-        remember_sync_report(&app, &report);
-        sync_clears_search(&app, &report);
-        Ok(report)
-    }
-}
-
-/// Resolve one conflict by keeping the local or the remote copy.
-#[tauri::command]
-async fn resolve_sync_conflict(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-    path: String,
-    keep: String,
-) -> Result<(), String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session, path, keep);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        require_unlocked(&session)?;
-        let resolution = match keep.as_str() {
-            "local" => sync::Resolution::Local,
-            "remote" => sync::Resolution::Remote,
-            _ => return Err("Conflict resolution must be \"local\" or \"remote\"".to_string()),
-        };
-        let dir = diary_dir(&app)?;
-        let config_dir = config_dir(&app)?;
-        let config = sync::read_config(&config_dir)?
-            .ok_or_else(|| "No sync folder is linked".to_string())?;
-        let vault_id = local_vault_id(&dir)?;
-        let is_entry = sync::is_entry_path(&path);
-        let key = session_key(&session)?;
-        let app2 = app.clone();
-
-        blocking("Resolve sync conflict", move || {
-            let _guard = sync::SYNC_LOCK.lock().unwrap();
-            let remote = SafSyncRemote::new(app2, config.tree_uri.clone());
-            remote.ensure_available()?;
-            sync::resolve(
-                &sync::SyncRequest {
-                    local_dir: &dir,
-                    config_dir: &config_dir,
-                    tree_uri: &config.tree_uri,
-                    vault_id: &vault_id,
-                },
-                &remote,
-                &path,
-                resolution,
-            )?;
-            if matches!(resolution, sync::Resolution::Remote) {
-                let _ = db::import_sync_paths(&dir, &key, std::slice::from_ref(&path));
-            }
-            Ok(())
-        })
-        .await?;
-
-        if is_entry {
-            clear_search(&app);
-        }
-        Ok(())
-    }
-}
-
-/// Replace the private vault with the folder's contents.
-///
-/// The caller must lock first: swapping files under a live session would leave
-/// the editor writing into a vault whose key it no longer owns. The previous
-/// private folder is kept as a sibling backup.
-#[tauri::command]
-async fn restore_from_sync_dir(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
-    tree_uri: String,
-    display_name: Option<String>,
-) -> Result<sync::AdoptReport, String> {
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = (app, session, tree_uri, display_name);
-        Err("Folder sync is only available in the Android app".to_string())
-    }
-
-    #[cfg(target_os = "android")]
-    {
-        if session.lock().unwrap().key.is_some() {
-            return Err("Lock the diary before restoring from a folder".to_string());
-        }
-        sync::validate_tree_uri(&tree_uri)?;
-        let dir = diary_dir(&app)?;
-        let config_dir = config_dir(&app)?;
-        let name = display_name
-            .unwrap_or_else(|| "Sync folder".to_string())
-            .trim()
-            .chars()
-            .take(200)
-            .collect::<String>();
-        let name = if name.is_empty() {
-            "Sync folder".to_string()
-        } else {
-            name
-        };
-        let app2 = app.clone();
-
-        let adopted = blocking("Restore from sync folder", move || {
-            let _guard = sync::SYNC_LOCK.lock().unwrap();
-            let remote = SafSyncRemote::new(app2, tree_uri.clone());
-            remote.ensure_available()?;
-            let adopted = sync::adopt(&dir, &config_dir, &tree_uri, &remote)?;
-            sync::write_config(
-                &config_dir,
-                &sync::SyncConfig {
-                    tree_uri,
-                    display_name: name,
-                    auto_sync: false,
-                },
-            )?;
-            Ok(adopted)
-        })
-        .await?;
-
-        remember_sync_report(&app, &adopted.report);
-        clear_search(&app);
-        Ok(adopted)
-    }
-}
-
 /// Build the application menu.
 ///
 /// Tauri installs a default menu on Linux and macOS, and its `Edit` submenu
@@ -2173,13 +1671,9 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(navigation_guard())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(SharedSession::default())
-        .manage(SharedSearch::default())
-        .manage(SharedSync::default());
-
-    // Android-only SAF bridge. Desktop builds never link the plugin.
-    #[cfg(target_os = "android")]
-    let builder = builder.plugin(tauri_plugin_saf_sync::init());
+        .manage(SharedSearch::default());
 
     // The menu is desktop-only: `tauri::menu` does not exist on mobile, and
     // there is no menu bar to attach it to.
@@ -2201,7 +1695,6 @@ pub fn run() {
             create_vault,
             unlock,
             migrate_storage,
-            rebuild_storage,
             check_vault_integrity,
             lock,
             is_unlocked,
@@ -2235,21 +1728,14 @@ pub fn run() {
             scan_vault,
             search_entries,
             export_broken_entry,
+            export_backup,
+            restore_backup,
             pick_import_dir,
             scan_import,
             run_import,
             upgrade_entries,
             today,
-            diary_path,
-            get_sync_status,
-            pick_sync_dir,
-            inspect_sync_dir,
-            bind_sync_dir,
-            unbind_sync_dir,
-            set_sync_auto,
-            sync_now,
-            resolve_sync_conflict,
-            restore_from_sync_dir
+            diary_path
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

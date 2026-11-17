@@ -745,7 +745,6 @@ export function createAttachmentGallery(deps) {
       // backend. The header's delete/favourite buttons depend on that fact.
       deps.onEntryChanged?.();
       deps.setStatus?.(deps.t("attachments.saved", { n: done }), true);
-      deps.onSyncNeeded?.();
     }
     if (failed > 0) {
       deps.setStatus?.(deps.t("attachments.failed", { n: failed }));
@@ -861,7 +860,6 @@ export function createAttachmentGallery(deps) {
         ids: items.map((item) => item.id),
       });
       deps.setStatus?.(deps.t("attachments.reordered"), true);
-      deps.onSyncNeeded?.();
     } catch (err) {
       console.error("reorder_attachments failed:", err);
       items = previous;
@@ -902,7 +900,6 @@ export function createAttachmentGallery(deps) {
       items = items.filter((candidate) => candidate.id !== id);
       imageCache.delete(id);
       deps.setStatus?.(deps.t("attachments.deleted"), true);
-      deps.onSyncNeeded?.();
     } catch (err) {
       console.error("delete_attachment failed:", err);
       deps.setStatus?.(deps.t("attachments.deleteFailed"));

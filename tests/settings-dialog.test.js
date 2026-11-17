@@ -37,19 +37,9 @@ const SETTINGS_IDS = [
   "recoveryStatus",
   "recoveryGenerateBtn",
   "recoveryRemoveBtn",
-  "syncSection",
-  "syncUnbound",
-  "syncBound",
-  "syncPickBtn",
-  "syncDisplayName",
-  "syncLast",
-  "syncAuto",
-  "syncNowBtn",
-  "syncUnbindBtn",
-  "syncStatus",
-  "syncConflicts",
-  "syncConflictList",
-  "syncError",
+  "settingsBackupBtn",
+  "settingsRestoreBtn",
+  "settingsBackupStatus",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -82,8 +72,6 @@ function harness(overrides = {}) {
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
     get_recovery_status: { enabled: false },
     remove_recovery: null,
-    // Desktop/unsupported is the default; sync-specific tests override it.
-    get_sync_status: { supported: false },
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -761,8 +749,7 @@ test("saveSettings requires the current passphrase for a parameter-only change",
           c !== "get_settings" &&
           c !== "get_vault_kdf" &&
           c !== "get_recovery_status" &&
-          c !== "app_info" &&
-          c !== "get_sync_status"
+          c !== "app_info"
       );
     assert.deepEqual(writes, []);
   });
@@ -892,225 +879,96 @@ test("the vault-wide actions never write settings", async () => {
   });
 });
 
+
 // ---------------------------------------------------------------------------
-// Android folder sync
+// Encrypted backup export / restore
 // ---------------------------------------------------------------------------
 
-test("the sync section stays hidden when the backend does not support it", async () => {
-  await withSettings(async ({ settings, els }) => {
-    await settings.refreshSyncStatus();
-    assert.equal(els.syncSection.hidden, true);
-  }, { invokeTable: { get_sync_status: { supported: false } } });
-});
-
-test("pickSyncDir guards the suspend lock while the folder picker is open", async () => {
-  const beginNativePicker = spy();
-  const endNativePicker = spy();
-  const report = {
-    pushed: [],
-    pulled: [],
-    conflicts: [],
-    notes: [],
-    syncedAtMs: 1,
-  };
-
-  await withSettings(
-    async ({ settings }) => {
-      await settings.pickSyncDir();
-
-      assert.equal(beginNativePicker.count(), 1);
-      assert.equal(endNativePicker.count(), 1);
-    },
-    {
-      deps: { beginNativePicker, endNativePicker },
-      invokeTable: {
-        pick_sync_dir: { uri: "content://tree", name: "Diary" },
-        inspect_sync_dir: { hasVault: false, sameVault: false },
-        bind_sync_dir: report,
-      },
-    }
-  );
-});
-
-test("pickSyncDir releases the guard when the picker is cancelled", async () => {
-  const beginNativePicker = spy();
-  const endNativePicker = spy();
-
-  await withSettings(
-    async ({ settings }) => {
-      await settings.pickSyncDir();
-
-      assert.equal(beginNativePicker.count(), 1);
-      assert.equal(endNativePicker.count(), 1);
-    },
-    {
-      deps: { beginNativePicker, endNativePicker },
-      invokeTable: { pick_sync_dir: null },
-    }
-  );
-});
-
-test("the sync section renders the folder, auto flag and conflicts", async () => {
+test("exportBackup flushes the pending save and reports the path", async () => {
+  const flushSave = spy(async () => {});
   await withSettings(
     async ({ settings, els }) => {
-      await settings.refreshSyncStatus();
+      await settings.exportBackup();
 
-      assert.equal(els.syncSection.hidden, false);
-      assert.equal(els.syncUnbound.hidden, true);
-      assert.equal(els.syncBound.hidden, false);
-      assert.equal(els.syncDisplayName.textContent, "Diary");
-      assert.equal(els.syncDisplayName.title, "content://tree");
-      assert.equal(els.syncAuto.checked, true);
-      assert.equal(els.syncLast.textContent, "sync.never");
-
-      assert.equal(els.syncConflicts.hidden, false);
-      const row = els.syncConflictList.children[0];
-      assert.equal(row.children[0].children[0].textContent, "2026-11-16.fd");
-      assert.equal(row.children[0].children[1].textContent, "sync.conflictBoth");
-      assert.deepEqual(
-        row.children[1].children.map((button) => button.textContent),
-        ["sync.keepLocal", "sync.keepRemote"]
-      );
-    },
-    {
-      invokeTable: {
-        get_sync_status: {
-          supported: true,
-          bound: true,
-          displayName: "Diary",
-          treeUri: "content://tree",
-          autoSync: true,
-          lastSyncedAtMs: 0,
-          conflicts: [
-            {
-              path: "2026-11-16.fd",
-              kind: "bothChanged",
-              localSize: 10,
-              remoteSize: 12,
-            },
-          ],
-        },
-      },
-    }
-  );
-});
-
-test("syncNow flushes, syncs, renders the report and hands it back", async () => {
-  const flushSave = spy();
-  const afterSync = spy();
-  const report = {
-    pushed: ["2026-11-16.fd"],
-    pulled: [],
-    conflicts: [],
-    notes: [],
-    syncedAtMs: 1234,
-  };
-
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.syncNow();
-
-      assert.deepEqual(flushSave.args(), [[]]);
+      assert.equal(flushSave.count(), 1);
       assert.equal(
-        els.syncStatus.textContent,
-        "sync.result(pushed=1,pulled=0,conflicts=0)"
+        els.settingsBackupStatus.textContent,
+        "backup.exported(path=/home/u/backup.tar)"
       );
-      assert.equal(afterSync.count(), 1);
-      assert.deepEqual(afterSync.args()[0], [report]);
-      assert.equal(els.syncNowBtn.disabled, false);
+      assert.equal(els.settingsBackupStatus.classList.contains("is-saved"), true);
     },
     {
-      deps: { flushSave, afterSync },
-      invokeTable: {
-        get_sync_status: {
-          supported: true,
-          bound: true,
-          displayName: "Diary",
-          treeUri: "content://tree",
-          autoSync: false,
-          lastSyncedAtMs: 0,
-          conflicts: [],
-        },
-        sync_now: report,
-      },
+      deps: { flushSave },
+      invokeTable: { export_backup: "/home/u/backup.tar" },
     }
   );
 });
 
-test("the auto-sync checkbox writes the preference and rolls back on failure", async () => {
-  const setSyncAutoEnabled = spy();
-  let failNext = false;
+test("exportBackup treats a cancelled dialog as a no-op", async () => {
   await withSettings(
     async ({ settings, els }) => {
-      await settings.refreshSyncStatus();
-      assert.equal(els.syncAuto.checked, true);
+      await settings.exportBackup();
+      assert.equal(els.settingsBackupStatus.textContent, "");
+    },
+    { invokeTable: { export_backup: null } }
+  );
+});
 
-      await settings.setSyncAuto(false);
-      assert.deepEqual(setSyncAutoEnabled.args().at(-1), [false]);
-
-      failNext = true;
-      await settings.setSyncAuto(true);
-      assert.equal(els.syncAuto.checked, false);
-      assert.match(els.syncError.textContent, /^sync.failed/);
+test("exportBackup reports a backend failure", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.exportBackup();
+      assert.equal(
+        els.settingsBackupStatus.textContent,
+        "backup.exportFailed(message=disk full)"
+      );
     },
     {
-      deps: { setSyncAutoEnabled },
       invokeTable: {
-        get_sync_status: {
-          supported: true,
-          bound: true,
-          displayName: "Diary",
-          treeUri: "content://tree",
-          autoSync: true,
-          lastSyncedAtMs: 0,
-          conflicts: [],
-        },
-        set_sync_auto: () => {
-          if (failNext) throw new Error("write failed");
+        export_backup: () => {
+          throw "disk full";
         },
       },
     }
   );
 });
 
-test("a sync conflict is resolved only after confirmation", async () => {
+test("restoreBackup asks first, then reloads the diary", async () => {
   const original = globalThis.confirm;
-  const afterSync = spy();
+  const afterRestore = spy(async () => {});
+  const flushSave = spy(async () => {});
+  globalThis.confirm = () => true;
   try {
-    globalThis.confirm = () => true;
     await withSettings(
-      async ({ settings, invoke }) => {
-        await settings.resolveSyncConflict("2026-11-16.fd", "remote");
-        assert.deepEqual(invoke.argsOf("resolve_sync_conflict"), {
-          path: "2026-11-16.fd",
-          keep: "remote",
-        });
-        assert.ok(invoke.commands().includes("sync_now"));
-        assert.equal(afterSync.count(), 1);
+      async ({ settings, els, invoke }) => {
+        await settings.restoreBackup();
+
+        assert.equal(flushSave.count(), 1);
+        assert.equal(afterRestore.count(), 1);
+        assert.ok(invoke.commands().includes("restore_backup"));
+        assert.equal(
+          els.settingsBackupStatus.textContent,
+          "backup.restored(path=/home/u/diary.local-backup-1)"
+        );
       },
       {
-        deps: { flushSave: spy(), afterSync },
-        invokeTable: {
-          get_sync_status: {
-            supported: true,
-            bound: true,
-            displayName: "Diary",
-            treeUri: "content://tree",
-            autoSync: false,
-            lastSyncedAtMs: 0,
-            conflicts: [],
-          },
-          resolve_sync_conflict: null,
-          sync_now: {
-            pushed: [],
-            pulled: ["2026-11-16.fd"],
-            conflicts: [],
-            notes: [],
-            syncedAtMs: 1,
-          },
-        },
+        deps: { flushSave, afterRestore },
+        invokeTable: { restore_backup: "/home/u/diary.local-backup-1" },
       }
     );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
+test("restoreBackup does nothing when the confirmation is declined", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => false;
+  try {
+    await withSettings(async ({ settings, invoke }) => {
+      await settings.restoreBackup();
+      assert.deepEqual(invoke.commands(), []);
+    });
   } finally {
     globalThis.confirm = original;
   }

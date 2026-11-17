@@ -5,7 +5,7 @@
 | 文件 | 內容 |
 | --- | --- |
 | [security.md](security.md) | 金鑰階層、Argon2id／KDF 校準、AAD 與版本、記憶體保護、供應鏈安全、已知限制 |
-| [sqlcipher.md](sqlcipher.md) | SQLCipher 主要儲存、HKDF 子金鑰、每日 XML 同步鏡像、舊格式遷移、完整性與備份 |
+| [sqlcipher.md](sqlcipher.md) | SQLCipher 主要儲存、HKDF 子金鑰、加密備份 `.tar`、舊格式遷移、完整性 |
 | [file-format.md](file-format.md) | 日記 XML 鏡像、`vault.xml`、附件／manifest、損壞檔、設定檔與儲存位置 |
 | [ui.md](ui.md) | 唯讀、月曆、介面縮放、手機版、多語系、設定頁／自動鎖定、主題 |
 | [css-reset.md](css-reset.md) | 瀏覽器 reset 的規則目的、載入順序、與 base.css 的分工、覆寫方式 |

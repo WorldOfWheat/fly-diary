@@ -2,7 +2,7 @@
 //!
 //! Legacy XML format (read-only during the one-time SQLCipher migration, plus
 //! `vault.xml` / `recovery.xml`). The current app stores entries in SQLCipher
-//! and syncs binary `.fd` records; it never writes `YYYY-MM-DD.xml`.
+//! and exports encrypted backups; it never writes `YYYY-MM-DD.xml`.
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>
