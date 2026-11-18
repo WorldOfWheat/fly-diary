@@ -22,7 +22,8 @@ diary/
 
 資料庫是權威來源，沒有每日衍生檔。舊 XML 只在一次性遷移時讀取，成功後刪除。
 備份是使用者手動複製整個日記資料夾（資料庫 + 金鑰包裝檔 + 附件），不是背景同步。
-後端仍保留 `export_backup`／`restore_backup` 產生與還原一致的 `.tar` 快照，供解鎖失敗時的救援流程使用。
+`export_backup`／`restore_backup` 產生與還原一致的同 vault `.tar` 快照，供解鎖失敗時救援；
+`import_backup` 則把 `.tar` 採用為新 vault，適合換裝置或在 App 資料被清除後重建。
 
 ## 金鑰階層
 
@@ -135,12 +136,16 @@ attachments/YYYY-MM-DD/*.bin # 每張圖片的加密 sidecar
 - 輸出沿用連線的 SQLCipher key，因此備份檔仍是密文；備份不含額外密碼，安全邊界
   仍是原本的密碼／回復短語。
 - 附件是 sidecar，必須一起備份；DB 的 `attachments` 表只存順序與 MIME。
-- 還原時會先解壓到暫存目錄，用目前的 diary key 執行 `verify_snapshot` 與
+- **還原**時會先解壓到暫存目錄，用目前的 diary key 執行 `verify_snapshot` 與
   `cipher_integrity_check`，確認 `vault_id`／`key_id` 與目前 vault 相符後，才把
   `diary.db` 與 `attachments/` 換入；舊資料留在 `<diary>.local-backup-*`。
-- `vault.xml` 與 `recovery.xml` 在備份檔內供手動救援，但 App 內還原**不會覆寫**
-  目前的金鑰包裝檔，避免把密碼或回復短語回滾到舊狀態。
-- 備份不是同步：沒有三方比較、沒有衝突合併，也不會自動上傳。
+  `vault.xml` 與 `recovery.xml` 在備份檔內供手動救援，但還原**不會覆寫**目前的
+  金鑰包裝檔，避免把密碼或回復短語回滾到舊狀態。
+- **匯入**（`import_backup`）不需要目前已有 vault。它用使用者輸入的備份密碼解開
+  `staging/vault.xml`，驗證快照後把 `vault.xml`、`recovery.xml`、`diary.db` 與
+  `attachments/` 一起安裝，並把舊 vault 的同一組檔案移到 `*.local-backup-*`。
+  這是唯一會替換金鑰包裝檔的 tar 流程，因此和還原分成不同 command 與 UI 入口。
+- 備份、還原與匯入都不是同步：沒有三方比較、沒有衝突合併，也不會自動上傳。
 
 ## 舊 XML 的處置（破壞性變更）
 
@@ -173,12 +178,15 @@ XML 仍是唯一真相。若某個 XML 連原始位元組都無法讀取，它�
   `integrity_check`。
 - **DB 無法開啟時**：`unlock` 回報 `databaseError` 後，解鎖畫面會出現「還原加密備份」；
   重新輸入密碼後會直接開啟備份檔並還原。App 不會自動建立空 DB，避免覆蓋唯一副本。
+  若整個 App 私有資料夾被清除，或要換到新裝置，則在解鎖畫面或設定 → 資料移轉使用
+  「匯入加密備份」，由備份的 `vault.xml` 重建 vault。
 - **刪除後的殘留**：`DELETE` 只把 page 放回 free list。`secure_delete=ON` 會先把
   內容歸零再加密，但仍建議刪除後執行 `PRAGMA wal_checkpoint(TRUNCATE)`，並定期
   `VACUUM`／`incremental_vacuum`。`VACUUM INTO` 備份只寫 live pages，不含 free list。
 - **備份**：完整的手動備份等價於複製整個日記資料夾（`diary.db` + `vault.xml` +
   `recovery.xml` + `attachments/`）。請先鎖定日記並 checkpoint，避免複製到不一致的
-  資料庫。後端仍提供 `export_backup` 產生一致的 `VACUUM INTO` `.tar` 快照。
+  資料庫。設定 → 資料移轉也提供 `export_backup`，產生一致的 `VACUUM INTO` `.tar` 快照；
+  同一區塊的匯入會採用備份的 vault，和只修復目前 vault 的還原不同。
 - **降級**：舊版 App 只認識 XML，SQLCipher 版本不再產生 XML。升級後請不要降級；
   舊版會看到空日記，或把新內容寫成 XML，造成分岔。
 

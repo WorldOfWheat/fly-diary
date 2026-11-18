@@ -159,13 +159,13 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `MainActivity` 設定 `FLAG_SECURE`，避免截圖、螢幕錄影與最近任務縮圖看到明文。
 - 備份與螢幕保護由 `scripts/harden-android.mjs` 套用；`src-tauri/gen/android` 仍保持 gitignored，重新產生 Android 專案後要用 `pnpm android:init`／`android:dev`／`android:build` 重新套用。
 
-### 加密備份與還原
+### 加密備份、還原與匯入
 
 完整備份是手動複製整個日記資料夾；後端另提供 `export_backup` 產生未壓縮的 `.tar`，
 內含 `VACUUM INTO` 的加密資料庫快照、`vault.xml`、選用的 `recovery.xml`，以及
 `attachments/` 下所有密文 sidecar。若 `diary.db` 無法開啟，解鎖畫面在密碼驗證成功後
 會直接提供「還原加密備份」按鈕；使用者需再輸入一次密碼（金鑰不留在鎖定畫面），
-驗證後才換檔。
+驗證後才換檔。設定 → 備份也提供同一個還原入口，適合在 App 內修復同一個 vault。
 
 - **只寫密文**：快照沿用 SQLCipher key，附件維持原本的 `attachment_key` 加密；備份
   過程不需要把明文寫到磁碟，也不會上傳到任何服務。
@@ -176,9 +176,18 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - **保留舊資料**：還原只替換 `diary.db` 與 `attachments/`，舊資料移到
   `<diary>.local-backup-<timestamp>`。`vault.xml` 與 `recovery.xml` 不覆寫，避免把
   密碼或回復短語回滾。
+- **匯入會替換金鑰包裝檔**：設定 → 資料移轉（或第一次啟動的解鎖畫面）的
+  `import_backup` 會解開備份的 `vault.xml`、驗證 DB 後，連同 `vault.xml`／
+  `recovery.xml`、`diary.db` 與 `attachments/` 一起安裝；舊 vault 的同一組檔案會
+  先移到 `*.local-backup-*`。這是跨裝置／資料被清除後的重建路徑，和同 vault 還原
+  不同，匯入前必須輸入該備份的密碼。
+- **只匯入自己建立的備份**：匯入會採用備份裡的 diary key。若來源不可信、且對方知道
+  該 vault 的密碼，對方之後仍可能解開你寫進去的新內容；改密碼只重包金鑰，不會換
+  diary key。`.tar` 沒有額外簽章可證明來源。
 - **備份檔的風險**：`.tar` 內含包裝後的 diary key，和 `vault.xml` 一樣是離線暴力
   破解的材料；必須與日記分開保存。取得備份檔的人仍需要密碼或回復短語才能解開 DB。
-- **不是同步**：沒有三方比較或衝突合併；兩台裝置各自還原會回到各自備份當時的狀態。
+- **不是同步**：沒有三方比較或衝突合併；兩台裝置各自還原或匯入會回到各自備份當時
+  的狀態。
 - **Auto Backup 的範圍**：Android Auto Backup 只涵蓋 App 私有資料，不包含使用者自行
   匯出到其他位置的 `.tar`。異地副本要由使用者自己的備份工具負責。
 
@@ -261,7 +270,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
 - Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；安全性覆蓋由 `scripts/harden-android.mjs` 套用，重新產生專案後要再跑一次。換一台機器建置時需要自備 Android SDK／NDK 與 Rust target；目前 repo 沒有 iOS 專案。
-- Android 沒有背景備份服務：使用者要自行複製整個日記資料夾；`.tar` 還原只在解密鎖定畫面提供。App 被關閉或鎖定後不會自動備份，是否把複本放到雲端或另一台裝置由使用者自行負責。
+- Android 沒有背景備份服務：使用者要自行匯出 `.tar` 或複製整個日記資料夾。`.tar` 還原只在同一個 vault 的救援流程提供；跨裝置或資料被清除後要用「匯入加密備份」重建 vault。App 被關閉或鎖定後不會自動備份，是否把複本放到雲端或另一台裝置由使用者自行負責。
 - Android 的存檔位置選擇器使用 SAF document provider；provider 不一定支援 seek 或原子替換，但備份只寫入一個新檔，不覆寫現有日記資料庫。
 - 防止截圖在 Windows、macOS 與 Android（`FLAG_SECURE`）生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。

@@ -19,7 +19,8 @@ fly-diary/
 │   ├── dom.js              # DOM 查表（els），無副作用
 │   ├── wiring.js           # 所有事件綁定，以 deps 注入回呼（可單獨測試）
 │   ├── calendar.js         # 全螢幕日期選擇器（createCalendar）
-│   ├── import-dialog.js    # 匯入對話框：掃描、進度、報告（createImportDialog）
+│   ├── import-dialog.js    # 資料夾匯入對話框：掃描、進度、報告（createImportDialog）
+│   ├── backup-dialog.js    # 加密 tar 匯入對話框：備份密碼、驗證、換入（createBackupImportDialog）
 │   ├── stats-dialog.js     # 統計對話框：卡片與長條圖（createStatsDialog）
 │   ├── settings-dialog.js  # 設定對話框：日記本、自動鎖定、KDF、改密碼（createSettingsDialog）
 │   ├── recovery-dialog.js  # 一次性 BIP39 短語、獨立確認視窗（createRecoveryDialog）
@@ -98,7 +99,7 @@ fly-diary/
 │       ├── main.rs         # 進入點；關閉 core dump 與同使用者記憶體存取
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
 │       ├── db.rs           # SQLCipher 主要儲存：HKDF、schema、遷移、完整性、快照
-│       ├── backup.rs       # 加密備份 tar：串流寫入／解壓、路徑驗證、原子換入
+│       ├── backup.rs       # 加密備份 tar：串流寫入／解壓、路徑驗證、原子換入／匯入
 │       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM、recovery key 展開
 │       ├── bip39.rs        # BIP39 英文單字編碼／解碼、checksum、確認位置、wordlist 查詢
@@ -135,7 +136,7 @@ fly-diary/
 - **全文搜尋不落盤**：搜尋需要明文，所以 `scan_vault` 在解鎖後從 DB 讀出 entries 並建立記憶體索引（原文 + 小寫副本），只回傳命中摘要。索引是衍生狀態，`lock()`、切換 workspace 或重新解鎖時直接清除並 zeroize；不新增任何明文檔案。SQLCipher 的 DB 本身在磁碟上仍是密文。
 - **收藏旗標在 DB 裡**：`entries.favourite` 是資料的一部分；普通存檔的 `ON CONFLICT DO UPDATE` 不會覆寫它，`set_favourite` 只改這個欄位。
 - **壞檔逐篇隔離已移除**：SQLCipher 是 page-level 加密 + HMAC，單一壞頁可能讓整個 DB 無法開啟，沒有「列出第 N 篇壞檔」的概念。完整性由 `check_vault_integrity`（`cipher_integrity_check` + `integrity_check`）負責。遷移時無法解讀的 XML 原始位元組會存進加密的 `legacy_broken` 表，舊的「損壞」分頁仍可列出與匯出。
-- **救援靠備份**：DB 若無法開啟，App 不會建立空 DB；使用者要在解鎖畫面的救援流程中還原加密 `.tar`。`backup::install` 只替換 DB 與附件，舊資料保留在 `*.local-backup-*`。
+- **救援靠備份**：DB 若無法開啟，App 不會建立空 DB；使用者要在解鎖畫面的救援流程中還原加密 `.tar`。`backup::install` 只替換 DB 與附件，舊資料保留在 `*.local-backup-*`。若是換裝置或 App 私有資料被清除，則用 `import_backup` 採用備份的 `vault.xml`／`recovery.xml` 重建整個 vault；這和同 vault 還原刻意分成不同 command 與 UI 入口。
 - **受限的平行 I/O**：舊 XML 的掃描、遷移與匯入來源檔仍可走 `pool.rs` 的專用 Rayon pool（上限 `min(4, cores)`）；SQLCipher 寫入本身以單一連線／transaction 序列化，避免多個 writer 互相鎖住。平行結果最後才合併，輸出穩定。
 - **搜尋查詢的平行門檻**：`SearchIndex` 記錄原始文字總量，低於 2 MiB 時循序掃描（避免 Rayon 喚醒成本），超過才把文件分給同一個 I/O pool；收集後一律依日期新到舊排序。
 - **壞檔唯讀鎖定**：`selectDate` 在載入前先查壞檔清單，命中就直接鎖定、完全不呼叫 `get_entry`；`saveNow` 與 `scheduleSave` 也都在 `lockedDate` 有值時提早返回。三層防線確保空白編輯器不可能覆蓋掉一個只是暫時解不開的檔案——這是壞檔處理裡唯一會造成永久資料損失的路徑。
@@ -173,7 +174,7 @@ fly-diary/
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
-- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`restore_backup`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
+- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`import_backup`、`restore_backup`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
 - **Argon2id 一定離開主執行緒**：`unlock`、`create_vault`、`change_passphrase` 各要跑一到兩次刻意放慢的 Argon2id 派生（單次約一秒），是最容易讓人感覺到凍結的地方。三者都改為 `async` 並把派生交給 `blocking()`；session 只在工作回傳後才寫入，因為 `tauri::State` 無法 move 進 `spawn_blocking`。
 - **金鑰先複製再交給背景執行緒**：`MutexGuard` 不是 `Send`，也不能讓鎖跨越整個寫入過程（會擋住 `lock` 與其他命令）。所有需要金鑰的命令都先用 `session_key()` 把 `[u8; 32]` 複製出來，再 move 進閉包；鎖只持有到複製完成為止。
 - **存檔的資料庫往返**：寫入一篇日記包含讀取舊列（保留收藏旗標）與 `INSERT ... ON CONFLICT` 寫入。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，必須離開主執行緒；raw key 沒有 KDF，每次開啟 DB 的成本很低。

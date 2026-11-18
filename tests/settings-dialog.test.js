@@ -45,6 +45,11 @@ const SETTINGS_IDS = [
   "recoveryGenerateBtn",
   "recoveryRemoveBtn",
   "settingsStatsBtn",
+  "settingsRestoreBtn",
+  "settingsBackupStatus",
+  "settingsTarExportBtn",
+  "settingsTarImportBtn",
+  "settingsTransferStatus",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -77,6 +82,8 @@ function harness(overrides = {}) {
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
     get_recovery_status: { enabled: false },
     remove_recovery: null,
+    restore_backup: "/tmp/fly-diary-backup.tar",
+    export_backup: "/tmp/fly-diary-backup.tar",
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -91,6 +98,9 @@ function harness(overrides = {}) {
     openStats: spy(),
     changeDiaryDir: spy(),
     openRecovery: spy(),
+    openImportBackup: spy(),
+    flushSave: spy(),
+    afterRestore: spy(),
     ...overrides.deps,
   };
 
@@ -884,6 +894,68 @@ test("changeDiaryDir closes the dialog before locking", async () => {
   });
 });
 
+test("restoreBackup flushes, restores, reloads and reports the path", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await settings.restoreBackup();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(deps.flushSave.args(), [[]]);
+    assert.equal(invoke.commands().includes("restore_backup"), true);
+    assert.deepEqual(deps.afterRestore.args(), [[]]);
+    assert.equal(
+      els.settingsBackupStatus.textContent,
+      "backup.restored(path=/tmp/fly-diary-backup.tar)"
+    );
+    assert.equal(els.settingsRestoreBtn.disabled, false);
+  });
+});
+
+test("restoreBackup does nothing when the confirmation is declined", async () => {
+  await withSettings(async ({ settings, invoke }) => {
+    const original = globalThis.confirm;
+    globalThis.confirm = () => false;
+    try {
+      await settings.restoreBackup();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(invoke.commands(), []);
+  });
+});
+
+test("exportBackup flushes before invoking export_backup", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    await settings.exportBackup();
+
+    assert.deepEqual(deps.flushSave.args(), [[]]);
+    assert.deepEqual(invoke.commands(), ["export_backup"]);
+    assert.equal(
+      els.settingsTransferStatus.textContent,
+      "backup.exported(path=/tmp/fly-diary-backup.tar)"
+    );
+    assert.equal(els.settingsTarExportBtn.disabled, false);
+  });
+});
+
+test("openImportBackup closes the dialog before handing over", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.openImportBackup();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.openImportBackup.args(), [[]]);
+  });
+});
+
 test("the vault-wide actions never write settings", async () => {
   await withSettings(async ({ settings, invoke }) => {
     await settings.openImport();
@@ -905,5 +977,8 @@ function settingsDeps(els) {
     openImport: spy(),
     openStats: spy(),
     changeDiaryDir: spy(),
+    openImportBackup: spy(),
+    flushSave: spy(),
+    afterRestore: spy(),
   };
 }

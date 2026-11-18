@@ -28,6 +28,7 @@ const LOCK_IDS = [
   "lockSubtitle",
   "lockSubmit",
   "lockRestore",
+  "lockImport",
   "passphrase",
   "passphraseConfirm",
   "workspaceRow",
@@ -327,6 +328,8 @@ test("renderLockScreen shows the path field on first run", () => {
     assert.equal(els.passphrase.placeholder, "lock.passphraseSet");
     assert.equal(els.passphrase.autocomplete, "new-password");
     assert.equal(els.lockSubmit.textContent, "lock.submitCreate");
+    // First run also offers importing an encrypted tar instead.
+    assert.equal(els.lockImport.hidden, false);
   });
 });
 
@@ -343,6 +346,7 @@ test("renderLockScreen asks for a new passphrase in an empty folder", () => {
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.newInFolder");
     assert.equal(els.passphraseConfirm.hidden, false);
     assert.equal(els.lockSubmit.textContent, "lock.submitCreate");
+    assert.equal(els.lockImport.hidden, false);
   });
 });
 
@@ -361,6 +365,8 @@ test("renderLockScreen asks only for the passphrase for a returning user", () =>
     assert.equal(els.passphrase.placeholder, "lock.passphrase");
     assert.equal(els.passphrase.autocomplete, "current-password");
     assert.equal(els.lockSubmit.textContent, "lock.submitUnlock");
+    // Replacing an existing vault is an explicit action in Settings.
+    assert.equal(els.lockImport.hidden, true);
   });
 });
 

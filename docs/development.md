@@ -139,5 +139,7 @@ generated 專案，仍保持 gitignored；重新產生後請用 `pnpm android:in
 手機版的備份使用 `tauri-plugin-dialog` 的系統檔案選擇器與 `tauri-plugin-fs` 開啟
 `content://` 檔案，不需要自訂 SAF 外掛。備份是單一 `.tar`，寫入位置由使用者選擇；
 `diary.db` 仍留在 App 私有資料夾。還原時會先解到 App cache，驗證後才替換 DB 與附件，
-舊資料留在私有資料夾旁的 `*.local-backup-*`。這條路徑沒有 Kotlin／Gradle 專屬程式碼，
-桌面與 Android 共用同一個 `backup.rs`。
+舊資料留在私有資料夾旁的 `*.local-backup-*`。第一次啟動的解鎖畫面與設定 → 資料移轉
+都提供 `.tar` 匯入；匯入會採用備份的 `vault.xml`／`recovery.xml`，適合換手機或在
+App 資料被清除後重建。這條路徑沒有 Kotlin／Gradle 專屬程式碼，桌面與 Android 共用
+同一個 `backup.rs`。

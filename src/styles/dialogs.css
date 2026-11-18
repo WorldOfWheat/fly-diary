@@ -381,6 +381,16 @@
   color: var(--text-muted);
 }
 
+/* One-line result under a settings action (export/restore/import). */
+.settings-status {
+  min-height: 1em;
+  word-break: break-all;
+}
+
+.settings-status.is-saved {
+  color: var(--accent);
+}
+
 /* Label on the left, control on the right. The label column is fixed so the
    inputs line up down the dialog. */
 .settings-row {

@@ -41,6 +41,13 @@
 //   closeSettings       — () => void
 //   saveSettings        — () => void
 //   calibrateKdf        — () => void
+//   restoreBackup       — () => void
+//   exportBackup        — () => void
+//   openImportBackup    — () => void
+//   openImportBackupFromLock — () => void
+//   closeImportBackup   — () => void
+//   confirmImportBackup — () => void
+//   isImportBackupOpen  — () => boolean
 //   openStats           — () => void
 //   closeStats          — () => void
 //   isStatsOpen         — () => boolean
@@ -208,6 +215,9 @@ export function initEventWiring(deps) {
   // Recovery phrase form, which replaces the passphrase form on the same card.
   if (els.recoveryOpen) on(els.recoveryOpen, "click", deps.showRecoveryForm);
   if (els.lockRestore) on(els.lockRestore, "click", deps.restoreFromLock);
+  if (els.lockImport) {
+    on(els.lockImport, "click", deps.openImportBackupFromLock);
+  }
   if (els.recoveryBack) on(els.recoveryBack, "click", deps.hideRecoveryForm);
   if (els.recoveryForm) on(els.recoveryForm, "submit", deps.handleRecoverySubmit);
 
@@ -500,6 +510,25 @@ export function initEventWiring(deps) {
   on(els.settingsImportBtn, "click", deps.openImportFromSettings);
   on(els.settingsStatsBtn, "click", deps.openStatsFromSettings);
   on(els.settingsChangeDirBtn, "click", deps.changeDiaryDirFromSettings);
+  if (els.settingsRestoreBtn) {
+    on(els.settingsRestoreBtn, "click", deps.restoreBackup);
+  }
+  if (els.settingsTarExportBtn) {
+    on(els.settingsTarExportBtn, "click", deps.exportBackup);
+  }
+  if (els.settingsTarImportBtn) {
+    on(els.settingsTarImportBtn, "click", deps.openImportBackup);
+  }
+
+  // Encrypted tar import dialog.
+  if (els.backupImportOverlay) {
+    on(els.backupImportClose, "click", deps.closeImportBackup);
+    on(els.backupImportCancel, "click", deps.closeImportBackup);
+    on(els.backupImportConfirm, "click", deps.confirmImportBackup);
+    on(els.backupImportOverlay, "mousedown", (e) => {
+      if (e.target === els.backupImportOverlay) deps.closeImportBackup();
+    });
+  }
 
   // Statistics dialog.
   on(els.statsClose, "click", deps.closeStats);
@@ -589,6 +618,12 @@ export function initEventWiring(deps) {
     if (e.key === "Escape" && deps.isAttachmentViewerOpen?.()) {
       e.preventDefault();
       deps.closeAttachmentViewer();
+      return;
+    }
+
+    if (e.key === "Escape" && deps.isImportBackupOpen?.()) {
+      e.preventDefault();
+      deps.closeImportBackup();
       return;
     }
 

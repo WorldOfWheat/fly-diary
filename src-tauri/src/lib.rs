@@ -1396,6 +1396,149 @@ async fn export_backup(
     Ok(Some(display))
 }
 
+/// Report produced by importing an encrypted backup as a new vault.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupImportReport {
+    /// Sibling folder that received the previous diary, when there was one.
+    backup_dir: String,
+    files: usize,
+    attachments: usize,
+}
+
+/// Import an encrypted backup as the diary in `target_dir`.
+///
+/// This is deliberately separate from [`restore_backup`]. Restore repairs the
+/// *current* vault and keeps its key wrappers; import adopts the archive's
+/// `vault.xml`/`recovery.xml`, so it can be used on a new device or after the
+/// app's private storage was wiped. The archive must be unlocked with its own
+/// passphrase first, and every check runs before the target is touched.
+#[tauri::command]
+async fn import_backup(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    passphrase: String,
+    target_dir: Option<String>,
+    overwrite: bool,
+) -> Result<Option<BackupImportReport>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    if passphrase.is_empty() {
+        return Err("Enter the backup passphrase".to_string());
+    }
+
+    let config = config_dir(&app)?;
+    let config_for_settings = config.clone();
+    let configured = blocking("Read settings", move || settings::read_settings(&config)).await?;
+    let target = match target_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    {
+        Some(path) => PathBuf::from(path),
+        None => match configured.as_ref() {
+            Some(settings) => settings.diary_dir.clone(),
+            None => default_diary_dir(&app)?,
+        },
+    };
+    settings::validate_diary_dir(&target)?;
+
+    // Importing into another folder while unlocked would leave the session key
+    // pointing at the old vault. The lock screen is the place to switch folders.
+    if session.lock().unwrap().key.is_some() {
+        if let Some(settings) = configured.as_ref() {
+            if settings.diary_dir != target {
+                return Err(
+                    "Lock the diary before importing a backup into another folder".to_string(),
+                );
+            }
+        }
+    }
+
+    // A folder with only an orphan diary.db (no vault.xml) is not a usable
+    // vault; installing over it is safe because install_import moves the old
+    // database and attachments into `.local-backup-*` first.
+    if !overwrite && target.join("vault.xml").exists() {
+        return Err("The target folder already contains a diary".to_string());
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("匯入加密備份")
+        .add_filter("Fly Diary backup", &["tar"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let picked = rx.recv().map_err(|e| format!("File picker failed: {e}"))?;
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let cache = cache_dir(&app)?;
+    let staging = cache.join(unique_scratch_name("import", ""));
+    let staging_cleanup = staging.clone();
+    let target_for_install = target.clone();
+    let app2 = app.clone();
+
+    let result = blocking("Import backup", move || {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        let mut file = app2
+            .fs()
+            .open(path, options)
+            .map_err(|e| format!("Failed to open the backup file: {e}"))?;
+        let report = backup::extract(&mut file, &staging)?;
+
+        let context = storage::vault_context(&staging)?
+            .ok_or_else(|| "The backup does not contain an upgraded vault".to_string())?;
+        let key = storage::unlock_vault(&staging, &passphrase)?;
+        db::verify_snapshot(&staging, &key, &context)?;
+        let integrity = db::integrity_check_snapshot(&staging, &key)?;
+        if !integrity.ok {
+            return Err(format!(
+                "The backup database failed its integrity check: {}",
+                integrity.messages.join("; ")
+            ));
+        }
+
+        // Persist the workspace before installing. If the install fails, the
+        // settings file merely points at the target folder, which is harmless.
+        let mut settings =
+            configured.unwrap_or_else(|| settings::Settings::new(target_for_install.clone()));
+        if settings.diary_dir != target_for_install {
+            settings.diary_dir = target_for_install.clone();
+            settings::write_settings(&config_for_settings, &settings)?;
+        }
+
+        let backup_dir = backup::install_import(&staging, &target_for_install)?;
+        Ok((report, backup_dir, key))
+    })
+    .await;
+
+    match result {
+        Ok((report, backup_dir, key)) => {
+            // The imported vault has its own diary key. Replace the session so
+            // an import opened from settings does not keep using the old key.
+            *session.lock().unwrap() = Session {
+                key: Some(LockedKey::new(&key)),
+            };
+            clear_search(&app);
+            Ok(Some(BackupImportReport {
+                backup_dir: backup_dir.to_string_lossy().into_owned(),
+                files: report.files,
+                attachments: report.attachments,
+            }))
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_cleanup);
+            Err(error)
+        }
+    }
+}
+
 /// Replace the diary database and attachments with an encrypted backup.
 ///
 /// The current database and attachments are kept in a sibling
@@ -1729,6 +1872,7 @@ pub fn run() {
             search_entries,
             export_broken_entry,
             export_backup,
+            import_backup,
             restore_backup,
             pick_import_dir,
             scan_import,

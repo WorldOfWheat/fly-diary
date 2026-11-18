@@ -30,6 +30,10 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   openStats          — () => void
 //   changeDiaryDir     — () => void | Promise<void>
 //   openRecovery       — () => void | Promise<void>
+//   openImportBackup   — () => void | Promise<void>
+//   flushSave          — () => Promise<void>
+//   afterRestore       — () => Promise<void>
+//   beginNativePicker / endNativePicker — optional picker guard
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -214,6 +218,106 @@ export function createSettingsDialog(deps) {
     }
   }
 
+  /** Write a one-line result under a vault action. */
+  function showSectionStatus(el, text, saved = false) {
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("is-saved", saved);
+  }
+
+  /** Clear both vault-action status lines. */
+  function clearVaultStatus() {
+    showSectionStatus(els.settingsBackupStatus, "");
+    showSectionStatus(els.settingsTransferStatus, "");
+  }
+
+  /**
+   * Export the whole vault as one encrypted tar.
+   *
+   * The pending autosave is flushed first, otherwise the snapshot would miss
+   * the last keystrokes. Cancelling the save dialog is not an error.
+   */
+  async function exportBackup() {
+    if (!els.settingsTarExportBtn) return;
+    els.settingsTarExportBtn.disabled = true;
+    showSectionStatus(els.settingsTransferStatus, "");
+    try {
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("export_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        showSectionStatus(
+          els.settingsTransferStatus,
+          deps.t("backup.exported", { path }),
+          true
+        );
+      }
+    } catch (err) {
+      console.error("export_backup failed:", err);
+      showSectionStatus(
+        els.settingsTransferStatus,
+        deps.t("backup.exportFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsTarExportBtn.disabled = false;
+    }
+  }
+
+  /**
+   * Restore a tar into the *current* vault.
+   *
+   * This is the rescue path: the session key stays the same, `vault.xml` and
+   * `recovery.xml` are not replaced, and the backend keeps the old database and
+   * attachments in `*.local-backup-*`. Importing a different vault lives in the
+   * separate transfer section.
+   */
+  async function restoreBackup() {
+    if (!els.settingsRestoreBtn) return;
+    if (!confirm(deps.t("backup.restoreConfirm"))) return;
+    els.settingsRestoreBtn.disabled = true;
+    showSectionStatus(els.settingsBackupStatus, "");
+    try {
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("restore_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        await deps.afterRestore?.();
+        showSectionStatus(
+          els.settingsBackupStatus,
+          deps.t("backup.restored", { path }),
+          true
+        );
+      }
+    } catch (err) {
+      console.error("restore_backup failed:", err);
+      showSectionStatus(
+        els.settingsBackupStatus,
+        deps.t("backup.restoreFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsRestoreBtn.disabled = false;
+    }
+  }
+
+  /** Open the separate tar-import dialog. */
+  function openImportBackup() {
+    return handOver(deps.openImportBackup);
+  }
+
   /** Show the folder the diary is stored in. */
   async function renderDiaryPath() {
     try {
@@ -233,6 +337,7 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    clearVaultStatus();
     returnToSettings = false;
 
     // Not awaited: the path and build info are informational, so the dialog
@@ -292,6 +397,7 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    clearVaultStatus();
   }
 
   /**
@@ -447,6 +553,9 @@ export function createSettingsDialog(deps) {
     openRecovery,
     openStats,
     returnFromStats,
+    exportBackup,
+    restoreBackup,
+    openImportBackup,
     openImport: () => handOver(deps.openImport),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),
   };

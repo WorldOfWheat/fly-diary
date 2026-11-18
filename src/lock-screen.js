@@ -414,6 +414,11 @@ export function createLockScreen(deps) {
       // opening the recovery form, so it can never target the wrong vault.
       els.recoveryOpen.hidden = !vaultInitialized || !recoveryAvailable;
     }
+    if (els.lockImport) {
+      // Importing is the first-run path for a folder that has no vault yet.
+      // Replacing an existing vault is an explicit action in Settings.
+      els.lockImport.hidden = vaultInitialized || recoveryMode;
+    }
     if (els.lockForm && els.recoveryForm) {
       els.lockForm.hidden = recoveryMode;
       els.recoveryForm.hidden = !recoveryMode;

@@ -72,6 +72,7 @@ function fakeTarget(extra = {}) {
 const ELEMENT_IDS = [
   "lockForm",
   "lockRestore",
+  "lockImport",
   "browseDir",
   "switchWorkspace",
   "cancelWorkspace",
@@ -131,6 +132,13 @@ const ELEMENT_IDS = [
   "settingsImportBtn",
   "settingsStatsBtn",
   "settingsChangeDirBtn",
+  "settingsRestoreBtn",
+  "settingsTarExportBtn",
+  "settingsTarImportBtn",
+  "backupImportOverlay",
+  "backupImportClose",
+  "backupImportCancel",
+  "backupImportConfirm",
   "sidebarCollapse",
   "sidebarExpand",
   "statsClose",
@@ -192,6 +200,7 @@ function harness(overrides = {}) {
     els,
     handleUnlockSubmit: spy("handleUnlockSubmit"),
     restoreFromLock: spy("restoreFromLock"),
+    openImportBackupFromLock: spy("openImportBackupFromLock"),
     browseForDir: spy("browseForDir"),
     openWorkspacePicker: spy("openWorkspacePicker"),
     cancelWorkspacePicker: spy("cancelWorkspacePicker"),
@@ -239,9 +248,15 @@ function harness(overrides = {}) {
     closeSettings: spy("closeSettings"),
     saveSettings: spy("saveSettings"),
     calibrateKdf: spy("calibrateKdf"),
+    restoreBackup: spy("restoreBackup"),
+    exportBackup: spy("exportBackup"),
     openImportFromSettings: spy("openImportFromSettings"),
     openStatsFromSettings: spy("openStatsFromSettings"),
     changeDiaryDirFromSettings: spy("changeDiaryDirFromSettings"),
+    openImportBackup: spy("openImportBackup"),
+    closeImportBackup: spy("closeImportBackup"),
+    confirmImportBackup: spy("confirmImportBackup"),
+    isImportBackupOpen: () => false,
     closeStats: spy("closeStats"),
     isStatsOpen: () => false,
     toggleSidebar: spy("toggleSidebar"),
@@ -957,6 +972,45 @@ test("the settings dialog hosts import, statistics and the folder picker", () =>
   withHarness((h) => {
     h.els.settingsChangeDirBtn.dispatch("click");
     assert.deepEqual(h.names(), ["changeDiaryDirFromSettings"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsRestoreBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["restoreBackup"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsTarExportBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["exportBackup"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsTarImportBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["openImportBackup"]);
+  });
+});
+
+test("the lock screen and import dialog reach their tar actions", () => {
+  withHarness((h) => {
+    h.els.lockImport.dispatch("click");
+    assert.deepEqual(h.names(), ["openImportBackupFromLock"]);
+  });
+
+  withHarness((h) => {
+    h.els.backupImportConfirm.dispatch("click");
+    assert.deepEqual(h.names(), ["confirmImportBackup"]);
+  });
+
+  withHarness((h) => {
+    h.els.backupImportCancel.dispatch("click");
+    assert.deepEqual(h.names(), ["closeImportBackup"]);
+  });
+
+  withHarness((h) => {
+    h.els.backupImportOverlay.dispatch("mousedown", {
+      target: h.els.backupImportOverlay,
+    });
+    assert.deepEqual(h.names(), ["closeImportBackup"]);
   });
 });
 

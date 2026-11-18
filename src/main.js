@@ -41,6 +41,7 @@ import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
 import { createRecoveryDialog } from "./recovery-dialog.js";
+import { createBackupImportDialog } from "./backup-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
 import { createAttachmentGallery } from "./attachments.js";
 import { createNativeFileDrop } from "./native-drop.js";
@@ -204,8 +205,12 @@ let statsDialog;
 let settingsDialog;
 /** @type {ReturnType<typeof createRecoveryDialog>} */
 let recoveryDialog;
+/** @type {ReturnType<typeof createBackupImportDialog>} */
+let backupImportDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
+/** Where the tar-import dialog was opened from, for cancel behaviour. */
+let importBackupOrigin = null;
 /** @type {ReturnType<typeof createAttachmentGallery>} */
 let attachmentGallery;
 /** @type {ReturnType<typeof createNativeFileDrop>} */
@@ -1964,6 +1969,87 @@ function resetEditorState() {
 }
 
 /**
+ * Reload the visible diary after an in-place backup restore.
+ *
+ * The session key is unchanged (the backup was verified against it), but the
+ * database and attachments were replaced, so the editor, list, search index and
+ * stats must all be rebuilt from disk.
+ */
+async function reloadAfterRestore() {
+  // The backend dropped the in-memory full-text index, so a restored diary
+  // must not keep showing search hits that point at the old database.
+  searchQuery = "";
+  searchResults = null;
+  if (els.search) els.search.value = "";
+  currentView = "all";
+  syncViewTabs("all");
+  resetEditorState();
+  await refreshList({ scanBroken: true });
+  syncHeaderActions();
+}
+
+/**
+ * Open the tar-import dialog from the settings dialog.
+ *
+ * Flush the editor first: importing replaces the current vault, so any pending
+ * keystrokes should at least be in the old database that is moved aside.
+ */
+async function openImportBackupFromSettings() {
+  await flushPendingSave();
+  importBackupOrigin = "settings";
+  backupImportDialog.open();
+}
+
+/** Open the tar-import dialog from the lock screen's first-run state. */
+function openImportBackupFromLock() {
+  importBackupOrigin = "lock";
+  const targetDir = els.diaryDir?.value?.trim() || null;
+  backupImportDialog.open({ targetDir });
+}
+
+/** Reopen settings when an import opened from there is cancelled. */
+function handleImportBackupClosed() {
+  if (importBackupOrigin !== "settings") {
+    importBackupOrigin = null;
+    return;
+  }
+  importBackupOrigin = null;
+  // If the diary locked while the dialog was open, stay on the lock screen.
+  if (!els.app.hidden) settingsDialog.openSettings();
+}
+
+/**
+ * Hand off after a successful tar import.
+ *
+ * The backend has already replaced the session key with the imported vault's
+ * diary key. A lock-screen import can enter the app directly; an import from
+ * settings must rebuild the editor/list because the database underneath them
+ * changed.
+ */
+async function afterBackupImport(report) {
+  importBackupOrigin = null;
+  // The old WebView state belongs to the old database. In particular, never let
+  // a pending autosave write its old text into the imported vault.
+  clearPendingSave();
+
+  if (els.app.hidden) {
+    await enterApp();
+  } else {
+    await reloadAfterRestore();
+    const today = await invoke("today");
+    await selectDate(today);
+  }
+
+  setStatus(
+    t("backup.imported", {
+      files: report?.files ?? 0,
+      attachments: report?.attachments ?? 0,
+    }),
+    true
+  );
+}
+
+/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
@@ -2101,6 +2187,7 @@ function initSuspendLock() {
 function handleAndroidBack() {
   const action = backButtonAction({
     attachmentViewer: attachmentGallery.isViewerOpen(),
+    backupImport: backupImportDialog?.isOpen?.() ?? false,
     recovery: recoveryDialog.isOpen(),
     stats: statsDialog.isStatsOpen(),
     importDialog: importDialog.isImportOpen(),
@@ -2113,6 +2200,9 @@ function handleAndroidBack() {
   switch (action) {
     case "closeAttachments":
       attachmentGallery.closeViewer();
+      return;
+    case "closeBackupImport":
+      backupImportDialog.close();
       return;
     case "closeRecovery":
       recoveryDialog.close();
@@ -2286,6 +2376,21 @@ function createControllers() {
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
     openRecovery: () => recoveryDialog.open(),
+    openImportBackup: openImportBackupFromSettings,
+    flushSave: flushPendingSave,
+    afterRestore: reloadAfterRestore,
+    beginNativePicker,
+    endNativePicker,
+  });
+
+  backupImportDialog = createBackupImportDialog({
+    els,
+    invoke,
+    t,
+    onImported: afterBackupImport,
+    onClosed: handleImportBackupClosed,
+    beginNativePicker,
+    endNativePicker,
   });
 
   recoveryDialog = createRecoveryDialog({
@@ -2472,6 +2577,7 @@ function wireEvents() {
     // Lock screen
     handleUnlockSubmit: lockScreen.handleUnlockSubmit,
     restoreFromLock: lockScreen.restoreFromLock,
+    openImportBackupFromLock,
     browseForDir: lockScreen.browseForDir,
     openWorkspacePicker: lockScreen.openWorkspacePicker,
     cancelWorkspacePicker: lockScreen.cancelWorkspacePicker,
@@ -2536,6 +2642,8 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
+    restoreBackup: settingsDialog.restoreBackup,
+    exportBackup: settingsDialog.exportBackup,
     // Recovery phrase: create/show-once dialog and removal.
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,
@@ -2547,6 +2655,11 @@ function wireEvents() {
     openImportFromSettings: settingsDialog.openImport,
     openStatsFromSettings: settingsDialog.openStats,
     changeDiaryDirFromSettings: settingsDialog.changeDiaryDir,
+    openImportBackup: settingsDialog.openImportBackup,
+    // Encrypted tar import dialog.
+    closeImportBackup: () => backupImportDialog.close(),
+    confirmImportBackup: () => backupImportDialog.submit(),
+    isImportBackupOpen: () => backupImportDialog?.isOpen?.() ?? false,
     // Statistics
     closeStats: statsDialog.closeStats,
     isStatsOpen: statsDialog.isStatsOpen,

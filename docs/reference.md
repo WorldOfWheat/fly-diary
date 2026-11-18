@@ -48,7 +48,8 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體；回傳 `{ legacy, databaseError }`                  |
 | `migrate_storage()`                       | 把舊 XML 日記遷移成 SQLCipher（需解鎖）；成功後刪除 XML                      |
 | `export_backup()`                         | 需解鎖；開啟存檔對話框，匯出加密 `.tar`（DB 快照 + 金鑰包裝檔 + 附件）        |
-| `restore_backup()`                        | 需解鎖；選擇 `.tar`，驗證屬於同一個 vault 後替換 DB 與附件，舊資料保留在 `*.local-backup-*` |
+| `import_backup(passphrase, targetDir?, overwrite)` | 不需目前 vault；解開 `.tar` 的 `vault.xml`、驗證 DB 後安裝成新日記本，舊 vault 保留在 `*.local-backup-*` |
+| `restore_backup()`                        | 需解鎖；選擇 `.tar`，驗證屬於同一個 vault 後只替換 DB 與附件，舊資料保留在 `*.local-backup-*` |
 | `check_vault_integrity()`                 | 執行 SQLCipher `cipher_integrity_check` 與 SQLite `integrity_check`         |
 | `lock()`                                  | 清除記憶體中的金鑰                                                           |
 | `is_unlocked()`                           | 目前是否已解鎖                                                               |
