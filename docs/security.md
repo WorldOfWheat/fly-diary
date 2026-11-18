@@ -2,7 +2,11 @@
 
 [← 回到 README](../README.md) · [文件索引](README.md)
 
-Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼或回復短語」。以下說明金鑰階層、KDF、AAD、回復短語、記憶體保護、供應鏈防護與已知限制。
+Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼或回復短語」。主要儲存是 SQLCipher 的 `diary.db`；備份是使用者明確匯出的加密 `.tar`（資料庫快照 + 金鑰包裝檔 + 附件）。以下說明金鑰階層、KDF、AAD、回復短語、記憶體保護、供應鏈防護與已知限制。
+
+> **XML 已完全廢除**：除了 `vault.xml` 與 `recovery.xml`，App 不再讀寫任何日記 XML。
+> 舊格式只在一次性遷移時讀取，成功後刪除；無法解讀的原始位元組存進加密的
+> `legacy_broken` 表。新格式與救援流程見 [sqlcipher.md](sqlcipher.md)。
 
 ## 加密設計
 
@@ -31,21 +35,23 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - **recovery key**（可選）：12 個 BIP39 英文單字編碼 128-bit 隨機值，經 domain-separated SHA-256 展成 32 bytes，用來包裝同一把 diary key。它存在 `recovery.xml`，不影響 `vault.xml`。
 - 這層間接讓「改密碼」、「升級 KDF 參數」或「重新產生回復短語」都只需要重新包裝 32 bytes，不必重新加密所有日記。
 
-| 項目         | 實作                                                                   |
-| ------------ | ---------------------------------------------------------------------- |
-| 對稱加密     | AES-256-GCM（`aes-gcm` crate，RustCrypto）                             |
-| 金鑰派生     | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整 |
-| 預設參數     | 64 MiB 記憶體、3 次迭代、平行度 1（高於 OWASP 建議值）                 |
-| 參數範圍     | 記憶體 64–1024 MiB、迭代 2–16、平行度 1–16                             |
-| 新密碼長度   | 至少 12 個字元；由 Rust 後端強制，不只靠前端                           |
-| Salt         | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                         |
-| IV / Nonce   | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                          |
-| 完整性       | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗                   |
-| 圖片附件     | 同一把 diary key、每張獨立 IV；AAD 綁日期、附件 id 與版本              |
-| 附件 manifest | 同一把 diary key；AAD 綁日期，內層 XML 的順序就是顯示順序             |
-| 密碼驗證     | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）    |
-| 回復短語     | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本 |
-| 金鑰生命週期 | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux／Android 排除 dump/fork、Windows 排除 WER dump；鎖定或關閉即抹除、解鎖、unmap |
+| 項目          | 實作                                                                                                                                   |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 對稱加密      | AES-256-GCM（`aes-gcm` crate，RustCrypto）                                                                                             |
+| 金鑰派生      | Argon2id（`argon2` crate），參數存於 `vault.xml`，建立時或設定頁可調整                                                                 |
+| 預設參數      | 64 MiB 記憶體、3 次迭代、平行度 1（高於 OWASP 建議值）                                                                                 |
+| 參數範圍      | 記憶體 64–1024 MiB、迭代 2–16、平行度 1–16                                                                                             |
+| 新密碼長度    | 至少 12 個字元；由 Rust 後端強制，不只靠前端                                                                                           |
+| Salt          | 每個 vault 一組隨機 16 bytes，存於 `vault.xml`                                                                                         |
+| IV / Nonce    | 每次寫入產生新的隨機 12 bytes，與密文一同存檔                                                                                          |
+| 完整性        | GCM 認證標籤（16 bytes）附在密文尾端，竄改會解密失敗；SQLCipher 另以每頁 HMAC-SHA512 認證                                              |
+| 資料庫        | `diary.db` 以 SQLCipher raw key 加密；DB key 由 diary key 經 HKDF-SHA256 派生                                                          |
+| 圖片附件      | v3 使用 HKDF 派生的 `attachment_key`，每張獨立 IV；舊 v1／v2 仍用 diary key                                                            |
+| 附件 manifest | 存在 SQLCipher 的 `attachments` 表，沒有 XML 檔案                                                                                      |
+| 備份檔        | `.tar` 內是 `VACUUM INTO` 的 SQLCipher 密文快照 + `vault.xml`／`recovery.xml` + 附件密文                                               |
+| 密碼驗證      | 以 master key 解開 wrapped diary key 即代表密碼正確（GCM 標籤驗證）                                                                    |
+| 回復短語      | BIP39 12 字（128-bit）→ SHA-256 展成 32 bytes，AAD 綁固定 domain label 與版本                                                          |
+| 金鑰生命週期  | 存在 Rust 端的鎖定頁（`LockedKey`），mlock 進 RAM、Linux／Android 排除 dump/fork、Windows 排除 WER dump；鎖定或關閉即抹除、解鎖、unmap |
 
 > ⚠️ **忘記密碼無法救回**（除非已啟用回復短語）：master key 由密碼派生且不落地，沒有後門。
 > 提高 Argon2id 參數會讓離線暴力破解更困難，但也會讓每次解鎖變慢。
@@ -57,16 +63,27 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - `vault-id`：這個日記本的身分；建立或首次解鎖舊 vault 時產生。
 - `key-id`：目前 diary key 的身分；未來輪換 diary key 時會更新。
 
-日記、索引、附件、manifest、recovery 與 wrapped diary key 的 AAD 都是 canonical、長度前綴的欄位：
+SQLCipher 以每頁 HMAC-SHA512 認證整個資料庫，`db_key` 由 diary key 經 HKDF 派生。
+備份檔是資料庫的 `VACUUM INTO` 快照，沿用同一把 key，沒有新的加密格式或 AAD；
+它與一般 `diary.db` 一樣，離開 `vault.xml` 就無法解開。
+
+舊 XML 格式（只在遷移時讀取）與 `vault.xml`／`recovery.xml` 仍使用下列 canonical、
+長度前綴的 AAD：
 
 ```text
 "fly-diary/aad/v5" || kind || vault-id || key-id
   || len(field1) || field1 || len(field2) || field2 ...
 ```
 
-欄位包含 object kind（entry/index/manifest/attachment/recovery/vault-wrap）、日期、附件 id、格式版本；wrapped diary key 另外綁定 salt 與 KDF 參數。這樣把日記密文搬到別的日期、把索引當成日記、或把整組密文搬到另一個 vault，都會在 GCM 驗證時失敗。**不要**把 app 版本、檔案路徑、mtime 或裝置 id 放進 AAD，否則升級或同步後會解不開。
+欄位包含 object kind（legacy entry/manifest/attachment/recovery/vault-wrap）、日期、
+附件 id、格式版本；wrapped diary key 另外綁定 salt 與 KDF 參數。這樣把密文搬到別的
+日期、把不同 object 互換、或把整組密文搬到另一個 vault，都會在 GCM 驗證時失敗。
+**不要**把 app 版本、檔案路徑、mtime 或裝置 id 放進 AAD，否則升級或同步後會解不開。
 
-舊的 v4 entry、v4 index、v1 manifest/attachment 與 v1 recovery 仍可讀取；新寫入會使用 v5。舊 `recovery.xml` 因缺少短語無法自動重包裝，會維持 v1，直到下次成功復原或重新產生短語。AAD 只能證明上下文，不能防 replay／rollback；能改寫整個資料夾的攻擊者仍可把舊檔搬回來。
+舊的 v4 entry、v4 index、v1 manifest/attachment 與 v1 recovery 仍可讀取；新寫入不再
+產生 entry/index/manifest XML。舊 `recovery.xml` 因缺少短語無法自動重包裝，會維持
+v1，直到下次成功復原或重新產生短語。AAD 只能證明上下文，不能防 replay／rollback；
+能改寫整個資料夾的攻擊者仍可把舊檔搬回來。
 
 ### KDF 校準
 
@@ -126,7 +143,7 @@ Fly Diary 的威脅模型是「日記檔案被取得，但攻擊者沒有密碼�
 - **同使用者也讀不到**：Linux／Android 啟動時 `prctl(PR_SET_DUMPABLE, 0)`，關掉 `/proc/<pid>/mem` 與同使用者 `ptrace` attach；Unix 另保留 `RLIMIT_CORE = 0`。代價是 gdb／profiler 不能直接 attach，開發時若要除錯需暫時註解這行。
 - **一定會抹除**：`Drop` 先 zeroize 整段 key，再 `munlock`／`VirtualUnlock`，最後 `munmap`／`VirtualFree`。
 - **可失敗**：`mlock` 可能因 `RLIMIT_MEMLOCK`、sandbox 或平台限制而失敗；這時仍照常解鎖，只是少了「不進 swap」那層保證，不會把 App 卡住。
-- **suspend／resume**：前端監聽 Tauri 的 `tauri://suspended` / `tauri://resumed`、`visibilitychange` 與 `pagehide`，在背景化或休眠前走同一條「先存檔再鎖定」路徑；Android 另外由 `FLAG_SECURE` 阻止截圖與最近任務縮圖。
+- **suspend／resume**：前端監聽 Tauri 的 `tauri://suspended` / `tauri://resumed`、`visibilitychange` 與 `pagehide`，在背景化或休眠前走同一條「先存檔再鎖定」路徑；Android 另外由 `FLAG_SECURE` 阻止截圖與最近任務縮圖。HTML 檔案選擇器與 Android SAF 檔案選擇器也會讓 webview 短暫背景化，因此前端有一層 native-picker guard：選擇器開啟期間、以及關閉後 2 秒內不觸發 suspend lock；guard 最多維持 2 分鐘，避免選擇器沒有回報關閉時長期停用背景鎖定。
 
 這層保護只涵蓋**長時間存活的 session key**。`session_key()` 複製給背景工作的暫時副本、AES key schedule，以及 webview 裡的明文仍是架構性暴露，詳見「已知限制」。
 
@@ -142,10 +159,32 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `MainActivity` 設定 `FLAG_SECURE`，避免截圖、螢幕錄影與最近任務縮圖看到明文。
 - 備份與螢幕保護由 `scripts/harden-android.mjs` 套用；`src-tauri/gen/android` 仍保持 gitignored，重新產生 Android 專案後要用 `pnpm android:init`／`android:dev`／`android:build` 重新套用。
 
+### 加密備份與還原
+
+設定頁的「匯出備份」會產生一個未壓縮的 `.tar`，內含 `VACUUM INTO` 的加密資料庫快照、
+`vault.xml`、選用的 `recovery.xml`，以及 `attachments/` 下所有密文 sidecar。
+若 `diary.db` 無法開啟，解鎖畫面在密碼驗證成功後會直接提供「還原加密備份」按鈕；
+使用者需再輸入一次密碼（金鑰不留在鎖定畫面），驗證後才換檔。
+
+- **只寫密文**：快照沿用 SQLCipher key，附件維持原本的 `attachment_key` 加密；備份
+  過程不需要把明文寫到磁碟，也不會上傳到任何服務。
+- **一致性**：`VACUUM INTO` 在單一 read transaction 內完成，輸出是沒有 WAL 的單一
+  檔案；附件在設定頁 modal 開啟期間複製，使用者無法同時編輯。
+- **還原前驗證**：備份先解到 App cache 的暫存目錄，以目前 diary key 開啟快照並比對
+  `vault_id`／`key_id`，再跑 `cipher_integrity_check`；任一項失敗都不會動到現有 DB。
+- **保留舊資料**：還原只替換 `diary.db` 與 `attachments/`，舊資料移到
+  `<diary>.local-backup-<timestamp>`。`vault.xml` 與 `recovery.xml` 不覆寫，避免把
+  密碼或回復短語回滾。
+- **備份檔的風險**：`.tar` 內含包裝後的 diary key，和 `vault.xml` 一樣是離線暴力
+  破解的材料；必須與日記分開保存。取得備份檔的人仍需要密碼或回復短語才能解開 DB。
+- **不是同步**：沒有三方比較或衝突合併；兩台裝置各自還原會回到各自備份當時的狀態。
+- **Auto Backup 的範圍**：Android Auto Backup 只涵蓋 App 私有資料，不包含使用者自行
+  匯出到其他位置的 `.tar`。異地副本要由使用者自己的備份工具負責。
+
 ### 檔案系統防護
 
 - 暫存檔使用 `create_new` + `O_NOFOLLOW` + 隨機 suffix；避免在共用／同步資料夾中被預放 symlink，讓寫入轉向其他檔案。
-- `vault.xml`、`recovery.xml`、`index.xml`、entry、manifest 與 settings 都有硬讀取上限；超大的損壞檔會被視為 broken 或拒絕，不會讓 App OOM。
+- `vault.xml`、`recovery.xml` 與 settings 都有硬讀取上限；備份解壓時也限制單檔大小、檔案數與合法路徑，超大的損壞檔會被拒絕，不會讓 App OOM。
 - 路徑中的 `..` 與 symlink 會被拒絕；Windows 共用磁碟／FAT 的 ACL 仍要由使用者確認。
 - 需要解鎖才能使用的命令（拖放圖片、剪貼簿、自動鎖定設定、匯出壞檔等）都要求 session；截圖保護的暫時關閉移到 Rust 的原生資料夾選擇器內。
 
@@ -169,6 +208,11 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - **自動審計**：`.github/workflows/security.yml` 在 PR 與每週排程跑 `cargo audit`
   與 `pnpm audit`；release 也把同一個 workflow 當成發佈前的 gate，審計沒過就不會 publish。
   Dependabot 每週檢查 npm、Cargo 與 GitHub Actions。
+- **已知審計例外**：`src-tauri/.cargo/audit.toml` 忽略 `RUSTSEC-2024-0429`（glib
+  `VariantStrIter` unsound，修補於 glib 0.20.0）。Tauri 2 的 Linux stack（tauri、tao、
+  wry、muda、webkit2gtk）仍綁定 GTK3 的 gtk/glib 0.18 系列，0.18.5 是最終版且沒有
+  回溯修補；本 App 與 stack 都沒有呼叫 `array_iter_str`／`VariantStrIter`，因此該路徑
+  不可達。等 Tauri 改用 gtk 0.19+／glib 0.22+ 時應移除這個例外。
 - **建置來源證明**：release 產物會用 `actions/attest-build-provenance` 產生
   provenance，使用者可用 `gh attestation verify <file>` 驗證。
 - **手動設定（GitHub repo settings，程式無法代勞）**：為 `v*` 開啟 tag protection、
@@ -182,27 +226,26 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 
 ## 已知限制
 
-- 日期為明文（檔名與 `<date>`），但標題與內容皆已加密。
-- 舊版（SHA-256）vault 會在解鎖時自動遷移，遷移期間需要重新加密所有日記，日記量大時會較慢；遷移完成前無法在設定頁變更密碼。遷移會先寫下 `migration.journal`（內含新 vault 的 salt 與包裝後的新 diary key）才開始改寫日記，所以中途斷電或關閉程式不會讓日記卡在「一半用舊金鑰、一半用新金鑰」而無法解鎖的狀態——下次解鎖會偵測到 journal 並自動續跑。`migrate_entries` 本身是冪等的，已經轉換過的日記會直接跳過，因此反覆中斷也只會反覆續跑。
-- 格式升級在解鎖後於背景進行，日記量大時會持續數秒到數十秒；期間狀態列會顯示進度，但日記本身已可正常使用。若升級途中關閉程式，下次解鎖會從剩下的舊格式檔案繼續。
+- 日期只會出現在附件資料夾名稱 `attachments/YYYY-MM-DD/`；標題、內容與附件 metadata 皆已加密。
+- 舊版（SHA-256）vault 會在解鎖時自動遷移；v2 vault 會補上 `vault-id`／`key-id`。這些步驟仍需要重新加密 XML，完成前無法在設定頁變更密碼。遷移會先寫下 `migration.journal`（內含新 vault 的 salt 與包裝後的新 diary key）才開始改寫日記，所以中途斷電不會讓日記卡在「一半用舊金鑰、一半用新金鑰」；下次解鎖會偵測到 journal 並自動續跑。
+- 升級到 SQLCipher 後，舊 XML 的格式升級不再於解鎖後背景進行；`migrate_storage` 會一次讀取 v1–v4 並寫入 DB。這一步需要解鎖，且會先建立 `diary.db.migrating`，通過 `quick_check` 後才 rename；成功後刪除 XML。中斷只會留下可刪除的暫存 DB。無法解讀的 XML 原始位元組會存進加密的 `legacy_broken`，不會留在磁碟上。
 - 閒置計時只在 App 視窗內計算；另外會在 Tauri 的 suspend／resume、`visibilitychange`、`pagehide` 與 Android 背景化時鎖定。若平台沒有送出 suspend 事件，切到其他視窗時 WebView 可能節流計時器，這時要等回到 App 後由 wall-clock deadline 立刻鎖定；休眠瞬間仍可能有極短空窗。
 - KDF 校準的結果取決於當下機器負載，忙碌時可能選到偏保守的參數；重新校準即可。
-- 每個檔案本身是原子寫入，但**跨檔案沒有交易**：`index.xml` 與日記檔是兩個獨立的原子寫入，中間沒有兩階段提交。這裡改用「寫入順序」把失敗方向固定成可修復的那一邊：`write_entry` / `set_favourite` / 匯入都是**先寫日記、後寫索引**（日記是資料、索引是快取，索引落後只會少列一天，`read_index` 讀不到時會自動退回 `scan_entries` 重建）；`delete_entry` 則是**先改索引、後刪檔案**（反過來會讓索引短暫宣稱某天存在、實際卻打不開）。因此任何中斷點都只會留下「索引落後」這種可自癒的狀態，不會出現「索引指向不存在的檔案」。
-- 上述順序保證的是「不會產生無法自癒的狀態」，不是「兩個檔案永遠一致」。若同步軟體在兩次寫入之間把資料夾同步出去，另一台裝置可能短暫看到索引少一天；下次在任一裝置寫入或呼叫 `rebuild_index()` 就會補回。
+- SQLCipher 的 `INSERT`／`UPDATE`／附件 manifest 更新都在單一 transaction 內完成；DB 是唯一權威來源，沒有需要追平的衍生檔。
 - 原子寫入保證的是「檔案內容不會被截斷、且改名本身已 flush」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入；`fsync` 目錄同理，只把 flush 要求送到裝置。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
-- 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在密文裡。
-- 圖片的 manifest 是每日一個檔案；多裝置同時修改同一天時，同步工具可能產生 manifest 衝突，順序會以最後寫入的版本為準。未被引用的圖檔會在下次載入時補回，所以資料不會消失，但順序可能改變。manifest 遺失或損壞時只能依 mtime／檔名近似恢復順序。
-- 備份要複製整個日記資料夾（含 `attachments/`）。`export_broken_entry` 只匯出單一 XML，不含附件；完整搶救請直接複製資料夾。
+- 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在 SQLCipher 裡；DB 檔大小仍會透露大約的日記量。
+- 完整備份是設定頁匯出的 `.tar`：`VACUUM INTO` 快照 + `vault.xml` + `recovery.xml` + `attachments/`。只複製執行中的 `diary.db` 不是一致快照，請先鎖定並 checkpoint，或使用內建匯出。快照只寫 live pages，不含 free list；`diary.db` 本身仍可能有已刪除資料的殘留。
+- 刪除後的 page 可能留在 SQLite free list；`secure_delete=ON` 會先把內容歸零再加密，但仍建議刪除後 checkpoint 並定期 `VACUUM`。
 - 圖片會在前端重新編碼成 1000px WebP，EXIF（含 GPS）會被移除；若 WebView 不支援 WebP 編碼，PNG／WebP 來源會 fallback PNG 保留透明，其他格式則 fallback JPEG（透明區填白）。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
 - 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。
-- 孤兒附件（整個日期資料夾沒有 XML）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免同步延遲時誤刪。舊版 App 不認識附件，用舊版刪除日記時也會留下孤兒。
+- 孤兒附件（附件資料夾沒有對應的 `entries` 列）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免刪到剛好還沒寫入 DB 的圖片。
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
-- 行動版沒有資料夾選擇器，也沒有資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。想在手機上使用外部資料夾或匯入 `.txt`，目前只能走桌面版。
+- 行動版仍沒有「把日記本體放在外部資料夾」的選擇器，也沒有 `.txt` 資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。備份檔可透過系統檔案選擇器存到外部位置。
 - Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。
 - 原生拖放（`onDragDropEvent`）與原生剪貼簿備援目前只在桌面版；行動版仍以檔案選擇器與 WebView 的 paste 事件為主。
 - 手機版排版只依視窗寬度判定：平板橫向仍是桌面兩欄，桌面把視窗縮到 `640px` 以下也會進入兩層式版面（即使使用滑鼠）。這是刻意的，讓同一份前端在桌面與 Android WebView 都能運作。
-- 平行掃描、匯入、升級與搜尋查詢的加速幅度受磁碟限制：SSD 上通常快 2–4 倍，傳統硬碟或網路磁碟可能幾乎沒有差異（甚至因 seek 而略慢）。所有 vault I/O 共用一個上限 `min(4, cores)` 的 Rayon pool，避免單檔 16 MiB 的暫存明文隨核心數同時放大。
+- 平行掃描與舊 XML 遷移的加速幅度受磁碟限制；SQLCipher 寫入以單一 transaction 序列化，不會因核心數增加而亂序。DB 無法開啟時只能從加密備份還原，因此請定期匯出。
 - 匯入時標題固定取自檔名（`YYYY-MM-DD`），檔案內容全部視為日記本文；若想要自訂標題，匯入後再手動修改即可。
 - 目前只有繁體中文與英文兩種語言；後端回傳的錯誤訊息（例如 Rust 端的 `Failed to write entry ...`）仍是英文，尚未翻譯。
 - 變更日記路徑不會搬移既有檔案，需自行複製；新路徑若已有 vault 則會直接跳到解鎖畫面，沿用該 vault 的密碼。
@@ -217,6 +260,8 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `String` / `Vec` 擴容時，舊緩衝會被釋放但不會抹除。`pack` 已用 `Vec::with_capacity` 預留大小避免擴容，但 `String::from_utf8_lossy(...).to_string()` 這類轉換仍會產生無法抹除的暫時副本。
 - Linux 不提供 AppImage。AppImage 會打包自己的 GTK，並把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`，而該 cache 不含 `im-ibus.so` / `im-fcitx.so`，因此輸入法在 AppImage 內無法切換。請改用 `.deb` / `.rpm`，它們使用系統的 GTK 與系統的輸入法模組。
 - Android 專案由 Tauri 產生在 `src-tauri/gen/android`，已列在 `.gitignore`；安全性覆蓋由 `scripts/harden-android.mjs` 套用，重新產生專案後要再跑一次。換一台機器建置時需要自備 Android SDK／NDK 與 Rust target；目前 repo 沒有 iOS 專案。
+- Android 備份匯出沒有背景服務：只在使用者按下「匯出備份」並選好檔案後執行。App 被關閉或鎖定後不會自動備份；是否把 `.tar` 複製到雲端或另一台裝置，由使用者自行負責。
+- Android 的存檔位置選擇器使用 SAF document provider；provider 不一定支援 seek 或原子替換，但備份只寫入一個新檔，不覆寫現有日記資料庫。
 - 防止截圖在 Windows、macOS 與 Android（`FLAG_SECURE`）生效。`tao` 沒有 Linux 實作，`set_content_protected` 在 Linux 上是空操作，X11／Wayland 下截圖與錄影仍可取得視窗內容；若需要，請改用 Wayland 的 screencast portal 權限控管或 compositor 層的規則。
 - 防止截圖擋的是「作業系統的擷取 API」，不是「看到畫面」。手機拍螢幕、虛擬機／hypervisor 層的擷取、外接擷取卡、以及核心層或注入式工具都不受影響；Windows 上 `WDA_EXCLUDEFROMCAPTURE` 也需 Windows 10 2004 以上。
 - 防止截圖在「切換工作區」的資料夾選擇期間會暫時關閉（那裡只顯示路徑），選完或取消後恢復；若在意這段空窗，請避免在分享螢幕時切換工作區。

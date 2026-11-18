@@ -320,6 +320,41 @@
   border-bottom: 1px solid var(--border);
 }
 
+.settings-section > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-section > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Chevron for the mobile accordion; `settings-dialog.js` leaves every block
+   open on desktop, so the heading still reads as a section title there. */
+.settings-section > summary::after {
+  content: "";
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  margin-right: 0.25rem;
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: rotate(45deg);
+  transition: transform 120ms ease;
+}
+
+.settings-section[open] > summary::after {
+  transform: rotate(-135deg);
+}
+
+.settings-section > summary:hover .settings-heading {
+  color: var(--accent);
+}
+
 .settings-section:last-child {
   padding-bottom: 0;
   border-bottom: none;

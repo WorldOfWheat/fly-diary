@@ -51,6 +51,19 @@ const zhHant = {
   "lock.subtitle.newInFolder": "此資料夾尚未建立加密日記，請設定一組密碼",
   "lock.subtitle.firstRun":
     "第一次使用：選擇日記儲存位置，並設定一組密碼來加密日記",
+  "lock.subtitle.legacy":
+    "此工作區使用舊版 XML 格式，解鎖後可遷移為加密的 SQLite",
+  "lock.migrateConfirm":
+    "此日記本使用舊版 XML 儲存。要現在遷移為加密的 SQLite 嗎？遷移成功後會刪除每日 XML 檔（只保留 vault 與 recovery）。",
+  "lock.migrateRunning": "正在遷移日記格式…",
+  "lock.migrateDeclined":
+    "未遷移。請更換其他 workspace，或在此資料夾新建日記本。",
+  "lock.migrateFailed": "遷移失敗，日記仍保持原樣，請再試一次",
+  "lock.migrateBroken":
+    "已遷移 {migrated} 篇；{broken} 篇無法讀取，原始位元組已保留在加密資料庫中。",
+  "lock.databaseError":
+    "密碼正確，但加密資料庫無法開啟（{message}）。請還原先前匯出的加密備份。",
+  "lock.restoreBackup": "還原加密備份",
   "lock.pathLabel": "日記儲存資料夾",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "瀏覽…",
@@ -152,6 +165,17 @@ const zhHant = {
   "settings.errNoChange": "沒有需要變更的項目",
   "settings.errCalibrate": "量測失敗：{message}",
   "settings.errSave": "儲存失敗：{message}",
+  "settings.backup": "備份",
+  "settings.backupHint":
+    "匯出一個加密備份檔，內含資料庫快照、金鑰包裝檔與所有附件。檔案本身仍是密文；沒有密碼或回復短語依然無法讀取。",
+  "settings.backupExport": "匯出備份",
+  "settings.backupRestore": "還原備份",
+  "backup.exported": "備份已匯出到 {path}",
+  "backup.exportFailed": "匯出失敗：{message}",
+  "backup.restoreConfirm":
+    "還原會以備份中的資料庫與附件取代目前內容。目前的資料會保留在日記資料夾旁的 local-backup 目錄。要繼續嗎？",
+  "backup.restored": "已還原備份；還原前的資料保留在 {path}",
+  "backup.restoreFailed": "還原失敗：{message}",
   "recovery.settingsTitle": "回復短語",
   "recovery.settingsHint":
     "啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。",
@@ -422,6 +446,20 @@ const en = {
     "No encrypted diary here yet. Choose a passphrase to create one.",
   "lock.subtitle.firstRun":
     "First run: choose where to store the diary, then set a passphrase to encrypt it",
+  "lock.subtitle.legacy":
+    "This workspace uses the legacy XML format. Unlock it to migrate to encrypted SQLite.",
+  "lock.migrateConfirm":
+    "This diary uses the legacy XML storage. Migrate it to encrypted SQLite now? A successful migration deletes the daily XML files (only vault and recovery are kept).",
+  "lock.migrateRunning": "Migrating diary storage…",
+  "lock.migrateDeclined":
+    "Not migrated. Switch to another workspace, or create a new diary in this folder.",
+  "lock.migrateFailed":
+    "Migration failed. The diary was left unchanged; please try again.",
+  "lock.migrateBroken":
+    "Migrated {migrated} entries; {broken} could not be read and their raw bytes were preserved in the encrypted database.",
+  "lock.databaseError":
+    "The passphrase is correct, but the encrypted database cannot be opened ({message}). Restore an encrypted backup.",
+  "lock.restoreBackup": "Restore encrypted backup",
   "lock.pathLabel": "Diary folder",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "Browse…",
@@ -527,6 +565,17 @@ const en = {
   "settings.errNoChange": "Nothing to change",
   "settings.errCalibrate": "Measurement failed: {message}",
   "settings.errSave": "Could not save: {message}",
+  "settings.backup": "Backup",
+  "settings.backupHint":
+    "Export one encrypted archive containing a database snapshot, the key wrappers and every attachment. The archive stays ciphertext; it cannot be read without the passphrase or recovery phrase.",
+  "settings.backupExport": "Export backup",
+  "settings.backupRestore": "Restore backup",
+  "backup.exported": "Backup exported to {path}",
+  "backup.exportFailed": "Export failed: {message}",
+  "backup.restoreConfirm":
+    "Restoring replaces the current database and attachments with the backup. The current data is kept in a local-backup folder next to the diary. Continue?",
+  "backup.restored": "Backup restored; the previous data is kept at {path}",
+  "backup.restoreFailed": "Restore failed: {message}",
   "recovery.settingsTitle": "Recovery phrase",
   "recovery.settingsHint":
     "When enabled, the app generates 12 BIP39 English words. Write them on paper and store them away from the diary; they can reset the passphrase if you forget it. The phrase is a second key: anyone who has it and the diary files can read everything.",

@@ -1,6 +1,6 @@
 {
   "name": "fly-diary",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "author": "WorldOfWheat",
   "repository": "https://github.com/WorldOfWheat/fly-diary",
@@ -19,7 +19,7 @@
     "coverage:rust": "cargo llvm-cov --locked --manifest-path src-tauri/Cargo.toml --summary-only",
     "coverage": "pnpm run test:coverage && pnpm run coverage:rust",
     "audit:npm": "pnpm audit --audit-level high",
-    "audit:rust": "cargo audit --file src-tauri/Cargo.lock"
+    "audit:rust": "cd src-tauri && cargo audit"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4"

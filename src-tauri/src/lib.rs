@@ -1,9 +1,11 @@
 // `crypto`, `storage` and `attachments` are public so the integration tests in
 // `tests/` can drive the vault lifecycle through the same API the commands use.
 pub mod attachments;
+mod backup;
 mod bip39;
 mod clipboard;
 pub mod crypto;
+pub mod db;
 mod fsutil;
 mod pool;
 mod search;
@@ -32,6 +34,25 @@ fn config_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
         .map_err(|e| format!("Failed to resolve config dir: {e}"))
+}
+
+/// Scratch space for backup staging. Never inside the diary folder, so a
+/// failed export or restore cannot look like part of the vault.
+fn cache_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("Failed to resolve cache dir: {e}"))?;
+    fsutil::create_private_dir(&dir).map_err(|e| format!("Failed to create the cache dir: {e}"))?;
+    Ok(dir)
+}
+
+fn unique_scratch_name(prefix: &str, suffix: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("{prefix}-{}-{nanos}{suffix}", std::process::id())
 }
 
 /// Default diary location offered on first run.
@@ -72,6 +93,13 @@ struct SettingsView {
     autosave_delay_ms: u32,
     /// The autosave delays the UI may offer.
     autosave_delay_choices: Vec<u32>,
+    /// Whether this build runs on a mobile target.
+    ///
+    /// Mobile has no filesystem folder picker: the diary always lives in the
+    /// app's private data directory, so the lock screen hides the browse and
+    /// workspace-switch controls instead of offering an action that cannot
+    /// change anything.
+    mobile: bool,
 }
 
 /// Build information shown in the settings dialog.
@@ -227,6 +255,7 @@ async fn get_settings(app: tauri::AppHandle) -> Result<SettingsView, String> {
             auto_lock_choices: settings::AUTO_LOCK_CHOICES.to_vec(),
             autosave_delay_ms,
             autosave_delay_choices: settings::AUTOSAVE_DELAY_CHOICES.to_vec(),
+            mobile: cfg!(mobile),
         })
     })
     .await
@@ -484,6 +513,56 @@ async fn recovery_exists(app: tauri::AppHandle, path: Option<String>) -> Result<
     .await
 }
 
+/// Report whether a workspace is still on the legacy XML layout.
+///
+/// The lock screen shows an advance notice for legacy workspaces; the actual
+/// migration prompt happens after a successful unlock, because the database
+/// key comes from the wrapped diary key.
+#[tauri::command]
+async fn storage_status(
+    app: tauri::AppHandle,
+    path: Option<String>,
+) -> Result<db::StorageStatus, String> {
+    let dir = match path {
+        Some(p) => {
+            let dir = PathBuf::from(p.trim());
+            settings::validate_diary_dir(&dir)?;
+            dir
+        }
+        None => diary_dir(&app)?,
+    };
+    blocking("Storage status", move || Ok(db::format_status(&dir))).await
+}
+
+/// Read legacy XML once and build the SQLCipher database. The caller must be
+/// unlocked: decrypting the old entries requires the diary key. On success the
+/// XML entry files are deleted.
+#[tauri::command]
+async fn migrate_storage(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<db::MigrationReport, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    let report = blocking("Migrate storage", move || db::migrate_from_xml(&dir, &key)).await?;
+    clear_search(&app);
+    Ok(report)
+}
+
+/// Check SQLCipher page HMACs and SQLite's logical consistency.
+#[tauri::command]
+async fn check_vault_integrity(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<db::IntegrityReport, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    blocking("Check vault integrity", move || {
+        db::integrity_check(&dir, &key)
+    })
+    .await
+}
+
 /// Create a new vault protected by `passphrase` and unlock it immediately.
 ///
 /// `kdf` is optional so the frontend can omit it and get the defaults.
@@ -523,15 +602,52 @@ async fn create_vault(
     Ok(())
 }
 
+/// Result of an unlock attempt.
+///
+/// `legacy` means the vault metadata is valid but the diary is still stored as
+/// one XML file per day. The lock screen asks the user whether to migrate; if
+/// they decline, the frontend locks again and offers another workspace.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UnlockResult {
+    legacy: bool,
+    /// Set when the diary key was accepted but `diary.db` cannot be opened.
+    /// The frontend tells the user to restore an encrypted backup.
+    database_error: Option<String>,
+}
+
 /// Verify `passphrase` and keep the derived key in memory.
 #[tauri::command]
 async fn unlock(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
     passphrase: String,
-) -> Result<(), String> {
+) -> Result<UnlockResult, String> {
     let dir = diary_dir(&app)?;
-    let key = blocking("Unlock", move || storage::unlock_vault(&dir, &passphrase)).await?;
+    let unlock_dir = dir.clone();
+    let key = blocking("Unlock", move || {
+        storage::unlock_vault(&unlock_dir, &passphrase)
+    })
+    .await?;
+
+    let verify_dir = dir.clone();
+    let key_check = Zeroizing::new(*key);
+    let (legacy, database_error) = blocking("Check storage format", move || {
+        let status = db::format_status(&verify_dir);
+        match status.format {
+            db::StorageFormat::Legacy => return Ok((true, None)),
+            db::StorageFormat::Empty => return Ok((false, None)),
+            db::StorageFormat::Sqlcipher => {}
+        }
+        if let Some(context) = storage::vault_context(&verify_dir)? {
+            if let Err(error) = db::verify(&verify_dir, &key_check, &context) {
+                return Ok((false, Some(error)));
+            }
+        }
+        Ok((false, None))
+    })
+    .await?;
+
     // `unlock_vault` returns a `Zeroizing` key; move the bytes into the locked
     // page and let the temporary copy be wiped when it drops.
     *session.lock().unwrap() = Session {
@@ -540,7 +656,10 @@ async fn unlock(
     // The index is rebuilt by `scan_vault`; never let one session's plaintext
     // index leak into the next.
     clear_search(&app);
-    Ok(())
+    Ok(UnlockResult {
+        legacy,
+        database_error,
+    })
 }
 
 /// Forget the in-memory key and the decrypted search index.
@@ -718,7 +837,7 @@ async fn recover_vault(
     phrase: String,
     new_passphrase: String,
     kdf: Option<KdfView>,
-) -> Result<(), String> {
+) -> Result<UnlockResult, String> {
     storage::validate_new_passphrase(&new_passphrase)?;
 
     let dir = diary_dir(&app)?;
@@ -731,23 +850,37 @@ async fn recover_vault(
         None => storage::vault_kdf_params(&dir)?.unwrap_or_default(),
     };
 
-    let key = blocking("Recover vault", move || {
-        let diary_key = storage::recover_diary_key(&dir, &phrase)?;
-        storage::reset_passphrase(&dir, &diary_key, &new_passphrase, params)?;
+    let recover_dir = dir.clone();
+    let (key, legacy, database_error) = blocking("Recover vault", move || {
+        let diary_key = storage::recover_diary_key(&recover_dir, &phrase)?;
+        storage::reset_passphrase(&recover_dir, &diary_key, &new_passphrase, params)?;
         // Opportunistically upgrade a legacy recovery sidecar now that both
         // the phrase and the diary key are available.
-        let _ = storage::rewrite_recovery(&dir, &diary_key, &phrase);
-        Ok(diary_key)
+        let _ = storage::rewrite_recovery(&recover_dir, &diary_key, &phrase);
+        let status = db::format_status(&recover_dir);
+        let legacy = status.format == db::StorageFormat::Legacy;
+        let mut database_error = None;
+        if status.format == db::StorageFormat::Sqlcipher {
+            if let Some(context) = storage::vault_context(&recover_dir)? {
+                if let Err(error) = db::verify(&recover_dir, &diary_key, &context) {
+                    database_error = Some(error);
+                }
+            }
+        }
+        Ok((diary_key, legacy, database_error))
     })
     .await?;
 
     *session.lock().unwrap() = Session {
         key: Some(LockedKey::new(&key)),
     };
-    // Recovery keeps the same diary key, but rebuilding is cheap compared with
-    // risking a stale index from a different vault.
+    // Recovery keeps the same diary key, but rebuilding the index is cheap
+    // compared with risking a stale index from a different vault.
     clear_search(&app);
-    Ok(())
+    Ok(UnlockResult {
+        legacy,
+        database_error,
+    })
 }
 
 /// Whether the vault is currently unlocked.
@@ -768,7 +901,7 @@ async fn get_entry(
 ) -> Result<Option<Entry>, String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
-    blocking("Get entry", move || storage::read_entry(&dir, &key, &date)).await
+    blocking("Get entry", move || db::read_entry(&dir, &key, &date)).await
 }
 
 /// Encrypt and write one entry, then update the index.
@@ -790,7 +923,7 @@ async fn save_entry(
     let key = session_key(&session)?;
     let search = search_state(&app);
     blocking("Save entry", move || {
-        storage::write_entry(&dir, &key, &date, &title, &content)?;
+        db::write_entry(&dir, &key, &date, &title, &content)?;
         // Keep the session index in step without re-reading the file. The
         // favourite flag is preserved by `upsert`.
         if let Some(index) = search.lock().unwrap().index.as_mut() {
@@ -811,7 +944,7 @@ async fn delete_entry(
     let key = session_key(&session)?;
     let search = search_state(&app);
     blocking("Delete entry", move || {
-        storage::delete_entry(&dir, &key, &date)?;
+        db::delete_entry(&dir, &key, &date)?;
         if let Some(index) = search.lock().unwrap().index.as_mut() {
             index.remove(&date);
         }
@@ -951,12 +1084,12 @@ async fn list_orphan_attachments(
     app: tauri::AppHandle,
     session: tauri::State<'_, SharedSession>,
 ) -> Result<Vec<OrphanAttachment>, String> {
-    // Metadata-only, but still require an unlocked session: the directory name
-    // is the date of a diary entry.
-    let _ = session_key(&session)?;
+    // The date is a directory name, so the database is needed to tell whether
+    // it still has an entry.
+    let key = session_key(&session)?;
     let dir = diary_dir(&app)?;
     blocking("List orphan attachments", move || {
-        attachments::list_orphan_attachments(&dir)
+        attachments::list_orphan_attachments(&dir, &key)
     })
     .await
 }
@@ -967,10 +1100,10 @@ async fn delete_orphan_attachments(
     session: tauri::State<'_, SharedSession>,
     date: String,
 ) -> Result<(), String> {
-    let _ = session_key(&session)?;
+    let key = session_key(&session)?;
     let dir = diary_dir(&app)?;
     blocking("Delete orphan attachments", move || {
-        attachments::delete_orphan_attachments(&dir, &date)
+        attachments::delete_orphan_attachments(&dir, &key, &date)
     })
     .await
 }
@@ -983,7 +1116,7 @@ async fn list_entries(
 ) -> Result<Vec<EntryMeta>, String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
-    blocking("List entries", move || storage::list_entries(&dir, &key)).await
+    blocking("List entries", move || db::list_entries(&dir, &key)).await
 }
 
 /// List only the entries marked as favourites, newest first.
@@ -994,10 +1127,7 @@ async fn list_favourites(
 ) -> Result<Vec<EntryMeta>, String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
-    blocking("List favourites", move || {
-        storage::list_favourites(&dir, &key)
-    })
-    .await
+    blocking("List favourites", move || db::list_favourites(&dir, &key)).await
 }
 
 /// Mark or unmark an entry as a favourite. Returns the stored flag.
@@ -1015,7 +1145,7 @@ async fn set_favourite(
     let key = session_key(&session)?;
     let search = search_state(&app);
     blocking("Set favourite", move || {
-        let stored = storage::set_favourite(&dir, &key, &date, favourite)?;
+        let stored = db::set_favourite(&dir, &key, &date, favourite)?;
         if let Some(index) = search.lock().unwrap().index.as_mut() {
             if stored {
                 index.set_favourite(&date, favourite);
@@ -1044,7 +1174,7 @@ async fn rebuild_index(
 ) -> Result<Vec<EntryMeta>, String> {
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
-    blocking("Rebuild index", move || storage::rebuild_index(&dir, &key)).await
+    blocking("Rebuild index", move || db::list_entries(&dir, &key)).await
 }
 
 /// List entry files that exist on disk but cannot be decrypted.
@@ -1063,7 +1193,7 @@ async fn list_broken_entries(
     let dir = diary_dir(&app)?;
     let key = session_key(&session)?;
     blocking("List broken entries", move || {
-        storage::list_broken_entries(&dir, &key)
+        db::list_broken_entries(&dir, &key)
     })
     .await
 }
@@ -1107,7 +1237,7 @@ async fn scan_vault(
         // The sidebar index is a cheap read; install the content index first so
         // a save that lands during this step updates the fresh copy instead of
         // being overwritten by the scan.
-        let entries = storage::list_entries(&dir, &key)?;
+        let entries = db::list_entries(&dir, &key)?;
         Ok(VaultScan { entries, broken })
     })
     .await
@@ -1141,13 +1271,12 @@ async fn search_entries(
     .await
 }
 
-/// Copy a broken entry file to a location the user picks.
+/// Export a consistent encrypted copy of the diary database.
 ///
-/// The bytes are copied verbatim, so whatever is in the file survives even if
-/// this version of the app cannot parse it. No session key is needed because
-/// nothing is decrypted.
-///
-/// Returns the destination path, or `None` when the user cancels the dialog.
+/// Per-entry "broken file" export no longer applies: SQLCipher authenticates
+/// whole pages, so corruption is handled by the integrity check and the vault
+/// snapshot instead. The command keeps its old name so the frontend contract
+/// stays stable; `date` is ignored.
 #[tauri::command]
 async fn export_broken_entry(
     app: tauri::AppHandle,
@@ -1156,13 +1285,31 @@ async fn export_broken_entry(
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    require_unlocked(&session)?;
+    let key = session_key(&session)?;
     let dir = diary_dir(&app)?;
+
+    let check_dir = dir.clone();
+    let check_key = Zeroizing::new(*key);
+    let check_date = date.clone();
+    let has_legacy = blocking("Check broken entry", move || {
+        Ok(db::legacy_broken_bytes(&check_dir, &check_key, &check_date)?.is_some())
+    })
+    .await?;
+
     let (tx, rx) = std::sync::mpsc::channel();
+    let file_name = if has_legacy {
+        format!("{date}.xml")
+    } else {
+        "diary-backup.db".to_string()
+    };
     app.dialog()
         .file()
-        .set_title("匯出損壞的日記檔")
-        .set_file_name(format!("{date}.xml"))
+        .set_title(if has_legacy {
+            "匯出損壞的日記檔"
+        } else {
+            "匯出日記資料庫備份"
+        })
+        .set_file_name(file_name)
         .save_file(move |path| {
             let _ = tx.send(path);
         });
@@ -1173,15 +1320,157 @@ async fn export_broken_entry(
         return Ok(None);
     };
     let dest = PathBuf::from(dest.to_string());
-    // The dialog itself already ran off the main thread (the `recv` above
-    // blocks a worker), but the copy that follows is still a file operation on
-    // a potentially large file, so it gets its own blocking hop.
-    blocking("Export broken entry", move || {
-        storage::export_broken_entry(&dir, &date, &dest)?;
+    blocking("Export entry", move || {
+        if let Some(bytes) = db::legacy_broken_bytes(&dir, &key, &date)? {
+            // The raw legacy bytes are preserved inside SQLCipher; export them
+            // verbatim so a damaged day can still be rescued externally.
+            fsutil::write_private(&dest, bytes)
+                .map_err(|e| format!("Failed to export preserved entry {date}: {e}"))?;
+        } else {
+            db::snapshot(&dir, &key, &dest)?;
+        }
         Ok(dest.to_string_lossy().into_owned())
     })
     .await
     .map(Some)
+}
+
+/// Export a self-contained encrypted backup archive.
+///
+/// The archive holds a `VACUUM INTO` snapshot of `diary.db`, the key wrappers
+/// and every attachment sidecar. Nothing is decrypted on disk; the snapshot is
+/// encrypted with the same SQLCipher key as the live database.
+#[tauri::command]
+async fn export_backup(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let key = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("匯出加密備份")
+        .add_filter("Fly Diary backup", &["tar"])
+        .set_file_name(backup::suggested_name())
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let picked = rx.recv().map_err(|e| format!("Save dialog failed: {e}"))?;
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let cache = cache_dir(&app)?;
+    let snapshot = cache.join(unique_scratch_name("backup", ".db"));
+    let app2 = app.clone();
+    let display = path.to_string();
+    blocking("Export backup", move || {
+        let mut options = OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        let mut file = app2
+            .fs()
+            .open(path, options)
+            .map_err(|e| format!("Failed to open the backup file: {e}"))?;
+        backup::export(&dir, &key, &snapshot, &mut file)?;
+        // SAF providers may not support fsync on a content:// descriptor.
+        // Closing the file still flushes the userspace buffer; a failed fsync
+        // is only fatal on desktop file systems.
+        #[cfg(target_os = "android")]
+        {
+            let _ = file.sync_all();
+            Ok(())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            file.sync_all()
+                .map_err(|e| format!("Failed to flush the backup file: {e}"))
+        }
+    })
+    .await?;
+    Ok(Some(display))
+}
+
+/// Replace the diary database and attachments with an encrypted backup.
+///
+/// The current database and attachments are kept in a sibling
+/// `<diary>.local-backup-*` folder. `vault.xml` and `recovery.xml` are not
+/// replaced: the archive contains them for manual rescue, but the unlocked
+/// session already proved the current key wrappers work.
+#[tauri::command]
+async fn restore_backup(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    use tauri_plugin_fs::{FsExt, OpenOptions};
+
+    let key = session_key(&session)?;
+    let dir = diary_dir(&app)?;
+    let current = storage::vault_context(&dir)?
+        .ok_or_else(|| "This workspace has no upgraded vault to restore into".to_string())?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.dialog()
+        .file()
+        .set_title("還原加密備份")
+        .add_filter("Fly Diary backup", &["tar"])
+        .pick_file(move |path| {
+            let _ = tx.send(path);
+        });
+
+    let picked = rx.recv().map_err(|e| format!("File picker failed: {e}"))?;
+    let Some(path) = picked else {
+        return Ok(None);
+    };
+
+    let cache = cache_dir(&app)?;
+    let staging = cache.join(unique_scratch_name("restore", ""));
+    let staging_cleanup = staging.clone();
+    let app2 = app.clone();
+
+    let result = blocking("Restore backup", move || {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        let mut file = app2
+            .fs()
+            .open(path, options)
+            .map_err(|e| format!("Failed to open the backup file: {e}"))?;
+        backup::extract(&mut file, &staging)?;
+
+        let context = storage::vault_context(&staging)?
+            .ok_or_else(|| "The backup does not contain vault.xml".to_string())?;
+        if context.vault_id != current.vault_id || context.key_id != current.key_id {
+            return Err("This backup belongs to a different diary vault".to_string());
+        }
+        db::verify_snapshot(&staging, &key, &context)?;
+        let integrity = db::integrity_check_snapshot(&staging, &key)?;
+        if !integrity.ok {
+            return Err(format!(
+                "The backup database failed its integrity check: {}",
+                integrity.messages.join("; ")
+            ));
+        }
+        let backup = backup::install(&staging, &dir)?;
+        Ok(backup.to_string_lossy().into_owned())
+    })
+    .await;
+
+    match result {
+        Ok(path) => {
+            clear_search(&app);
+            Ok(Some(path))
+        }
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&staging_cleanup);
+            Err(error)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,7 +1537,7 @@ async fn scan_import(
     // wait for it. Running that wait on a blocking thread keeps the main thread
     // free while a few thousand files are read and decoded.
     blocking("Scan import", move || {
-        let existing = storage::known_dates(&dir, &key)?;
+        let existing = db::known_dates(&dir, &key)?;
         storage::scan_import(&src, &existing)
     })
     .await
@@ -1283,7 +1572,7 @@ async fn run_import(
     let emitter = app.clone();
 
     tauri::async_runtime::spawn_blocking(move || {
-        storage::import_entries_with_progress(&dir, &key, &src, &dates, overwrite, |done, total| {
+        db::import_entries_with_progress(&dir, &key, &src, &dates, overwrite, |done, total| {
             use tauri::Emitter;
             let _ = emitter.emit("import-progress", (done, total));
         })
@@ -1292,48 +1581,18 @@ async fn run_import(
     .map_err(|e| format!("Import task failed: {e}"))?
 }
 
-/// Rewrite every entry that predates the current on-disk format.
+/// Format upgrades are implicit in SQLCipher.
 ///
-/// Entries written before version 3 are not bound to their date through AES-GCM
-/// associated data, so their ciphertext can be copied to another day and will
-/// decrypt there. Entries written before version 4 are bound to their date but
-/// not to the version byte, so an attacker could rewrite `<diary version="4">`
-/// to `3` and make the reader fall back to the weaker bare-date AAD. New writes
-/// always produce version 4, whose AAD is `date || 0x00 || version`, so both
-/// attacks fail the GCM tag. An entry is upgraded the first time it is saved —
-/// but an entry that is never opened again would stay unprotected forever.
-///
-/// This command closes that gap. The frontend calls it right after unlocking and
-/// deliberately does not await it, so the diary is usable immediately. The work
-/// runs on `spawn_blocking` because a few thousand entries would otherwise
-/// freeze the webview, and progress is reported as `upgrade-progress` events
-/// carrying `{ done, total }`.
-///
-/// The run is idempotent and safe to interrupt: already-current entries are
-/// skipped, each file is replaced atomically, and an entry the user saves while
-/// it is being upgraded is left alone. Broken files are never touched.
+/// The old XML layout needed a background v1–v4 -> v5 rewrite. The SQLCipher
+/// migration reads every historical XML version in one pass, so there is
+/// nothing left to upgrade after unlock. The command is retained as a no-op so
+/// an older frontend can still call it.
 #[tauri::command]
 async fn upgrade_entries(
-    app: tauri::AppHandle,
-    session: tauri::State<'_, SharedSession>,
+    _app: tauri::AppHandle,
+    _session: tauri::State<'_, SharedSession>,
 ) -> Result<storage::UpgradeReport, String> {
-    let dir = diary_dir(&app)?;
-
-    // Copy the key out so the session lock is not held for the whole run. The
-    // copy stays valid even if the diary is locked mid-upgrade; the run simply
-    // finishes on its own copy, which is wiped when the closure returns.
-    let key = session_key(&session)?;
-
-    let emitter = app.clone();
-
-    tauri::async_runtime::spawn_blocking(move || {
-        storage::upgrade_entries_with_progress(&dir, &key, |done, total| {
-            use tauri::Emitter;
-            let _ = emitter.emit("upgrade-progress", (done, total));
-        })
-    })
-    .await
-    .map_err(|e| format!("Upgrade task failed: {e}"))?
+    Ok(storage::UpgradeReport::default())
 }
 
 /// Today's date in the user's local timezone, formatted as `YYYY-MM-DD`.
@@ -1412,6 +1671,7 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(navigation_guard())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .manage(SharedSession::default())
         .manage(SharedSearch::default());
 
@@ -1431,8 +1691,11 @@ pub fn run() {
             get_kdf_defaults,
             vault_exists,
             recovery_exists,
+            storage_status,
             create_vault,
             unlock,
+            migrate_storage,
+            check_vault_integrity,
             lock,
             is_unlocked,
             get_vault_kdf,
@@ -1465,6 +1728,8 @@ pub fn run() {
             scan_vault,
             search_entries,
             export_broken_entry,
+            export_backup,
+            restore_backup,
             pick_import_dir,
             scan_import,
             run_import,

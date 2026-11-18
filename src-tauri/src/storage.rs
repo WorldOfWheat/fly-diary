@@ -1,22 +1,28 @@
-//! Encrypted, XML-backed storage layer.
+//! Vault/recovery metadata and the **legacy** XML entry reader.
 //!
-//! Layout of the diary directory:
+//! The current diary store is `crate::db` (SQLCipher). This module still owns
+//! `vault.xml`, `recovery.xml`, KDF handling and the legacy XML reader used by
+//! the one-time `migrate_storage` command. Outside migration/tests, the app does
+//! not write `index.xml` or `YYYY-MM-DD.xml`; backups are exported by
+//! `crate::backup`.
+//!
+//! Layout of a pre-SQLCipher diary directory (migration input only):
 //!
 //! ```text
 //! diary/
 //! ├── vault.xml              # KDF params + wrapped diary key (no key material)
 //! ├── recovery.xml           # optional second wrapping of the diary key
-//! ├── index.xml              # encrypted {date, title} index for the sidebar
-//! ├── 2026-10-23.xml         # one encrypted entry per day
+//! ├── index.xml              # legacy encrypted {date, title} index
+//! ├── 2026-10-23.xml         # legacy encrypted entry
 //! └── 2026-10-22.xml
 //! ```
 //!
-//! Every entry file is an XML document holding `date`, `iv` and the
+//! Legacy entry files are XML documents holding `date`, `iv` and the
 //! AES-256-GCM encrypted `payload` (see [`crate::xml`]). The payload is the
 //! title and the body joined by [`FIELD_SEPARATOR`], so neither of them is
 //! readable on disk without the passphrase.
 //!
-//! ## Why an index?
+//! ## Legacy index (migration only)
 //!
 //! Titles live inside the encrypted payload, so listing the sidebar would
 //! otherwise require decrypting *every* entry file on every unlock. With a few
@@ -219,7 +225,7 @@ pub fn validate_date(date: &str) -> Result<(), String> {
 }
 
 /// Resolve the file path for a given date inside the diary directory.
-fn entry_path(dir: &Path, date: &str) -> Result<PathBuf, String> {
+pub(crate) fn entry_path(dir: &Path, date: &str) -> Result<PathBuf, String> {
     validate_date(date)?;
     Ok(dir.join(format!("{date}.xml")))
 }
@@ -665,8 +671,10 @@ pub fn create_vault(
 
     // A sidecar without a vault cannot belong to anything; the new random diary
     // key would make it undecryptable anyway. Best effort: a stale file must
-    // not block creating a fresh diary.
+    // not block creating a fresh diary. The same applies to a database left
+    // behind after `vault.xml` was removed.
     let _ = remove_recovery(dir);
+    crate::db::remove_database(dir)?;
 
     let salt_b64 = crypto::new_salt_b64();
     let salt = crypto::b64_decode(&salt_b64)?;
@@ -690,6 +698,15 @@ pub fn create_vault(
         key_id: Some(context.key_id),
     };
     write_vault(dir, &vault)?;
+
+    // A new vault is SQLCipher from the start. If the database cannot be
+    // created, remove the just-written vault metadata so the user can retry
+    // with the same passphrase instead of being left with a vault that has no
+    // storage behind it.
+    if let Err(error) = crate::db::create_empty(dir, &diary_key, &context) {
+        let _ = fs::remove_file(vault_path(dir));
+        return Err(error);
+    }
 
     Ok(diary_key)
 }
@@ -1011,7 +1028,16 @@ pub fn rewrite_recovery(dir: &Path, diary_key: &[u8; 32], phrase: &str) -> Resul
 /// If the index and every entry file are unreadable, the diary is already in a
 /// broken state; refusing recovery is safer than overwriting the wrapped key
 /// with a key that may not belong to it.
-fn diary_key_matches(dir: &Path, key: &[u8; 32]) -> Result<bool, String> {
+pub(crate) fn diary_key_matches(dir: &Path, key: &[u8; 32]) -> Result<bool, String> {
+    // Once the vault has been migrated, the SQLCipher database is the
+    // authoritative proof. A database copied from another vault will fail to
+    // open with this key even if its wrapped key somehow matched. A *corrupt*
+    // database must not block recovery: the legacy XML entries can still
+    // prove the key before a migration.
+    if crate::db::database_exists(dir) && crate::db::key_matches(dir, key)? {
+        return Ok(true);
+    }
+
     if index_path(dir).is_file() && read_index(dir, key).is_some() {
         return Ok(true);
     }
@@ -1847,7 +1873,7 @@ pub fn read_entry(dir: &Path, key: &[u8; 32], date: &str) -> Result<Option<Entry
     read_entry_with_context(dir, key, date, context.as_ref())
 }
 
-fn read_entry_with_context(
+pub(crate) fn read_entry_with_context(
     dir: &Path,
     key: &[u8; 32],
     date: &str,
@@ -1882,7 +1908,7 @@ fn read_entry_with_context(
 /// This is the half of [`write_entry`] that touches a single file, so it is
 /// safe to call concurrently for different dates. Callers that batch many
 /// writes (such as the importer) use this and update the index once at the end.
-fn write_entry_file(
+pub(crate) fn write_entry_file(
     dir: &Path,
     key: &[u8; 32],
     date: &str,
@@ -1894,7 +1920,7 @@ fn write_entry_file(
     write_entry_file_with_context(dir, key, date, title, content, favourite, context.as_ref())
 }
 
-fn write_entry_file_with_context(
+pub(crate) fn write_entry_file_with_context(
     dir: &Path,
     key: &[u8; 32],
     date: &str,
@@ -2164,7 +2190,7 @@ pub struct ImportFailure {
 ///
 /// The whole file becomes the body. Nothing is consumed as a title, because the
 /// title comes from the file name (see [`title_from_import_name`]).
-fn normalise_imported(text: &str) -> String {
+pub(crate) fn normalise_imported(text: &str) -> String {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
@@ -2175,14 +2201,14 @@ fn normalise_imported(text: &str) -> String {
 /// `2026-10-23`. This keeps the import lossless: every byte of the file ends up
 /// in the body, and the title is always something the user can see in the
 /// folder listing rather than a line silently stolen from the content.
-fn title_from_import_name(name: &str) -> String {
+pub(crate) fn title_from_import_name(name: &str) -> String {
     name.strip_suffix(&format!(".{IMPORT_EXTENSION}"))
         .unwrap_or(name)
         .to_string()
 }
 
 /// Derive the date from a `YYYY-MM-DD.txt` file name.
-fn date_from_import_name(name: &str) -> Option<String> {
+pub(crate) fn date_from_import_name(name: &str) -> Option<String> {
     let stem = name.strip_suffix(&format!(".{IMPORT_EXTENSION}"))?;
     validate_date(stem).ok()?;
     Some(stem.to_string())

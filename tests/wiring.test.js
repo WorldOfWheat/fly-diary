@@ -71,6 +71,7 @@ function fakeTarget(extra = {}) {
 /** Every element id `wiring.js` touches, so the fake table is complete. */
 const ELEMENT_IDS = [
   "lockForm",
+  "lockRestore",
   "browseDir",
   "switchWorkspace",
   "cancelWorkspace",
@@ -188,6 +189,7 @@ function harness(overrides = {}) {
   const deps = {
     els,
     handleUnlockSubmit: spy("handleUnlockSubmit"),
+    restoreFromLock: spy("restoreFromLock"),
     browseForDir: spy("browseForDir"),
     openWorkspacePicker: spy("openWorkspacePicker"),
     cancelWorkspacePicker: spy("cancelWorkspacePicker"),
@@ -215,6 +217,7 @@ function harness(overrides = {}) {
     selectDate: spy("selectDate"),
     showListLayer: spy("showListLayer"),
     pickAttachment: spy("pickAttachment"),
+    endNativePicker: spy("endNativePicker"),
     canAttachImages: () => true,
     onAttachmentBlocked: spy("onAttachmentBlocked"),
     addAttachmentFiles: spy("addAttachmentFiles"),
@@ -488,6 +491,18 @@ test("the attachment add button and file input reach the gallery", () => {
     h.els.attachmentInput.files = files;
     h.els.attachmentInput.dispatch("change", { target: h.els.attachmentInput });
     assert.deepEqual(h.argsOf("addAttachmentFiles"), [files]);
+    assert.deepEqual(h.names().slice(-2), [
+      "endNativePicker",
+      "addAttachmentFiles",
+    ]);
+  });
+});
+
+test("cancelling the image picker releases the suspend guard", () => {
+  withHarness((h) => {
+    h.els.attachmentInput.dispatch("cancel");
+
+    assert.deepEqual(h.names(), ["endNativePicker"]);
   });
 });
 

@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use fly_diary_lib::{attachments, crypto, storage};
+use fly_diary_lib::{attachments, crypto, db, storage};
 
 struct TempDir(PathBuf);
 
@@ -91,7 +91,7 @@ fn attachments_survive_lock_unlock_and_follow_entry_deletion() {
     assert_eq!(data.mime, "image/webp");
     assert_eq!(crypto::b64_decode(&data.data).unwrap(), WEBP);
 
-    storage::delete_entry(dir.path(), &reopened, "2026-10-23").unwrap();
+    db::delete_entry(dir.path(), &reopened, "2026-10-23").unwrap();
     assert!(!dir.path().join("attachments").join("2026-10-23").exists());
     assert!(
         attachments::list_attachments(dir.path(), &reopened, "2026-10-23")

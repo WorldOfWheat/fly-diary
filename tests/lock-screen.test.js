@@ -27,12 +27,15 @@ const LOCK_IDS = [
   "lockError",
   "lockSubtitle",
   "lockSubmit",
+  "lockRestore",
   "passphrase",
   "passphraseConfirm",
   "workspaceRow",
   "workspacePath",
   "pathField",
   "diaryDir",
+  "browseDir",
+  "switchWorkspace",
   "advancedField",
   "kdfMemory",
   "kdfIterations",
@@ -78,6 +81,7 @@ function harness(overrides = {}) {
     },
     vault_exists: true,
     recovery_exists: false,
+    storage_status: { format: "sqlcipher", hasVault: true, hasDatabase: true },
     get_bip39_words: [
       "abandon",
       "ability",
@@ -97,7 +101,9 @@ function harness(overrides = {}) {
     set_diary_dir: null,
     unlock: null,
     create_vault: null,
+    lock: null,
     recover_vault: null,
+    migrate_storage: { migrated: 0, attachments: 0, broken: [] },
     pick_diary_dir: "/home/u/other",
     ...(overrides.invokeTable ?? {}),
   });
@@ -106,6 +112,7 @@ function harness(overrides = {}) {
     els,
     invoke,
     t: fakeT(),
+    setStatus: spy(),
     setAutoLockMinutes: spy(),
     enterApp: spy(async () => {}),
     resetAutoLockTimer: spy(),
@@ -395,6 +402,131 @@ test("renderLockScreen explains the picker when the folder has no vault", () => 
 
     assert.equal(els.lockSubtitle.textContent, "lock.subtitle.switching");
   });
+});
+
+// ---------------------------------------------------------------------------
+// Mobile: the diary folder is fixed
+// ---------------------------------------------------------------------------
+
+test("mobile hides the fixed folder on first run and has no browse button", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      await lock.loadSettings();
+      lock.setVaultInitialized(false);
+      lock.renderLockScreen();
+
+      assert.equal(els.pathField.hidden, true);
+      assert.equal(els.browseDir.hidden, true);
+      assert.equal(els.diaryDir.readOnly, true);
+      assert.equal(els.workspaceRow.hidden, true);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: false,
+          defaultDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("mobile creates the first vault from the hidden default folder", async () => {
+  await withLock(
+    async ({ lock, els, invoke, deps }) => {
+      await lock.loadSettings();
+      lock.setVaultInitialized(false);
+      els.passphrase.value = "longenough12";
+      els.passphraseConfirm.value = "longenough12";
+      els.kdfMemory.value = "64";
+      els.kdfIterations.value = "3";
+      els.kdfParallelism.value = "4";
+
+      await lock.handleUnlockSubmit(submitEvent());
+
+      assert.equal(els.pathField.hidden, true);
+      assert.deepEqual(invoke.argsOf("set_diary_dir"), {
+        path: "/data/user/0/com.flydiary.app/files/diary",
+      });
+      assert.ok(invoke.argsOf("create_vault"));
+      assert.equal(deps.enterApp.count(), 1);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: false,
+          defaultDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+        vault_exists: false,
+      },
+    }
+  );
+});
+
+test("mobile hides the path field and workspace row once configured", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      await lock.loadSettings();
+      lock.setVaultInitialized(true);
+      lock.renderLockScreen();
+
+      assert.equal(els.pathField.hidden, true);
+      assert.equal(els.workspaceRow.hidden, true);
+      assert.equal(els.browseDir.hidden, true);
+      assert.equal(els.switchWorkspace.hidden, true);
+      assert.equal(els.switchWorkspace.disabled, true);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: true,
+          diaryDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("desktop keeps the browse and workspace controls", async () => {
+  await withLock(async ({ lock, els }) => {
+    await lock.loadSettings();
+    lock.setVaultInitialized(true);
+    lock.renderLockScreen();
+
+    assert.equal(els.browseDir.hidden, false);
+    assert.equal(els.switchWorkspace.hidden, false);
+    assert.equal(els.diaryDir.readOnly, false);
+    assert.equal(els.workspaceRow.hidden, false);
+  });
+});
+
+test("mobile does not call the native picker", async () => {
+  await withLock(
+    async ({ lock, invoke }) => {
+      await lock.loadSettings();
+      await lock.browseForDir();
+      await lock.openWorkspacePicker();
+
+      assert.equal(invoke.commands().includes("pick_diary_dir"), false);
+      assert.equal(lock.isPickingWorkspace(), false);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          configured: true,
+          diaryDir: "/data/user/0/com.flydiary.app/files/diary",
+          autoLockMinutes: 5,
+          mobile: true,
+        },
+      },
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1311,11 +1443,189 @@ test("a rejected recovery keeps the form open and shows the backend message", as
   );
 });
 
+// ---------------------------------------------------------------------------
+// Legacy XML -> SQLCipher migration
+// ---------------------------------------------------------------------------
+
+test("a legacy workspace is announced before unlock", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      await lock.detectVault();
+      lock.renderLockScreen();
+      assert.equal(els.lockSubtitle.textContent, "lock.subtitle.legacy");
+    },
+    { invokeTable: { storage_status: { format: "legacy" } } }
+  );
+});
+
+test("unlocking a legacy vault asks to migrate and enters after success", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => true;
+  try {
+    await withLock(
+      async ({ lock, deps, invoke, els }) => {
+        lock.setConfigured(true);
+        lock.setVaultInitialized(true);
+        els.passphrase.value = "a long enough passphrase";
+        await lock.handleUnlockSubmit(submitEvent());
+
+        assert.equal(invoke.commands().includes("migrate_storage"), true);
+        assert.equal(deps.enterApp.calls.length, 1);
+      },
+      {
+        invokeTable: {
+          unlock: { legacy: true },
+          storage_status: { format: "legacy" },
+          migrate_storage: { migrated: 2, attachments: 0, broken: [] },
+        },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
+test("declining migration locks and asks for another workspace", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => false;
+  try {
+    await withLock(
+      async ({ lock, deps, invoke, els }) => {
+        lock.setConfigured(true);
+        lock.setVaultInitialized(true);
+        els.passphrase.value = "a long enough passphrase";
+        await lock.handleUnlockSubmit(submitEvent());
+
+        assert.equal(invoke.commands().includes("lock"), true);
+        assert.equal(invoke.commands().includes("migrate_storage"), false);
+        assert.equal(deps.enterApp.calls.length, 0);
+        assert.equal(els.lockError.textContent, "lock.migrateDeclined");
+      },
+      {
+        invokeTable: {
+          unlock: { legacy: true },
+          storage_status: { format: "legacy" },
+        },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
+test("a failed migration keeps the lock screen and does not enter", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => true;
+  try {
+    await withLock(
+      async ({ lock, deps, els }) => {
+        lock.setConfigured(true);
+        lock.setVaultInitialized(true);
+        els.passphrase.value = "a long enough passphrase";
+        await lock.handleUnlockSubmit(submitEvent());
+
+        assert.equal(deps.enterApp.calls.length, 0);
+        assert.equal(els.lockError.textContent, "boom");
+      },
+      {
+        invokeTable: {
+          unlock: { legacy: true },
+          storage_status: { format: "legacy" },
+          migrate_storage: () => {
+            throw "boom";
+          },
+        },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
+test("recovering a legacy vault also offers the migration", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => true;
+  try {
+    await withLock(
+      async ({ lock, deps, invoke, els }) => {
+        openRecovery(lock, els);
+        setRecoveryPhrase(
+          els,
+          "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+        );
+        els.recoveryNewPass.value = "a long enough passphrase";
+        els.recoveryNewPassConfirm.value = "a long enough passphrase";
+        await lock.handleRecoverySubmit(submitEvent());
+
+        assert.equal(invoke.commands().includes("recover_vault"), true);
+        assert.equal(invoke.commands().includes("migrate_storage"), true);
+        assert.equal(deps.enterApp.count(), 1);
+      },
+      {
+        invokeTable: {
+          recover_vault: { legacy: true },
+          storage_status: { format: "legacy" },
+          migrate_storage: { migrated: 1, attachments: 0, broken: [] },
+        },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
+test("an unreadable database tells the user to restore a backup", async () => {
+  await withLock(
+    async ({ lock, deps, invoke, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      els.passphrase.value = "a long enough passphrase";
+      await lock.handleUnlockSubmit(submitEvent());
+
+      assert.equal(invoke.commands().includes("lock"), true);
+      assert.equal(deps.enterApp.calls.length, 0);
+      assert.match(els.lockError.textContent, /lock\.databaseError/);
+    },
+    {
+      invokeTable: {
+        unlock: { databaseError: "file is not a database" },
+      },
+    }
+  );
+});
+
+test("a broken database offers restoring an encrypted backup", async () => {
+  await withLock(
+    async ({ lock, deps, invoke, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      els.passphrase.value = "a long enough passphrase";
+      await lock.handleUnlockSubmit(submitEvent());
+
+      assert.equal(els.lockRestore.hidden, false);
+
+      await lock.restoreFromLock();
+
+      assert.equal(invoke.commands().includes("restore_backup"), true);
+      assert.equal(deps.enterApp.calls.length, 1);
+    },
+    {
+      invokeTable: {
+        unlock: { databaseError: "file is not a database" },
+        restore_backup: "/home/u/diary.local-backup-1",
+      },
+    }
+  );
+});
+
 /** Shared deps for the tests that build a second controller. */
 function lockDeps(els) {
   return {
     els,
     t: fakeT(),
+    setStatus: spy(),
     setAutoLockMinutes: spy(),
     enterApp: spy(async () => {}),
     resetAutoLockTimer: spy(),

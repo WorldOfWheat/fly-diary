@@ -423,6 +423,73 @@ test("the workspace row collapses to a single button on a phone viewport", () =>
   );
 });
 
+test("the narrow lock path row keeps the editable field visible", () => {
+  // `flex: 1` gives the input a zero flex basis. In a narrow card the browse
+  // button can then consume the row and the path field collapses to nothing.
+  // A non-zero basis plus wrapping keeps the field usable at every width.
+  const row = rulesFor(".lock-path-row");
+  assert.ok(row.length > 0, "no .lock-path-row rule found");
+  assert.ok(
+    row.some((rule) =>
+      declarations(rule.body, "flex-wrap").includes("wrap")
+    ),
+    ".lock-path-row must wrap instead of squeezing the input to zero"
+  );
+
+  const input = rulesFor(".lock-path-row .lock-input");
+  assert.ok(input.length > 0, "no .lock-path-row .lock-input rule found");
+  assert.ok(
+    input.some((rule) =>
+      declarations(rule.body, "flex").some((value) =>
+        /^1\s+1\s+\S+/.test(value)
+      )
+    ),
+    "the path input needs a non-zero flex basis so it cannot collapse"
+  );
+});
+
+test("the editor and sidebar headers clear the top safe area", () => {
+  // The Android build paints edge to edge. The lock screen already uses
+  // `env(safe-area-inset-top)`; the two in-app headers did not, so the status
+  // bar covered them. Every breakpoint that resets the header padding has to
+  // re-apply the inset.
+  const headerHasInset = (rule) =>
+    declarations(rule.body, "padding-top").some((value) =>
+      value.includes("env(safe-area-inset-top)")
+    );
+
+  const baseEditor = rulesFor(".editor-header");
+  assert.ok(baseEditor.length > 0, "no .editor-header rule found");
+  assert.ok(
+    baseEditor.some(headerHasInset),
+    ".editor-header must reserve the top safe area"
+  );
+
+  for (const condition of ["max-width: 900px", "max-width: 400px"]) {
+    // `mediaBlocks` merges every block with the same condition: the root
+    // font-size cap lives in its own `max-width: 400px` block in base.css.
+    const block = mediaBlocks(condition);
+    const rule = rulesFor(".editor-header", block);
+    assert.ok(
+      rule.some(headerHasInset),
+      `.editor-header must keep the top safe area inside ${condition}`
+    );
+  }
+
+  const baseSidebar = rulesFor(".sidebar-header");
+  assert.ok(baseSidebar.length > 0, "no .sidebar-header rule found");
+  assert.ok(
+    baseSidebar.some(headerHasInset),
+    ".sidebar-header must reserve the top safe area"
+  );
+
+  const phoneSidebar = rulesFor(".sidebar-header", mediaBlocks("max-width: 640px"));
+  assert.ok(
+    phoneSidebar.some(headerHasInset),
+    ".sidebar-header must keep the top safe area on a phone viewport"
+  );
+});
+
 test("a locked editor dims its inputs", () => {
   // The lock is enforced in JS, but the user needs to see that typing will not
   // be saved. Both the title and the body must pick up the locked styling.

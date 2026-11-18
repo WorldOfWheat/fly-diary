@@ -29,6 +29,11 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   openStats          — () => void
 //   changeDiaryDir     — () => void | Promise<void>
 //   openRecovery       — () => void | Promise<void>
+//   flushSave          — () => Promise<void>
+//   flushAndLock       — () => Promise<void>
+//   afterRestore       — () => Promise<void>, reloads after a backup restore
+//   beginNativePicker  — () => void, marks a native folder picker as open
+//   endNativePicker    — () => void, marks it as closed
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -56,6 +61,18 @@ export function createSettingsDialog(deps) {
   /** Whether the settings dialog is open. */
   function isSettingsOpen() {
     return !els.settingsOverlay.hidden;
+  }
+
+  /** Every collapsible settings block, in document order. */
+  function settingsSections() {
+    return Array.from(
+      els.settingsOverlay?.querySelectorAll?.("details.settings-section") ?? []
+    );
+  }
+
+  /** Open or close every settings block at once. */
+  function setSectionsOpen(open) {
+    for (const section of settingsSections()) section.open = open;
   }
 
   /** Fill the auto-lock dropdown from the choices the backend allows. */
@@ -210,6 +227,84 @@ export function createSettingsDialog(deps) {
     }
   }
 
+
+  /** Write a one-line result under the backup buttons. */
+  function showBackupStatus(text, saved = false) {
+    if (!els.settingsBackupStatus) return;
+    els.settingsBackupStatus.textContent = text;
+    els.settingsBackupStatus.classList.toggle("is-saved", saved);
+  }
+
+  /**
+   * Export an encrypted snapshot archive.
+   *
+   * The pending autosave is flushed first so the archive cannot miss the last
+   * keystrokes. Cancelling the save dialog is not an error.
+   */
+  async function exportBackup() {
+    if (!els.settingsBackupBtn) return;
+    els.settingsBackupBtn.disabled = true;
+    showBackupStatus("");
+    try {
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("export_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        showBackupStatus(deps.t("backup.exported", { path }), true);
+      }
+    } catch (err) {
+      console.error("export_backup failed:", err);
+      showBackupStatus(
+        deps.t("backup.exportFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsBackupBtn.disabled = false;
+    }
+  }
+
+  /**
+   * Replace the database and attachments with an encrypted backup.
+   *
+   * The current database and attachments are kept in a sibling backup folder,
+   * so the confirmation can honestly say the old data is recoverable.
+   */
+  async function restoreBackup() {
+    if (!els.settingsRestoreBtn) return;
+    if (!confirm(deps.t("backup.restoreConfirm"))) return;
+    els.settingsRestoreBtn.disabled = true;
+    showBackupStatus("");
+    try {
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("restore_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        await deps.afterRestore?.();
+        showBackupStatus(deps.t("backup.restored", { path }), true);
+      }
+    } catch (err) {
+      console.error("restore_backup failed:", err);
+      showBackupStatus(
+        deps.t("backup.restoreFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsRestoreBtn.disabled = false;
+    }
+  }
+
   /** Open the settings dialog and populate it from the backend. */
   async function openSettings() {
     els.settingsError.textContent = "";
@@ -217,13 +312,21 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    showBackupStatus("");
 
     // Not awaited: the path and build info are informational, so the dialog
     // should not wait on extra round trips before it appears.
     await Promise.all([renderDiaryPath(), renderAppInfo()]);
 
+    let mobile = false;
     try {
       const settings = await deps.invoke("get_settings");
+      mobile = Boolean(settings.mobile);
+      // Mobile has no folder picker, so the diary path is fixed. Hiding the
+      // action is clearer than opening a picker that cannot change anything.
+      if (els.settingsChangeDirBtn) {
+        els.settingsChangeDirBtn.hidden = mobile;
+      }
       renderAutoLockChoices(
         settings.autoLockChoices ?? DEFAULT_AUTO_LOCK_CHOICES,
         settings.autoLockMinutes ?? 0
@@ -243,9 +346,18 @@ export function createSettingsDialog(deps) {
       });
     }
 
+    // A phone has a long settings dialog on a short screen. Start with every
+    // block closed so the headings act as a menu; desktop keeps them open.
+    setSectionsOpen(!mobile);
+
     els.settingsOverlay.hidden = false;
     focusTrap.activate();
-    els.settingsCurrentPass.focus();
+    if (mobile) {
+      const first = els.settingsOverlay?.querySelector?.(".settings-disclosure");
+      (first ?? els.settingsClose)?.focus?.();
+    } else {
+      els.settingsCurrentPass.focus();
+    }
   }
 
   /** Close the settings dialog without saving. */
@@ -387,6 +499,8 @@ export function createSettingsDialog(deps) {
     refreshRecoveryStatus,
     removeRecovery,
     openRecovery,
+    exportBackup,
+    restoreBackup,
     openImport: () => handOver(deps.openImport),
     openStats: () => handOver(deps.openStats),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),

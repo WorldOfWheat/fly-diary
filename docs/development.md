@@ -21,9 +21,14 @@ sudo apt install -y \
   libayatana-appindicator3-dev \
   librsvg2-dev \
   libdbus-1-dev \
-  pkg-config
+  pkg-config \
+  perl
 ```
 
+> SQLCipher 使用 `bundled-sqlcipher-vendored-openssl`，會從原始碼編譯
+> SQLite／SQLCipher 與 OpenSSL；需要 C 編譯器、`make` 與 `perl`（上面的
+> `build-essential` + `perl` 已包含）。第一次 `cargo build` 會明顯變慢。
+>
 > 其他發行版請參考 [Tauri 官方 Prerequisites](https://tauri.app/start/prerequisites/)。
 
 ## 安裝前端依賴
@@ -84,10 +89,12 @@ key 必須一致、`index.html`、`main.js` 與 `attachments.js` 用到的 key �
 `aria-pressed`、muted／border 對比、placeholder、24px target size，以及 modal 的 Tab 循環與
 焦點還原。它們不能取代螢幕閱讀器實測，完整清單見 [accessibility.md](accessibility.md)。
 
-Rust 測試分三層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
-的日記生命週期整合測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
-（新增 → 排序 → 上鎖 → 解鎖 → 讀回 → 刪除）。涵蓋加解密 roundtrip、錯誤密碼、密文竄改偵測、
-XML 序列化、日期驗證、索引重建、匯入流程、manifest 重建與孤兒偵測。
+Rust 測試分四層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
+的日記生命週期整合測試、`src-tauri/tests/sqlcipher_migration.rs` 的 XML→SQLCipher
+遷移與快照測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
+（新增 → 排序 → 上鎖 → 解鎖 → 讀回 → 刪除）。`backup.rs` 另有備份 roundtrip、
+路徑穿越拒絕與失敗清理的單元測試。涵蓋加解密 roundtrip、錯誤密碼、密文竄改偵測、
+SQLCipher 開啟／完整性、legacy XML 遷移、日期驗證、匯入流程、附件 manifest 重建與孤兒偵測。
 
 Rust coverage 需要 `cargo-llvm-cov`：
 
@@ -119,8 +126,18 @@ generated 專案，仍保持 gitignored；重新產生後請用 `pnpm android:in
 
 行動版有三個刻意不同的行為：
 
-- **沒有資料夾選擇器**：`pick_diary_dir` 在 `#[cfg(mobile)]` 下直接回傳 App 私有資料夾，不開原生對話框；日記因此固定放在 App 的資料目錄。
-- **不支援資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
+- **沒有日記資料夾選擇器**：`pick_diary_dir` 在 `#[cfg(mobile)]` 下直接回傳 App 私有資料夾，不開原生對話框；日記因此固定放在 App 的資料目錄。備份檔則透過系統檔案選擇器存到 SAF 可寫入的位置。
+- **不支援 `.txt` 資料夾匯入**：`pick_import_dir` 在行動版直接回報錯誤，而不是回傳 `None` 讓使用者以為自己取消。
 - 選單列只在桌面建置（`build_menu` 包在 `#[cfg(desktop)]`），行動版沒有 `Edit` 選單可掛。
 
-其餘加密、儲存、索引與背景升級流程在桌面與行動版完全相同。
+其餘加密、SQLCipher 儲存與備份流程在桌面與行動版完全相同。Android 交叉編譯
+`bundled-sqlcipher-vendored-openssl` 需要 NDK 的 `CC_*`／`AR_*`／`RANLIB_*` 與
+`perl`；若 `pnpm android:dev` 在建置 OpenSSL 時失敗，先確認這些工具在 PATH 中。
+
+### Android 備份匯出
+
+手機版的備份使用 `tauri-plugin-dialog` 的系統檔案選擇器與 `tauri-plugin-fs` 開啟
+`content://` 檔案，不需要自訂 SAF 外掛。備份是單一 `.tar`，寫入位置由使用者選擇；
+`diary.db` 仍留在 App 私有資料夾。還原時會先解到 App cache，驗證後才替換 DB 與附件，
+舊資料留在私有資料夾旁的 `*.local-backup-*`。這條路徑沒有 Kotlin／Gradle 專屬程式碼，
+桌面與 Android 共用同一個 `backup.rs`。

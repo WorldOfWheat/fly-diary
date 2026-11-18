@@ -16,8 +16,9 @@ use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::db;
 use crate::pool::vault_pool;
-use crate::storage::{self, BrokenEntry};
+use crate::storage::BrokenEntry;
 
 /// Number of results returned when the caller does not ask for a specific size.
 pub const DEFAULT_LIMIT: usize = 50;
@@ -204,7 +205,7 @@ impl SearchIndex {
 /// keep advertising them. The collector borrows the plaintext only briefly, and
 /// [`SearchDoc`] copies it into zeroizing buffers.
 pub fn build(dir: &Path, key: &[u8; 32]) -> Result<(SearchIndex, Vec<BrokenEntry>), String> {
-    let scan = storage::scan_entry_contents(dir, key)?;
+    let scan = db::scan_entry_contents(dir, key)?;
     let docs: BTreeMap<String, SearchDoc> = vault_pool().install(|| {
         scan.entries
             .into_par_iter()
@@ -431,6 +432,8 @@ fn char_to_byte(text: &str, index: usize) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::crypto::KdfParams;
+    use crate::db;
+    use crate::storage;
     use std::fs;
     use std::path::PathBuf;
 
@@ -458,7 +461,7 @@ mod tests {
     #[test]
     fn finds_body_text_case_insensitively() {
         let (dir, key) = vault("body");
-        storage::write_entry(&dir, &key, "2026-10-23", "Trip", "Visited Kyoto today").unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "Trip", "Visited Kyoto today").unwrap();
         let (index, broken) = build(&dir, &key).unwrap();
         assert!(broken.is_empty());
 
@@ -473,7 +476,7 @@ mod tests {
     #[test]
     fn supports_chinese_substrings_without_tokenization() {
         let (dir, key) = vault("cjk");
-        storage::write_entry(&dir, &key, "2026-10-23", "散步", "今天去河邊散步，風很舒服").unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "散步", "今天去河邊散步，風很舒服").unwrap();
         let (index, _) = build(&dir, &key).unwrap();
 
         let response = index.query("河邊散步", DEFAULT_LIMIT, false);
@@ -485,8 +488,8 @@ mod tests {
     #[test]
     fn requires_every_term_and_supports_phrases() {
         let (dir, key) = vault("terms");
-        storage::write_entry(&dir, &key, "2026-10-23", "A", "red green blue").unwrap();
-        storage::write_entry(&dir, &key, "2026-10-22", "B", "red only").unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "A", "red green blue").unwrap();
+        db::write_entry(&dir, &key, "2026-10-22", "B", "red only").unwrap();
         let (index, _) = build(&dir, &key).unwrap();
 
         let both = index.query("red blue", DEFAULT_LIMIT, false);
@@ -505,8 +508,8 @@ mod tests {
         let (dir, key) = vault("rank");
         // The older entry has the stronger (title) hit; date order still wins,
         // matching the sidebar rather than a relevance score.
-        storage::write_entry(&dir, &key, "2026-10-23", "Other", "Kyoto again").unwrap();
-        storage::write_entry(&dir, &key, "2026-10-22", "Kyoto", "a trip").unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "Other", "Kyoto again").unwrap();
+        db::write_entry(&dir, &key, "2026-10-22", "Kyoto", "a trip").unwrap();
         let (index, _) = build(&dir, &key).unwrap();
 
         let response = index.query("kyoto", DEFAULT_LIMIT, false);
@@ -524,9 +527,9 @@ mod tests {
         let (dir, key) = vault("favourites");
         for day in 1..=5 {
             let date = format!("2026-10-0{day}");
-            storage::write_entry(&dir, &key, &date, "t", "shared word").unwrap();
+            db::write_entry(&dir, &key, &date, "t", "shared word").unwrap();
         }
-        storage::set_favourite(&dir, &key, "2026-10-03", true).unwrap();
+        db::set_favourite(&dir, &key, "2026-10-03", true).unwrap();
         let (index, _) = build(&dir, &key).unwrap();
 
         let favourites = index.query("shared", MAX_LIMIT, true);
@@ -543,7 +546,7 @@ mod tests {
     #[test]
     fn updates_and_removals_are_visible_immediately() {
         let (dir, key) = vault("update");
-        storage::write_entry(&dir, &key, "2026-10-23", "t", "old word").unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "t", "old word").unwrap();
         let (mut index, _) = build(&dir, &key).unwrap();
         assert_eq!(index.query("old", DEFAULT_LIMIT, false).total, 1);
 
@@ -559,7 +562,7 @@ mod tests {
     fn snippet_ranges_are_valid_utf16_boundaries() {
         let (dir, key) = vault("snippet");
         let body = "前言 ".repeat(20) + "要找的字 😀 後語";
-        storage::write_entry(&dir, &key, "2026-10-23", "標題", &body).unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "標題", &body).unwrap();
         let (index, _) = build(&dir, &key).unwrap();
 
         let response = index.query("要找的字", DEFAULT_LIMIT, false);
@@ -577,7 +580,7 @@ mod tests {
     #[test]
     fn an_empty_query_returns_nothing_but_stays_ready() {
         let (dir, key) = vault("empty");
-        storage::write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
+        db::write_entry(&dir, &key, "2026-10-23", "t", "c").unwrap();
         let (index, _) = build(&dir, &key).unwrap();
 
         let response = index.query("   ", DEFAULT_LIMIT, false);

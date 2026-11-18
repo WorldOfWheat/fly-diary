@@ -6,7 +6,12 @@
 
 ## 檔案格式
 
-每個日記檔（`YYYY-MM-DD.xml`）：
+> **SQLCipher 版本的重要變更**：除了 `vault.xml` 與 `recovery.xml`，本文件描述的
+> 日記 XML 格式**只作為一次性遷移的 legacy 參考**。新版本不再產生
+> `YYYY-MM-DD.xml`、`index.xml` 或 `manifest.xml`；完整的新格式、
+> 加密備份 `.tar` 與遷移流程請見 [sqlcipher.md](sqlcipher.md)。
+
+每個 legacy 日記檔（`YYYY-MM-DD.xml`，只作為遷移輸入）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -111,7 +116,7 @@ Vault 檔（`vault.xml`）：
 - 用短語復原時只改寫 `vault.xml`（新 salt、新 master key 包裝同一把 diary key），此檔保持不變，所以短語仍然有效。
 - 備份必須包含這個檔案；只複製 `vault.xml` 與日記檔會讓短語失效。
 
-索引檔（`index.xml`）：
+legacy 索引檔（`index.xml`，新版本不再產生）：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -136,9 +141,9 @@ v5 索引的 AAD 使用 `index` object kind 加上 `vault-id`／`key-id`；舊�
 magic "FDAT" | version u8 | IV 12 bytes | AES-256-GCM ciphertext + tag
 ```
 
-MIME 與顯示順序存在同資料夾的 `manifest.xml`；manifest 遺失時，解密後可由 magic bytes
-重新判斷 MIME。圖片與 manifest 都不會出現在 `list_entries`，因為掃描只處理頂層的
-`YYYY-MM-DD.xml`。
+MIME 與顯示順序存在 SQLCipher；legacy 遷移時仍會讀取資料夾內的 `manifest.xml`。
+manifest 遺失時，解密後可由 magic bytes 重新判斷 MIME。圖片不會出現在
+`list_entries`，DB 的 `entries` 與 `attachments` 是分開的。
 
 > 舊版（`version="1"`）vault 使用單次 SHA-256 派生金鑰，並以 `<verifier>` 驗證密碼。
 > 解鎖舊 vault 時會自動遷移：先以舊金鑰解密所有日記、用新的隨機 diary key 重新加密，
@@ -237,12 +242,13 @@ diary/
 - 新增中斷 → 留下未被 manifest 引用的圖片，下次載入時補到最後。
 - 刪除中斷 → manifest 指向不存在的圖片，顯示「圖片遺失」佔位，不會讓已刪除的圖復活。
 
-manifest 遺失或損壞時，會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；
-資料不會不見，但精確順序只能近似恢復。整個日期資料夾沒有對應 XML 時視為孤兒，
+manifest 現在只存在 SQLCipher 的 `attachments` 表；不再有 `manifest.xml`。
+DB rows 遺失時會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；資料不會不見，
+但精確順序只能近似恢復。整個日期資料夾沒有對應的 `entries` 列時視為孤兒，
 可用 `list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除，不會自動刪除。
 
-刪除日記的順序是 **index → XML → 附件資料夾**；反過來先刪附件會在 crash 時留下
-「日記還在、圖片沒了」的更糟狀態。
+刪除日記的順序是 **DB（entries 與 attachment rows 明確刪除）→ 附件資料夾**；
+反過來先刪附件會在 crash 時留下「日記還在、圖片沒了」的更糟狀態。
 
 ## 設定檔
 
@@ -267,6 +273,28 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 缺少元素時自動套用預設值（分別是 10 分鐘與 800 毫秒），下次寫入即升級為 `version="3"`；
 但元素存在而內容不合法時會直接報錯，不會默默改成預設值。
 
+### 加密備份（`.tar`）
+
+設定頁匯出的備份是未壓縮的 tar，沒有額外的 manifest 檔，結構固定：
+
+```text
+diary.db                     # VACUUM INTO 快照（SQLCipher 密文）
+vault.xml                    # Argon2id 包裝的 diary key
+recovery.xml                 # 選用；有啟用回復短語時才存在
+attachments/YYYY-MM-DD/<32 hex>.bin
+```
+
+- 檔名建議為 `fly-diary-backup-YYYY-MM-DD.tar`，但 App 不依賴檔名。
+- `diary.db` 是 `VACUUM INTO` 的輸出，等同一致快照；不含 `-wal`／`-shm`。
+- `vault.xml` 與 `recovery.xml` 讓備份在 App 無法解鎖時仍可手動救援；App 內還原
+  會驗證但不會覆寫目前的包裝檔。
+- 解壓時只接受上述路徑；`..`、絕對路徑、重複路徑、非預期檔名與超過大小上限的
+  項目都會被拒絕。
+- 還原只替換 `diary.db` 與 `attachments/`，舊資料移至
+  `<diary>.local-backup-<timestamp>`；`diary.db-wal`、`diary.db-shm`、
+  `migration.journal` 與暫存檔不會進備份。
+- 備份不是同步：沒有三方比較、衝突清單或自動上傳。
+
 ## 日記儲存位置
 
 **第一次啟動**時，解鎖畫面會要求選擇日記資料夾（可手動輸入或按「瀏覽…」開啟原生選擇器），
@@ -277,8 +305,14 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 - Windows：`%APPDATA%\com.flydiary.app\diary\`
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
-按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。整個資料夾可直接備份（含 `recovery.xml`，如果有），
-但**沒有密碼或回復短語就無法還原內容**。
+按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。資料夾內是 `diary.db`、`vault.xml`、
+`recovery.xml` 與 `attachments/`；備份請用設定頁的「匯出備份」，不要直接複製執行中的
+`diary.db`。**沒有密碼或回復短語就無法還原內容**；只複製 `diary.db` 也打不開，因為 DB key
+來自 `vault.xml` 裡包裝的 diary key。
+
+行動版（Android／iOS）沒有檔案系統資料夾選擇器，日記固定存放在 App 私有資料夾：解鎖畫面只在
+第一次啟動時顯示唯讀路徑，不提供「瀏覽…」或「切換工作區」；設定頁也不顯示變更路徑按鈕。
+備份檔可透過系統檔案選擇器存到 SAF 可寫入的位置。
 
 ### 切換工作區
 

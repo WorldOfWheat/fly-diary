@@ -14,6 +14,7 @@
 //
 //   els                 — the lookup table from `dom.js`
 //   canAttachImages     — () => boolean
+//   endNativePicker     — () => void, releases the image-picker suspend guard
 //   pasteImageFromClipboard — () => void (native clipboard fallback)
 //   handleUnlockSubmit  — (event) => void
 //   browseForDir        — () => void
@@ -205,6 +206,7 @@ export function initEventWiring(deps) {
 
   // Recovery phrase form, which replaces the passphrase form on the same card.
   if (els.recoveryOpen) on(els.recoveryOpen, "click", deps.showRecoveryForm);
+  if (els.lockRestore) on(els.lockRestore, "click", deps.restoreFromLock);
   if (els.recoveryBack) on(els.recoveryBack, "click", deps.hideRecoveryForm);
   if (els.recoveryForm) on(els.recoveryForm, "submit", deps.handleRecoverySubmit);
 
@@ -249,9 +251,11 @@ export function initEventWiring(deps) {
     );
   }
   if (els.attachmentInput) {
-    on(els.attachmentInput, "change", (event) =>
-      deps.addAttachmentFiles(event.target.files)
-    );
+    on(els.attachmentInput, "change", (event) => {
+      deps.endNativePicker?.();
+      return deps.addAttachmentFiles(event.target.files);
+    });
+    on(els.attachmentInput, "cancel", () => deps.endNativePicker?.());
   }
   if (els.attachmentList) {
     on(els.attachmentList, "click", deps.handleAttachmentClick);
@@ -449,6 +453,15 @@ export function initEventWiring(deps) {
   on(els.settingsOverlay, "mousedown", (e) => {
     if (e.target === els.settingsOverlay) deps.closeSettings();
   });
+
+  // Encrypted backup export/restore. Guarded because the DOM tests may use a
+  // reduced settings document.
+  if (els.settingsBackupBtn) {
+    on(els.settingsBackupBtn, "click", deps.exportBackup);
+  }
+  if (els.settingsRestoreBtn) {
+    on(els.settingsRestoreBtn, "click", deps.restoreBackup);
+  }
 
   // Recovery phrase settings + one-time display dialog.
   if (els.recoveryGenerateBtn) {

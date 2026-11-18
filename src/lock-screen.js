@@ -60,6 +60,14 @@ export function createLockScreen(deps) {
 
   /** Whether a settings file exists (a diary folder has been chosen). */
   let configured = false;
+  /**
+   * Whether this build has no filesystem folder picker (Android/iOS).
+   *
+   * The diary always lives in the app's private data directory on mobile, so
+   * the path field is read-only there and the controls that would open a
+   * picker are hidden instead of silently doing nothing.
+   */
+  let mobile = false;
   /** Whether the chosen folder already holds a vault. */
   let vaultInitialized = false;
   /**
@@ -74,6 +82,13 @@ export function createLockScreen(deps) {
   let kdfDefaults = null;
   /** Whether the recovery-phrase form has replaced the passphrase form. */
   let recoveryMode = false;
+  /** Whether the selected vault still uses the legacy XML layout. */
+  let legacyFormat = false;
+  /**
+   * Whether the last unlock accepted the passphrase but could not open
+   * `diary.db`. The lock screen then offers an encrypted backup restore.
+   */
+  let databaseBroken = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
   /** Guard against double-clicking recovery while the workspace is committed. */
@@ -166,6 +181,8 @@ export function createLockScreen(deps) {
     els.lockError.textContent = message;
     els.passphrase.value = "";
     els.passphraseConfirm.value = "";
+    databaseBroken = false;
+    if (els.lockRestore) els.lockRestore.hidden = true;
     recoveryMode = false;
     clearRecoveryFields();
     renderLockScreen();
@@ -294,7 +311,7 @@ export function createLockScreen(deps) {
         renderWorkspacePath();
       }
 
-      await deps.invoke("recover_vault", {
+      const result = await deps.invoke("recover_vault", {
         phrase,
         newPassphrase: next,
       });
@@ -302,6 +319,19 @@ export function createLockScreen(deps) {
       vaultInitialized = true;
       recoveryMode = false;
       clearRecoveryFields();
+      if (result?.legacy) {
+        legacyFormat = true;
+        if (!(await offerMigration())) return;
+      }
+      if (result?.databaseError) {
+        databaseBroken = true;
+        if (els.lockRestore) els.lockRestore.hidden = false;
+        els.recoveryUnlockError.textContent = deps.t("lock.databaseError", {
+          message: result.databaseError,
+        });
+        await deps.invoke("lock");
+        return;
+      }
       await deps.enterApp();
     } catch (err) {
       console.error("recover_vault failed:", err);
@@ -392,19 +422,35 @@ export function createLockScreen(deps) {
     // The path field is shown on first run, and whenever the user opens the
     // workspace picker. It is *not* tied to `configured` any more: a returning
     // user must be able to point the app at another diary folder before they
-    // unlock, otherwise a second workspace would be unreachable.
-    els.pathField.hidden = configured && !pickingWorkspace;
+    // unlock, otherwise a second workspace would be unreachable. Mobile has no
+    // folder picker and the diary lives in a fixed private directory, so the
+    // field is never shown there, including on first run.
+    els.pathField.hidden = mobile || (configured && !pickingWorkspace);
     // The current workspace is only worth showing once one has been chosen,
     // and it is hidden while the picker is open (the path field says it all).
-    els.workspaceRow.hidden = !configured || pickingWorkspace;
+    // Mobile has no second workspace, so the row is never useful there.
+    els.workspaceRow.hidden = mobile || !configured || pickingWorkspace;
+    if (els.browseDir) els.browseDir.hidden = mobile;
+    if (els.switchWorkspace) {
+      // Hide and disable: mobile has exactly one workspace, so even if an older
+      // layout reveals the row the button cannot open a picker that has no
+      // filesystem target.
+      els.switchWorkspace.hidden = mobile;
+      els.switchWorkspace.disabled = mobile;
+    }
+    if (els.diaryDir) els.diaryDir.readOnly = mobile;
     // KDF parameters can only be chosen when a new vault is being created.
     els.advancedField.hidden = vaultInitialized;
 
     if (vaultInitialized) {
       // A vault exists at the selected location: ask for the passphrase only.
-      els.lockSubtitle.textContent = configured
-        ? deps.t("lock.subtitle.unlock")
-        : deps.t("lock.subtitle.existing");
+      // A legacy workspace gets an explicit note, because the migration prompt
+      // can only run after the passphrase has produced the diary key.
+      els.lockSubtitle.textContent = legacyFormat
+        ? deps.t("lock.subtitle.legacy")
+        : configured
+          ? deps.t("lock.subtitle.unlock")
+          : deps.t("lock.subtitle.existing");
       els.passphraseConfirm.hidden = true;
       els.passphrase.placeholder = deps.t("lock.passphrase");
       els.passphrase.autocomplete = "current-password";
@@ -439,6 +485,7 @@ export function createLockScreen(deps) {
   async function loadSettings() {
     const settings = await deps.invoke("get_settings");
     configured = settings.configured;
+    mobile = Boolean(settings.mobile);
     els.diaryDir.value = settings.diaryDir ?? settings.defaultDir ?? "";
     renderWorkspacePath();
     // Keep the idle timer in sync with whatever is on disk.
@@ -470,10 +517,27 @@ export function createLockScreen(deps) {
               return false;
             })
         : false;
+      legacyFormat = false;
+      databaseBroken = false;
+      if (els.lockRestore) els.lockRestore.hidden = true;
+      if (exists) {
+        try {
+          const status = await deps.invoke(
+            "storage_status",
+            path ? { path } : {}
+          );
+          legacyFormat = status?.format === "legacy";
+        } catch (err) {
+          // Older test doubles and older builds do not expose this command;
+          // the post-unlock prompt still handles the migration.
+          console.error("storage_status failed:", err);
+        }
+      }
       return exists;
     } catch (err) {
       console.error("vault_exists failed:", err);
       recoveryAvailable = false;
+      legacyFormat = false;
       return false;
     }
   }
@@ -509,6 +573,7 @@ export function createLockScreen(deps) {
    * pointing at the original workspace.
    */
   async function openWorkspacePicker() {
+    if (mobile) return;
     els.lockError.textContent = "";
     pickingWorkspace = true;
     // The native picker itself relaxes capture protection for its lifetime and
@@ -559,6 +624,99 @@ export function createLockScreen(deps) {
     }
   }
 
+  /**
+   * Ask whether to migrate a legacy XML workspace to SQLCipher.
+   *
+   * Migration needs the diary key, so it can only run after a successful
+   * unlock. Declining locks again and reveals the workspace field, which is the
+   * only safe outcome: the SQLCipher build cannot read the legacy layout.
+   *
+   * Returns true when the caller should continue into the app.
+   */
+  async function offerMigration() {
+    if (!legacyFormat) return true;
+
+    const migrate =
+      typeof globalThis.confirm === "function"
+        ? globalThis.confirm(deps.t("lock.migrateConfirm"))
+        : true;
+    if (!migrate) {
+      await deps.invoke("lock");
+      legacyFormat = false;
+      pickingWorkspace = true;
+      showLockScreen();
+      renderLockScreen();
+      els.lockError.textContent = deps.t("lock.migrateDeclined");
+      return false;
+    }
+
+    els.lockError.textContent = deps.t("lock.migrateRunning");
+    try {
+      const report = await deps.invoke("migrate_storage");
+      legacyFormat = false;
+      const broken = report?.broken?.length ?? 0;
+      if (broken > 0) {
+        deps.setStatus?.(
+          deps.t("lock.migrateBroken", {
+            migrated: report?.migrated ?? 0,
+            broken,
+          })
+        );
+      }
+      return true;
+    } catch (err) {
+      console.error("migrate_storage failed:", err);
+      els.lockError.textContent =
+        typeof err === "string" ? err : deps.t("lock.migrateFailed");
+      return false;
+    }
+  }
+
+  /**
+   * Restore an encrypted backup while the lock screen is showing.
+   *
+   * Reached only after `unlock` accepted the passphrase but `diary.db` could
+   * not be opened. The key was wiped by the earlier `lock`; pressing this
+   * button derives it again, then immediately replaces the database and enters
+   * the diary. Cancelling the file picker locks again.
+   */
+  async function restoreFromLock() {
+    if (!els.lockRestore || els.lockRestore.disabled) return;
+    const passphrase = els.passphrase.value;
+    if (!passphrase) {
+      els.lockError.textContent = deps.t("lock.errNoPassphrase");
+      return;
+    }
+    els.lockRestore.disabled = true;
+    els.lockError.textContent = "";
+    deps.beginNativePicker?.();
+    try {
+      const result = await deps.invoke("unlock", { passphrase });
+      if (!result?.databaseError) {
+        await deps.enterApp();
+        return;
+      }
+      const path = await deps.invoke("restore_backup");
+      if (!path) {
+        await deps.invoke("lock");
+        els.lockError.textContent = deps.t("lock.databaseError", {
+          message: result.databaseError,
+        });
+        return;
+      }
+      databaseBroken = false;
+      if (els.lockRestore) els.lockRestore.hidden = true;
+      await deps.enterApp();
+    } catch (err) {
+      await deps.invoke("lock").catch(() => {});
+      els.lockError.textContent =
+        typeof err === "string" ? err : deps.t("lock.errUnlockFailed");
+    } finally {
+      deps.endNativePicker?.();
+      els.lockRestore.disabled = false;
+    }
+  }
+
   async function handleUnlockSubmit(event) {
     event.preventDefault();
     els.lockError.textContent = "";
@@ -603,8 +761,11 @@ export function createLockScreen(deps) {
         setLockSubmitBusy(true, !vaultInitialized);
       }
 
+      let unlockResult = { legacy: false };
       if (vaultInitialized) {
-        await deps.invoke("unlock", { passphrase });
+        unlockResult = (await deps.invoke("unlock", { passphrase })) ?? {
+          legacy: false,
+        };
       } else {
         const kdf = readKdfParams();
         if (
@@ -617,6 +778,19 @@ export function createLockScreen(deps) {
         }
         await deps.invoke("create_vault", { passphrase, kdf });
         vaultInitialized = true;
+      }
+      if (unlockResult?.legacy) {
+        legacyFormat = true;
+        if (!(await offerMigration())) return;
+      }
+      if (unlockResult?.databaseError) {
+        databaseBroken = true;
+        if (els.lockRestore) els.lockRestore.hidden = false;
+        els.lockError.textContent = deps.t("lock.databaseError", {
+          message: unlockResult.databaseError,
+        });
+        await deps.invoke("lock");
+        return;
       }
       await deps.enterApp();
     } catch (err) {
@@ -631,6 +805,7 @@ export function createLockScreen(deps) {
 
   /** Open the native folder picker and store the result in the path field. */
   async function browseForDir() {
+    if (mobile) return;
     els.lockError.textContent = "";
     try {
       const picked = await deps.invoke("pick_diary_dir");
@@ -646,6 +821,7 @@ export function createLockScreen(deps) {
 
   /** Change the diary location from the sidebar (must be locked first). */
   async function changeDiaryDir() {
+    if (mobile) return;
     await deps.lockAndFlush();
 
     deps.resetEditorState();
@@ -713,6 +889,7 @@ export function createLockScreen(deps) {
     openWorkspacePicker,
     cancelWorkspacePicker,
     handleUnlockSubmit,
+    restoreFromLock,
     browseForDir,
     changeDiaryDir,
     lockNow,

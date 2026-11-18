@@ -1,6 +1,8 @@
 //! XML serialization for encrypted diary entries.
 //!
-//! On-disk format (one file per day, `YYYY-MM-DD.xml`):
+//! Legacy XML format (read-only during the one-time SQLCipher migration, plus
+//! `vault.xml` / `recovery.xml`). The current app stores entries in SQLCipher
+//! and exports encrypted backups; it never writes `YYYY-MM-DD.xml`.
 //!
 //! ```xml
 //! <?xml version="1.0" encoding="UTF-8"?>

@@ -12,7 +12,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createSettingsDialog } from "../src/settings-dialog.js";
-import { installDom, fakeEls, fakeT, fakeInvoke, spy } from "./helpers/dom.js";
+import {
+  installDom,
+  fakeEls,
+  fakeT,
+  fakeInvoke,
+  spy,
+  fakeElement,
+} from "./helpers/dom.js";
 
 const SETTINGS_IDS = [
   "settingsOverlay",
@@ -24,6 +31,7 @@ const SETTINGS_IDS = [
   "settingsSave",
   "settingsCalibrate",
   "settingsDiaryPath",
+  "settingsChangeDirBtn",
   "settingsAppVersion",
   "settingsAppCommit",
   "settingsAppAuthor",
@@ -36,6 +44,9 @@ const SETTINGS_IDS = [
   "recoveryStatus",
   "recoveryGenerateBtn",
   "recoveryRemoveBtn",
+  "settingsBackupBtn",
+  "settingsRestoreBtn",
+  "settingsBackupStatus",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -57,7 +68,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "1.0.0",
+      version: "2.0.0",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -109,6 +120,23 @@ async function withSettings(body, overrides) {
   }
 }
 
+/** Add two collapsible settings blocks to the fake overlay. */
+function addSettingsSections(els) {
+  const first = fakeElement("details");
+  first.className = "settings-section";
+  first.open = true;
+  const firstSummary = fakeElement("summary");
+  firstSummary.className = "settings-disclosure";
+  first.append(firstSummary);
+
+  const second = fakeElement("details");
+  second.className = "settings-section";
+  second.open = true;
+  els.settingsOverlay.append(first, second);
+
+  return firstSummary;
+}
+
 // ---------------------------------------------------------------------------
 // Open / close
 // ---------------------------------------------------------------------------
@@ -155,11 +183,81 @@ test("openSettings shows the diary folder", async () => {
   });
 });
 
+test("openSettings hides the folder action on mobile", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.openSettings();
+      assert.equal(els.settingsChangeDirBtn.hidden, true);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          autoLockChoices: [0, 5, 15],
+          autoLockMinutes: 5,
+          autosaveDelayChoices: [200, 800, 3000],
+          autosaveDelayMs: 800,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("openSettings keeps the folder action on desktop", async () => {
+  await withSettings(async ({ settings, els }) => {
+    await settings.openSettings();
+    assert.equal(els.settingsChangeDirBtn.hidden, false);
+  });
+});
+
+test("openSettings collapses the settings blocks on mobile", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      const firstSummary = addSettingsSections(els);
+      await settings.openSettings();
+
+      assert.deepEqual(
+        els.settingsOverlay
+          .byClass("settings-section")
+          .map((section) => section.open),
+        [false, false]
+      );
+      assert.equal(document.activeElement, firstSummary);
+    },
+    {
+      invokeTable: {
+        get_settings: {
+          autoLockChoices: [0, 5, 15],
+          autoLockMinutes: 5,
+          autosaveDelayChoices: [200, 800, 3000],
+          autosaveDelayMs: 800,
+          mobile: true,
+        },
+      },
+    }
+  );
+});
+
+test("openSettings leaves the settings blocks open on desktop", async () => {
+  await withSettings(async ({ settings, els }) => {
+    addSettingsSections(els);
+    await settings.openSettings();
+
+    assert.deepEqual(
+      els.settingsOverlay
+        .byClass("settings-section")
+        .map((section) => section.open),
+      [true, true]
+    );
+    assert.equal(document.activeElement, els.settingsCurrentPass);
+  });
+});
+
 test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "1.0.0");
+    assert.equal(els.settingsAppVersion.textContent, "2.0.0");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
@@ -790,6 +888,103 @@ test("the vault-wide actions never write settings", async () => {
 
     assert.deepEqual(invoke.commands(), []);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Encrypted backup export / restore
+// ---------------------------------------------------------------------------
+
+test("exportBackup flushes the pending save and reports the path", async () => {
+  const flushSave = spy(async () => {});
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.exportBackup();
+
+      assert.equal(flushSave.count(), 1);
+      assert.equal(
+        els.settingsBackupStatus.textContent,
+        "backup.exported(path=/home/u/backup.tar)"
+      );
+      assert.equal(
+        els.settingsBackupStatus.classList.contains("is-saved"),
+        true
+      );
+    },
+    {
+      deps: { flushSave },
+      invokeTable: { export_backup: "/home/u/backup.tar" },
+    }
+  );
+});
+
+test("exportBackup treats a cancelled dialog as a no-op", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.exportBackup();
+      assert.equal(els.settingsBackupStatus.textContent, "");
+    },
+    { invokeTable: { export_backup: null } }
+  );
+});
+
+test("exportBackup reports a backend failure", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      await settings.exportBackup();
+      assert.equal(
+        els.settingsBackupStatus.textContent,
+        "backup.exportFailed(message=disk full)"
+      );
+    },
+    {
+      invokeTable: {
+        export_backup: () => {
+          throw "disk full";
+        },
+      },
+    }
+  );
+});
+
+test("restoreBackup asks first, then reloads the diary", async () => {
+  const original = globalThis.confirm;
+  const afterRestore = spy(async () => {});
+  const flushSave = spy(async () => {});
+  globalThis.confirm = () => true;
+  try {
+    await withSettings(
+      async ({ settings, els, invoke }) => {
+        await settings.restoreBackup();
+
+        assert.equal(flushSave.count(), 1);
+        assert.equal(afterRestore.count(), 1);
+        assert.ok(invoke.commands().includes("restore_backup"));
+        assert.equal(
+          els.settingsBackupStatus.textContent,
+          "backup.restored(path=/home/u/diary.local-backup-1)"
+        );
+      },
+      {
+        deps: { flushSave, afterRestore },
+        invokeTable: { restore_backup: "/home/u/diary.local-backup-1" },
+      }
+    );
+  } finally {
+    globalThis.confirm = original;
+  }
+});
+
+test("restoreBackup does nothing when the confirmation is declined", async () => {
+  const original = globalThis.confirm;
+  globalThis.confirm = () => false;
+  try {
+    await withSettings(async ({ settings, invoke }) => {
+      await settings.restoreBackup();
+      assert.deepEqual(invoke.commands(), []);
+    });
+  } finally {
+    globalThis.confirm = original;
+  }
 });
 
 /** Shared deps for the tests that build a second controller. */

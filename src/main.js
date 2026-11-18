@@ -4,6 +4,9 @@
 // be resolved by the browser.
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+// Android-only APIs. `withGlobalTauri` exposes the app module on both desktop
+// and mobile; `onBackButtonPress` is simply never called off Android.
+const tauriApp = window.__TAURI__.app;
 
 // Relative specifiers *do* work without a bundler, so the i18n layer and the
 // pure helpers under `lib/` are normal ES modules next to this file.
@@ -29,6 +32,8 @@ import {
   firstRowForYear,
 } from "./lib/list-rows.js";
 import { prefersReducedMotion, setExitAnimationsEnabled } from "./lib/motion.js";
+import { backButtonAction } from "./lib/back-nav.js";
+import { nativePickerGuard } from "./lib/native-picker.js";
 import { els } from "./dom.js";
 import { initEventWiring } from "./wiring.js";
 import { createCalendar } from "./calendar.js";
@@ -53,6 +58,8 @@ let savedTitle = "";
 let savedContent = "";
 /** Debounce timer for autosave. */
 let saveTimer = null;
+/** Whether the current native picker backgrounded the webview. */
+let nativePickerWasHidden = false;
 /** All entry metadata, newest first. */
 let allEntries = [];
 /** Date → metadata and date → broken reason, for the review strip. */
@@ -1737,6 +1744,14 @@ async function saveNow() {
   }
 }
 
+/** Flush a pending autosave without locking, used before a backup export. */
+async function flushPendingSave() {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  await saveNow();
+}
+
 function scheduleSave() {
   if (saveTimer) clearTimeout(saveTimer);
   // A locked entry has nothing to save, and showing "editing" would suggest
@@ -1896,6 +1911,26 @@ function resetEditorState() {
 }
 
 /**
+ * Reload the visible diary after an in-place backup restore.
+ *
+ * The session key is unchanged (the backup was verified against it), but the
+ * database and attachments were replaced, so the editor, list, search index and
+ * stats must all be rebuilt from disk.
+ */
+async function reloadAfterRestore() {
+  // The backend dropped the in-memory full-text index, so a restored diary
+  // must not keep showing search hits that point at the old database.
+  searchQuery = "";
+  searchResults = null;
+  if (els.search) els.search.value = "";
+  currentView = "all";
+  syncViewTabs("all");
+  resetEditorState();
+  await refreshList({ scanBroken: true });
+  syncHeaderActions();
+}
+
+/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
@@ -1905,6 +1940,10 @@ async function lockAndFlush() {
   // No fading overlay ghosts above the lock screen: their z-index is higher
   // than the lock layer, and even a title or thumbnail must not linger there.
   setExitAnimationsEnabled(false);
+  // A picker that was open when the session locked must not suppress the next
+  // background lock after the user unlocks again.
+  nativePickerGuard.reset();
+  nativePickerWasHidden = false;
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
@@ -1959,6 +1998,20 @@ function stopAutoLockTimer() {
   autoLock.stop();
 }
 
+/** Mark the start of a native file/folder picker. */
+function beginNativePicker() {
+  nativePickerWasHidden = false;
+  nativePickerGuard.begin();
+  resetAutoLockTimer();
+}
+
+/** Mark the end of a native picker and restart the idle countdown. */
+function endNativePicker() {
+  nativePickerWasHidden = false;
+  nativePickerGuard.end();
+  resetAutoLockTimer();
+}
+
 /** Apply a new auto-lock duration and re-arm the timer. */
 function setAutoLockMinutes(minutes) {
   autoLock.setMinutes(minutes);
@@ -1973,17 +2026,92 @@ function setAutoLockMinutes(minutes) {
  */
 function initSuspendLock() {
   const lockIfUnlocked = () => {
-    if (!els.app.hidden) lockScreen.lockNow();
+    if (els.app.hidden) return;
+    if (nativePickerGuard.suppresses()) return;
+    lockScreen.lockNow();
   };
-  listen("tauri://suspended", lockIfUnlocked);
+  const handleHide = () => {
+    if (nativePickerGuard.isOpen()) nativePickerWasHidden = true;
+    lockIfUnlocked();
+  };
+  listen("tauri://suspended", handleHide);
   listen("tauri://resumed", lockIfUnlocked);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") lockIfUnlocked();
-    // Timers can be suspended while hidden; check the deadline as soon as the
-    // webview is visible again.
-    else resetAutoLockTimer();
+    if (document.visibilityState === "hidden") {
+      handleHide();
+    } else {
+      // Returning from a picker is not a lock event: close the guard and let
+      // the idle timer start a fresh interval.
+      if (nativePickerWasHidden) endNativePicker();
+      else resetAutoLockTimer();
+    }
   });
-  window.addEventListener("pagehide", lockIfUnlocked);
+  // `focus` covers pickers that do not change visibility. Only end after a
+  // picker actually backgrounded the webview; a focus event while the picker is
+  // still opening must not disarm the guard.
+  window.addEventListener("focus", () => {
+    if (nativePickerWasHidden) endNativePicker();
+  });
+  window.addEventListener("pagehide", handleHide);
+}
+
+/**
+ * Route the Android hardware/gesture back button through the overlay stack.
+ *
+ * Registering this listener replaces Tauri's default back action, which would
+ * leave the activity when no WebView history exists. Leaving the activity fires
+ * `pagehide`/`visibilitychange` and therefore looks like "closing settings logs
+ * me out". Instead, back closes the topmost DOM overlay; the diary stays
+ * unlocked. Only an empty stack exits the app (the normal Android behaviour,
+ * and the only path that intentionally triggers the suspend lock).
+ */
+function handleAndroidBack() {
+  const action = backButtonAction({
+    attachmentViewer: attachmentGallery.isViewerOpen(),
+    recovery: recoveryDialog.isOpen(),
+    stats: statsDialog.isStatsOpen(),
+    importDialog: importDialog.isImportOpen(),
+    settings: settingsDialog.isSettingsOpen(),
+    calendar: calendar.isCalendarOpen(),
+    phoneEditor:
+      Boolean(phoneLayout?.matches) && els.app?.dataset.layer === "editor",
+  });
+
+  switch (action) {
+    case "closeAttachments":
+      attachmentGallery.closeViewer();
+      return;
+    case "closeRecovery":
+      recoveryDialog.close();
+      return;
+    case "closeStats":
+      statsDialog.closeStats();
+      return;
+    case "closeImport":
+      importDialog.closeImport();
+      return;
+    case "closeSettings":
+      settingsDialog.closeSettings();
+      return;
+    case "closeCalendar":
+      calendar.closeCalendar({ restoreFocus: true });
+      return;
+    case "showList":
+      showListLayer();
+      return;
+    default:
+      Promise.resolve(tauriApp?.exit?.(0)).catch((err) => {
+        console.error("back button exit failed:", err);
+      });
+  }
+}
+
+/** Register the Android back handler when the API is available. */
+function initAndroidBackButton() {
+  if (typeof tauriApp?.onBackButtonPress !== "function") return;
+  tauriApp.onBackButtonPress(handleAndroidBack).catch((err) => {
+    console.error("back button listener failed:", err);
+  });
 }
 
 /** Wire the global activity listeners once, at startup. */
@@ -2123,6 +2251,11 @@ function createControllers() {
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
     openRecovery: () => recoveryDialog.open(),
+    flushSave: flushPendingSave,
+    flushAndLock: lockAndFlush,
+    afterRestore: reloadAfterRestore,
+    beginNativePicker,
+    endNativePicker,
   });
 
   recoveryDialog = createRecoveryDialog({
@@ -2143,6 +2276,8 @@ function createControllers() {
     flushText: saveNow,
     refreshList,
     onEntryChanged: syncHeaderActions,
+    beginNativePicker,
+    endNativePicker,
   });
 
   nativeFileDrop = createNativeFileDrop({
@@ -2156,6 +2291,7 @@ function createControllers() {
     els,
     invoke,
     t,
+    setStatus,
     setAutoLockMinutes,
     setAutosaveDelay,
     enterApp,
@@ -2170,6 +2306,8 @@ function createControllers() {
     closeRecovery: (options) => recoveryDialog.close(options),
     renderDateLabel,
     lockAndFlush,
+    beginNativePicker,
+    endNativePicker,
   });
 }
 
@@ -2303,6 +2441,7 @@ function wireEvents() {
     els,
     // Lock screen
     handleUnlockSubmit: lockScreen.handleUnlockSubmit,
+    restoreFromLock: lockScreen.restoreFromLock,
     browseForDir: lockScreen.browseForDir,
     openWorkspacePicker: lockScreen.openWorkspacePicker,
     cancelWorkspacePicker: lockScreen.cancelWorkspacePicker,
@@ -2320,6 +2459,7 @@ function wireEvents() {
     showListLayer,
     // Attachments
     pickAttachment: attachmentGallery.pickFile,
+    endNativePicker,
     canAttachImages: attachmentGallery.canEdit,
     onAttachmentBlocked: () => {
       // Read-only is a deliberate gate: an image paste/drop must not silently
@@ -2366,6 +2506,8 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
+    exportBackup: settingsDialog.exportBackup,
+    restoreBackup: settingsDialog.restoreBackup,
     // Recovery phrase: create/show-once dialog and removal.
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,
@@ -2461,6 +2603,7 @@ async function init() {
   // Idle auto-lock listens globally; the duration arrives with the settings.
   initAutoLock();
   initSuspendLock();
+  initAndroidBackButton();
 
   // The bookmark button starts disabled: no entry is open yet.
   renderFavouriteButton();

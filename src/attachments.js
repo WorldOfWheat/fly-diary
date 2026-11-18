@@ -22,6 +22,8 @@ import { animateOverlayExit, prefersReducedMotion } from "./lib/motion.js";
 //   refreshList  — async ({ scanBroken }) => refresh the sidebar
 //   onEntryChanged — refresh header actions after the first image creates an entry
 //   prepareFile  — optional (file) => { mime, data, width, height } for tests
+//   beginNativePicker — optional () => void, marks the file picker as open
+//   endNativePicker   — optional () => void, marks it as closed
 
 /** Longest edge of the stored image, in pixels. */
 export const MAX_LONG_EDGE = 1000;
@@ -638,6 +640,7 @@ export function createAttachmentGallery(deps) {
 
   function pickFile() {
     if (!editable() || !has("attachmentInput")) return;
+    deps.beginNativePicker?.();
     els.attachmentInput.value = "";
     els.attachmentInput.click();
   }
@@ -676,6 +679,7 @@ export function createAttachmentGallery(deps) {
    * means the new images are appended in the order the user selected them.
    */
   async function addFiles(fileList) {
+    deps.endNativePicker?.();
     if (!editable()) return 0;
     const files = Array.from(fileList || []);
     if (files.length === 0) return 0;
