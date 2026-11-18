@@ -587,8 +587,6 @@
                         變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。
                     </p>
 
-                    <div id="vault-kdf" class="settings-kdf"></div>
-
                     <label class="settings-row" for="settings-current-pass">
                         <span class="settings-label" data-i18n="settings.currentPass">目前密碼</span>
                         <input id="settings-current-pass" class="settings-input" type="password"
@@ -612,6 +610,7 @@
                         <p class="settings-hint" data-i18n="settings.advancedHint">
                             提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。
                         </p>
+                        <div id="vault-kdf" class="settings-kdf"></div>
                         <div class="settings-kdf-grid">
                             <label class="settings-label" for="settings-kdf-memory" data-i18n="lock.kdfMemory">記憶體
                                 (MiB)</label>

@@ -9,6 +9,8 @@ reset 檔位於 [`src/styles/reset.css`](../src/styles/reset.css)，由入口
 - **只處理瀏覽器預設**：盒模型、`body` 外距、圖片底線空隙、表單控制項外距與字體繼承。
 - **不做 universal reset**：沒有 `* { margin: 0; padding: 0 }`。標題、段落、清單、表單與按鈕的
   語意預設會保留；需要調整間距的元件在自己的 stylesheet 明確設定。
+- **統一間距尺度**：所有 `padding` 與 `margin` 都使用 `tokens.css` 的 `--space-*`（2px 級距），
+  不再寫一次性 rem 值；只有 `0`、`auto`、safe-area 計算與 `sr-only` 的光學負值例外。
 - **零特異度**：表單規則使用 `:where()`，任何 class 規則都能自然覆寫，不需要 `!important`。
 - **保留原生外觀**：不移除按鈕與輸入框的 border、padding、background 或 `appearance`。
 

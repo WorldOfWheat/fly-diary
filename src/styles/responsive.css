@@ -30,18 +30,18 @@
   }
 
   .editor-header {
-    padding: 0.625rem 0.875rem;
-    padding-top: max(0.625rem, env(safe-area-inset-top));
-    padding-left: max(0.875rem, env(safe-area-inset-left));
-    padding-right: max(0.875rem, env(safe-area-inset-right));
+    padding: var(--space-5) var(--space-7);
+    padding-top: max(var(--space-5), env(safe-area-inset-top));
+    padding-left: max(var(--space-7), env(safe-area-inset-left));
+    padding-right: max(var(--space-7), env(safe-area-inset-right));
   }
 
   .title-wrap {
-    padding: 0.875rem 1rem 0;
+    padding: var(--space-7) var(--space-8) 0;
   }
 
   #content {
-    padding: 1rem;
+    padding: var(--space-8);
   }
 
   .date-sub {
@@ -52,7 +52,7 @@
      the sidebar has taken its share of a narrow window they no longer fit on
      one row, so tighten their padding before resorting to wrapping. */
   .footer-actions .btn-lock {
-    padding: 0.1875rem 0.375rem;
+    padding: var(--space-2) var(--space-3);
   }
 }
 
@@ -133,9 +133,9 @@
   }
 
   .on-this-day {
-    padding: 0.45rem 0.75rem 0.55rem;
-    padding-left: max(0.75rem, env(safe-area-inset-left));
-    padding-right: max(0.75rem, env(safe-area-inset-right));
+    padding: var(--space-4) var(--space-6) var(--space-4);
+    padding-left: max(var(--space-6), env(safe-area-inset-left));
+    padding-right: max(var(--space-6), env(safe-area-inset-right));
   }
 
   .history-card {
@@ -201,7 +201,7 @@
 
   .lock-workspace .btn-browse {
     flex: 1;
-    padding: 0.5rem 0.75rem;
+    padding: var(--space-4) var(--space-6);
   }
 
   .sidebar {
@@ -210,10 +210,10 @@
   }
 
   .sidebar-header {
-    padding: 0.625rem 0.75rem 0.375rem;
-    padding-top: max(0.625rem, env(safe-area-inset-top));
-    padding-left: max(0.75rem, env(safe-area-inset-left));
-    padding-right: max(0.75rem, env(safe-area-inset-right));
+    padding: var(--space-5) var(--space-6) var(--space-3);
+    padding-top: max(var(--space-5), env(safe-area-inset-top));
+    padding-left: max(var(--space-6), env(safe-area-inset-left));
+    padding-right: max(var(--space-6), env(safe-area-inset-right));
   }
 
   /* The footer is cramped on a phone-sized viewport, so the path shrinks
@@ -223,7 +223,7 @@
   }
 
   .modal-overlay {
-    padding: 0.5rem;
+    padding: var(--space-4);
   }
 
   .modal {
@@ -233,12 +233,12 @@
   /* The overlay already fills the window; on a phone-sized viewport the panel
      padding is what has to give, not the grid. */
   .calendar-overlay {
-    padding: 0.5rem;
+    padding: var(--space-4);
   }
 
   .calendar-panel {
     gap: 0.5rem;
-    padding: 0.75rem;
+    padding: var(--space-6);
   }
 
   .cal-grid {
@@ -254,7 +254,7 @@
   }
 
   .attachments {
-    padding: 0 0.75rem 0.5rem;
+    padding: 0 var(--space-6) var(--space-4);
   }
 
   .attachment-item {
@@ -267,15 +267,15 @@
    space from the chrome so the textarea keeps a usable height. */
 @media (max-height: 560px) {
   .lock-card {
-    padding: 1.25rem 1.25rem;
+    padding: var(--space-10) var(--space-10);
   }
 
   .title-wrap {
-    padding-top: 0.5rem;
+    padding-top: var(--space-4);
   }
 
   #content {
-    padding-top: 0.75rem;
+    padding-top: var(--space-6);
   }
 
   .import-list {
@@ -303,7 +303,7 @@
 @media (max-width: 400px) {
   /* The lock card's 2rem/1.75rem padding costs 56px of a 320px window. */
   .lock-card {
-    padding: 1.25rem 1rem;
+    padding: var(--space-10) var(--space-8);
     gap: 0.5rem;
   }
 
@@ -315,7 +315,7 @@
   }
 
   .date-label {
-    padding: 0.25rem 0.5rem;
+    padding: var(--space-2) var(--space-4);
     gap: 0.25rem;
   }
 
@@ -324,10 +324,10 @@
   }
 
   .editor-header {
-    padding: 0.5rem 0.625rem;
-    padding-top: max(0.5rem, env(safe-area-inset-top));
-    padding-left: max(0.625rem, env(safe-area-inset-left));
-    padding-right: max(0.625rem, env(safe-area-inset-right));
+    padding: var(--space-4) var(--space-5);
+    padding-top: max(var(--space-4), env(safe-area-inset-top));
+    padding-left: max(var(--space-5), env(safe-area-inset-left));
+    padding-right: max(var(--space-5), env(safe-area-inset-right));
     gap: 0.375rem;
   }
 
@@ -338,19 +338,19 @@
   }
 
   .editor-footer {
-    padding: 0.375rem 0.625rem;
-    padding-left: max(0.625rem, env(safe-area-inset-left));
-    padding-right: max(0.625rem, env(safe-area-inset-right));
-    padding-bottom: max(0.375rem, env(safe-area-inset-bottom));
+    padding: var(--space-3) var(--space-5);
+    padding-left: max(var(--space-5), env(safe-area-inset-left));
+    padding-right: max(var(--space-5), env(safe-area-inset-right));
+    padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
     gap: 0.375rem;
   }
 
   .title-wrap {
-    padding: 0.75rem 0.875rem 0;
+    padding: var(--space-6) var(--space-7) 0;
   }
 
   #content {
-    padding: 0.75rem 0.875rem;
+    padding: var(--space-6) var(--space-7);
   }
 
   /* A fixed 7rem label column leaves ~150px for the input on a 320px window.
@@ -411,7 +411,7 @@
      the three buttons fit on one row. `aria-pressed` still carries the state,
      and the title attribute still names the action. */
   .btn-favourite {
-    padding: 0.3125rem 0.5rem;
+    padding: var(--space-3) var(--space-4);
   }
 
   .btn-favourite #favourite-label {
@@ -420,25 +420,25 @@
 
   .btn-edit,
   .btn-danger {
-    padding: 0.3125rem 0.5rem;
+    padding: var(--space-3) var(--space-4);
   }
 
   .modal-overlay:not([hidden]) {
-    padding: max(0.5rem, env(safe-area-inset-top))
-      max(0.5rem, env(safe-area-inset-right))
-      max(0.5rem, env(safe-area-inset-bottom))
-      max(0.5rem, env(safe-area-inset-left));
+    padding: max(var(--space-4), env(safe-area-inset-top))
+      max(var(--space-4), env(safe-area-inset-right))
+      max(var(--space-4), env(safe-area-inset-bottom))
+      max(var(--space-4), env(safe-area-inset-left));
   }
 
   .modal-head,
   .modal-body,
   .modal-foot {
-    padding-left: 0.75rem;
-    padding-right: 0.75rem;
+    padding-left: var(--space-6);
+    padding-right: var(--space-6);
   }
 
   .attachments {
-    padding: 0 0.5rem 0.375rem;
+    padding: 0 var(--space-4) var(--space-3);
   }
 
   .attachment-item {
@@ -452,7 +452,7 @@
 @media (max-height: 520px) {
   .calendar-panel {
     gap: 0.5rem;
-    padding: 0.75rem;
+    padding: var(--space-6);
   }
 
   .cal-weekdays span {
@@ -460,7 +460,7 @@
   }
 
   .calendar-foot {
-    padding-top: 0.375rem;
+    padding-top: var(--space-3);
   }
 }
 
@@ -489,7 +489,7 @@
   .font-step,
   .font-value {
     height: 1.75rem;
-    padding: 0 0.5rem;
+    padding: 0 var(--space-4);
   }
 
   .attachment-control {
