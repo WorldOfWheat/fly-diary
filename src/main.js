@@ -80,6 +80,10 @@ let searchSeq = 0;
 const SEARCH_DEBOUNCE_MS = 200;
 /** LocalStorage key for the "Looking back" collapsed state. */
 const HISTORY_COLLAPSED_KEY = "fly-diary:history-collapsed";
+/** LocalStorage key for the desktop sidebar collapsed state. */
+const SIDEBAR_COLLAPSED_KEY = "fly-diary:sidebar-collapsed";
+/** Whether the desktop sidebar is currently collapsed. */
+let sidebarCollapsed = false;
 /**
  * Which sidebar view is showing: `"all"`, `"favourites"` or `"broken"`.
  *
@@ -1183,6 +1187,55 @@ function initHistoryDisclosure() {
       // The state simply will not survive this session.
     }
   });
+}
+
+/**
+ * Reflect the collapsed state on the app shell and both toggle buttons.
+ *
+ * The class is what the stylesheet keys off; the buttons carry `aria-expanded`
+ * so the control still describes the sidebar when only its icon is visible.
+ */
+function applySidebarCollapsed() {
+  if (els.app) {
+    els.app.classList.toggle("is-sidebar-collapsed", sidebarCollapsed);
+  }
+  for (const button of [els.sidebarCollapse, els.sidebarExpand]) {
+    button?.setAttribute?.("aria-expanded", String(!sidebarCollapsed));
+  }
+}
+
+/**
+ * Collapse or expand the sidebar, persist the choice, and optionally move
+ * focus to the toggle that is still visible.
+ */
+function setSidebarCollapsed(collapsed, { moveFocus = false } = {}) {
+  if (collapsed === sidebarCollapsed) return;
+  sidebarCollapsed = collapsed;
+  applySidebarCollapsed();
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Private mode or a locked-down webview: the state just won't persist.
+  }
+  if (moveFocus) {
+    const target = collapsed ? els.sidebarExpand : els.sidebarCollapse;
+    target?.focus?.();
+  }
+}
+
+/** Toggle the sidebar from either edge control. */
+function toggleSidebar() {
+  setSidebarCollapsed(!sidebarCollapsed, { moveFocus: true });
+}
+
+/** Restore the sidebar preference saved by a previous session. */
+function initSidebarCollapse() {
+  try {
+    sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    sidebarCollapsed = false;
+  }
+  applySidebarCollapsed();
 }
 
 /**
@@ -2503,6 +2556,7 @@ function wireEvents() {
     isImportOpen: importDialog.isImportOpen,
     isImportDone: importDialog.isImportDone,
     // Sidebar
+    toggleSidebar,
     setView,
     setSearchQuery: (query) => {
       searchQuery = query;
@@ -2565,6 +2619,7 @@ async function init() {
   // Same for the theme: resolve it before the first paint so the app never
   // flashes light before switching to dark.
   initTheme();
+  initSidebarCollapse();
   initHistoryDisclosure();
   if (phoneLayout) {
     if (typeof phoneLayout.addEventListener === "function") {

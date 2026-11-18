@@ -6,6 +6,22 @@
    and the sidebar has to give up width before the editor becomes unusable.
    =========================================================================== */
 
+/* Desktop shell: collapsing the sidebar gives the whole window to the editor.
+   The column animates to zero while the sidebar fades out. */
+@media (min-width: 641px) {
+  .app {
+    transition: grid-template-columns 180ms cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .app.is-sidebar-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+
+  .sidebar {
+    transition: opacity 160ms ease;
+  }
+}
+
 /* Narrow window: shrink the sidebar so the editor keeps a workable column. */
 @media (max-width: 900px) {
   :root {
@@ -93,6 +109,13 @@
 
   .app[data-layer="editor"] .sidebar {
     transform: translateX(-100%);
+  }
+
+  /* Collapsing is a desktop affordance; the list is already its own layer
+     here, so both edge controls are hidden. */
+  .app .sidebar-toggle,
+  .app .sidebar-expand-btn {
+    display: none;
   }
 
   /* The back button only exists in the layered layout. */

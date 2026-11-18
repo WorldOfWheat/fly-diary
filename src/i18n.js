@@ -105,6 +105,10 @@ const zhHant = {
   // --- Sidebar -------------------------------------------------------------
   "sidebar.newToday": "今天",
   "sidebar.newTodayTitle": "前往今天 (Ctrl/Cmd+T)",
+  "sidebar.collapse": "收合側邊欄",
+  "sidebar.collapseTitle": "收合側邊欄",
+  "sidebar.expand": "展開側邊欄",
+  "sidebar.expandTitle": "展開側邊欄",
   "sidebar.search": "搜尋日期、標題或內容…",
   "sidebar.searchLabel": "搜尋日期、標題或內容",
   "sidebar.searchFailed": "搜尋失敗",
@@ -494,6 +498,10 @@ const en = {
   // --- Sidebar -------------------------------------------------------------
   "sidebar.newToday": "Today",
   "sidebar.newTodayTitle": "Go to today (Ctrl/Cmd+T)",
+  "sidebar.collapse": "Collapse sidebar",
+  "sidebar.collapseTitle": "Collapse sidebar",
+  "sidebar.expand": "Expand sidebar",
+  "sidebar.expandTitle": "Expand sidebar",
   "sidebar.search": "Search date, title or content…",
   "sidebar.searchLabel": "Search date, title or content",
   "sidebar.searchFailed": "Search failed",

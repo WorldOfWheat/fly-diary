@@ -131,6 +131,8 @@ const ELEMENT_IDS = [
   "settingsImportBtn",
   "settingsStatsBtn",
   "settingsChangeDirBtn",
+  "sidebarCollapse",
+  "sidebarExpand",
   "statsClose",
   "statsDone",
   "statsOverlay",
@@ -242,6 +244,7 @@ function harness(overrides = {}) {
     changeDiaryDirFromSettings: spy("changeDiaryDirFromSettings"),
     closeStats: spy("closeStats"),
     isStatsOpen: () => false,
+    toggleSidebar: spy("toggleSidebar"),
     setView: spy("setView"),
     exportBrokenFile: spy("exportBrokenFile"),
     closeImport: spy("closeImport"),
@@ -960,6 +963,18 @@ test("the settings dialog hosts import, statistics and the folder picker", () =>
 // ---------------------------------------------------------------------------
 // Sidebar
 // ---------------------------------------------------------------------------
+
+test("both sidebar edge buttons toggle the collapsed state", () => {
+  withHarness((h) => {
+    h.els.sidebarCollapse.dispatch("click");
+    assert.deepEqual(h.names(), ["toggleSidebar"]);
+  });
+
+  withHarness((h) => {
+    h.els.sidebarExpand.dispatch("click");
+    assert.deepEqual(h.names(), ["toggleSidebar"]);
+  });
+});
 
 test("the search box resets the scroll position and re-renders", () => {
   withHarness((h) => {

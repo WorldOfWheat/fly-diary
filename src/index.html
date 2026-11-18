@@ -143,13 +143,23 @@
     </div>
 
     <div class="app" id="app" hidden>
-        <aside class="sidebar">
+        <aside class="sidebar" id="app-sidebar">
             <header class="sidebar-header">
                 <h1>Fly Diary</h1>
-                <button id="new-today" class="btn-primary" data-i18n="sidebar.newToday"
-                    data-i18n-title="sidebar.newTodayTitle" title="前往今天 (Ctrl/Cmd+T)">
-                    今天
-                </button>
+                <div class="sidebar-header-actions">
+                    <button id="new-today" class="btn-primary" data-i18n="sidebar.newToday"
+                        data-i18n-title="sidebar.newTodayTitle" title="前往今天 (Ctrl/Cmd+T)">
+                        今天
+                    </button>
+                    <button id="sidebar-collapse" class="btn-icon sidebar-toggle" type="button"
+                        data-i18n-title="sidebar.collapseTitle" data-i18n-aria-label="sidebar.collapse"
+                        title="收合側邊欄" aria-label="收合側邊欄" aria-controls="app-sidebar"
+                        aria-expanded="true">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M15 5l-7 7 7 7" />
+                        </svg>
+                    </button>
+                </div>
             </header>
             <!-- View switch: the same list, filtered to favourites or not.
                  Both views share the virtual scroller, so switching is just a
@@ -187,6 +197,17 @@
 
         <main class="editor">
             <header class="editor-header">
+                <!-- Desktop-only: brings the sidebar back after it was collapsed.
+                     Hidden while the sidebar is open, and on phone layouts where
+                     the list is already a separate layer. -->
+                <button id="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button"
+                    data-i18n-title="sidebar.expandTitle" data-i18n-aria-label="sidebar.expand"
+                    title="展開側邊欄" aria-label="展開側邊欄" aria-controls="app-sidebar"
+                    aria-expanded="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 5l7 7-7 7" />
+                    </svg>
+                </button>
                 <!-- Phone-only: returns from the editor layer to the list layer.
                      Hidden on wider viewports, where both panes are visible at
                      once and there is nothing to go back to. -->

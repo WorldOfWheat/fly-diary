@@ -44,6 +44,7 @@
 //   openStats           — () => void
 //   closeStats          — () => void
 //   isStatsOpen         — () => boolean
+//   toggleSidebar       — () => void
 //   setView             — (view: "all" | "favourites") => void
 //   startImport         — () => void
 //   closeImport         — () => void
@@ -524,6 +525,13 @@ export function initEventWiring(deps) {
   // -------------------------------------------------------------------------
   // Sidebar
   // -------------------------------------------------------------------------
+
+  if (els.sidebarCollapse) {
+    on(els.sidebarCollapse, "click", deps.toggleSidebar);
+  }
+  if (els.sidebarExpand) {
+    on(els.sidebarExpand, "click", deps.toggleSidebar);
+  }
 
   on(els.viewAll, "click", () => deps.setView("all"));
   on(els.viewFavourites, "click", () => deps.setView("favourites"));
