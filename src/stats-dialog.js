@@ -16,6 +16,7 @@
 //   t              — (key: string, params?: object) => string
 //   formatDate     — (iso: string) => string
 //   weekdayName    — (dayIndex: number) => string
+//   onClose        — () => void, lets the opener restore itself
 
 import { createFocusTrap } from "./focus-trap.js";
 import { animateOverlayExit } from "./lib/motion.js";
@@ -139,6 +140,7 @@ export function createStatsDialog(deps) {
     animateOverlayExit(els.statsOverlay);
     els.statsOverlay.hidden = true;
     focusTrap.deactivate();
+    deps.onClose?.();
   }
 
   return { renderBarChart, renderStats, openStats, closeStats, isStatsOpen };

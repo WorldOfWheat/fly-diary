@@ -167,15 +167,7 @@ const zhHant = {
   "settings.errSave": "儲存失敗：{message}",
   "settings.backup": "備份",
   "settings.backupHint":
-    "匯出一個加密備份檔，內含資料庫快照、金鑰包裝檔與所有附件。檔案本身仍是密文；沒有密碼或回復短語依然無法讀取。",
-  "settings.backupExport": "匯出備份",
-  "settings.backupRestore": "還原備份",
-  "backup.exported": "備份已匯出到 {path}",
-  "backup.exportFailed": "匯出失敗：{message}",
-  "backup.restoreConfirm":
-    "還原會以備份中的資料庫與附件取代目前內容。目前的資料會保留在日記資料夾旁的 local-backup 目錄。要繼續嗎？",
-  "backup.restored": "已還原備份；還原前的資料保留在 {path}",
-  "backup.restoreFailed": "還原失敗：{message}",
+    "建議定期備份整個日記資料夾，包含資料庫、金鑰檔案與所有附件，並將備份保存在另一個安全的位置。",
   "recovery.settingsTitle": "回復短語",
   "recovery.settingsHint":
     "啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。",
@@ -567,15 +559,7 @@ const en = {
   "settings.errSave": "Could not save: {message}",
   "settings.backup": "Backup",
   "settings.backupHint":
-    "Export one encrypted archive containing a database snapshot, the key wrappers and every attachment. The archive stays ciphertext; it cannot be read without the passphrase or recovery phrase.",
-  "settings.backupExport": "Export backup",
-  "settings.backupRestore": "Restore backup",
-  "backup.exported": "Backup exported to {path}",
-  "backup.exportFailed": "Export failed: {message}",
-  "backup.restoreConfirm":
-    "Restoring replaces the current database and attachments with the backup. The current data is kept in a local-backup folder next to the diary. Continue?",
-  "backup.restored": "Backup restored; the previous data is kept at {path}",
-  "backup.restoreFailed": "Restore failed: {message}",
+    "Back up the whole diary folder regularly, including the database, key files and every attachment, and keep the copy in another safe location.",
   "recovery.settingsTitle": "Recovery phrase",
   "recovery.settingsHint":
     "When enabled, the app generates 12 BIP39 English words. Write them on paper and store them away from the diary; they can reset the passphrase if you forget it. The phrase is a second key: anyone who has it and the diary files can read everything.",

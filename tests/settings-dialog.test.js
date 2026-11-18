@@ -44,9 +44,7 @@ const SETTINGS_IDS = [
   "recoveryStatus",
   "recoveryGenerateBtn",
   "recoveryRemoveBtn",
-  "settingsBackupBtn",
-  "settingsRestoreBtn",
-  "settingsBackupStatus",
+  "settingsStatsBtn",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -845,7 +843,8 @@ test("saveSettings re-enables the save button after a failure", async () => {
 // ---------------------------------------------------------------------------
 //
 // Import, statistics and the folder picker are not settings, so they must not
-// take part in `saveSettings`. They only close the dialog and hand over.
+// take part in `saveSettings`. They hand over to their own controller;
+// statistics returns to the dialog when it closes.
 
 test("openImport closes the dialog before starting the import", async () => {
   await withSettings(async ({ settings, els, deps }) => {
@@ -858,7 +857,7 @@ test("openImport closes the dialog before starting the import", async () => {
   });
 });
 
-test("openStats closes the dialog before opening the statistics", async () => {
+test("openStats hides the dialog and returns to it when the statistics close", async () => {
   await withSettings(async ({ settings, els, deps }) => {
     els.settingsOverlay.hidden = false;
 
@@ -866,6 +865,11 @@ test("openStats closes the dialog before opening the statistics", async () => {
 
     assert.equal(els.settingsOverlay.hidden, true);
     assert.deepEqual(deps.openStats.args(), [[]]);
+
+    assert.equal(settings.returnFromStats(), true);
+    assert.equal(els.settingsOverlay.hidden, false);
+    // A second call must not resurrect the dialog after the user closed it.
+    assert.equal(settings.returnFromStats(), false);
   });
 });
 
@@ -888,103 +892,6 @@ test("the vault-wide actions never write settings", async () => {
 
     assert.deepEqual(invoke.commands(), []);
   });
-});
-
-// ---------------------------------------------------------------------------
-// Encrypted backup export / restore
-// ---------------------------------------------------------------------------
-
-test("exportBackup flushes the pending save and reports the path", async () => {
-  const flushSave = spy(async () => {});
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.exportBackup();
-
-      assert.equal(flushSave.count(), 1);
-      assert.equal(
-        els.settingsBackupStatus.textContent,
-        "backup.exported(path=/home/u/backup.tar)"
-      );
-      assert.equal(
-        els.settingsBackupStatus.classList.contains("is-saved"),
-        true
-      );
-    },
-    {
-      deps: { flushSave },
-      invokeTable: { export_backup: "/home/u/backup.tar" },
-    }
-  );
-});
-
-test("exportBackup treats a cancelled dialog as a no-op", async () => {
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.exportBackup();
-      assert.equal(els.settingsBackupStatus.textContent, "");
-    },
-    { invokeTable: { export_backup: null } }
-  );
-});
-
-test("exportBackup reports a backend failure", async () => {
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.exportBackup();
-      assert.equal(
-        els.settingsBackupStatus.textContent,
-        "backup.exportFailed(message=disk full)"
-      );
-    },
-    {
-      invokeTable: {
-        export_backup: () => {
-          throw "disk full";
-        },
-      },
-    }
-  );
-});
-
-test("restoreBackup asks first, then reloads the diary", async () => {
-  const original = globalThis.confirm;
-  const afterRestore = spy(async () => {});
-  const flushSave = spy(async () => {});
-  globalThis.confirm = () => true;
-  try {
-    await withSettings(
-      async ({ settings, els, invoke }) => {
-        await settings.restoreBackup();
-
-        assert.equal(flushSave.count(), 1);
-        assert.equal(afterRestore.count(), 1);
-        assert.ok(invoke.commands().includes("restore_backup"));
-        assert.equal(
-          els.settingsBackupStatus.textContent,
-          "backup.restored(path=/home/u/diary.local-backup-1)"
-        );
-      },
-      {
-        deps: { flushSave, afterRestore },
-        invokeTable: { restore_backup: "/home/u/diary.local-backup-1" },
-      }
-    );
-  } finally {
-    globalThis.confirm = original;
-  }
-});
-
-test("restoreBackup does nothing when the confirmation is declined", async () => {
-  const original = globalThis.confirm;
-  globalThis.confirm = () => false;
-  try {
-    await withSettings(async ({ settings, invoke }) => {
-      await settings.restoreBackup();
-      assert.deepEqual(invoke.commands(), []);
-    });
-  } finally {
-    globalThis.confirm = original;
-  }
 });
 
 /** Shared deps for the tests that build a second controller. */

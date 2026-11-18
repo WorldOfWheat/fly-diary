@@ -135,7 +135,7 @@ fly-diary/
 - **全文搜尋不落盤**：搜尋需要明文，所以 `scan_vault` 在解鎖後從 DB 讀出 entries 並建立記憶體索引（原文 + 小寫副本），只回傳命中摘要。索引是衍生狀態，`lock()`、切換 workspace 或重新解鎖時直接清除並 zeroize；不新增任何明文檔案。SQLCipher 的 DB 本身在磁碟上仍是密文。
 - **收藏旗標在 DB 裡**：`entries.favourite` 是資料的一部分；普通存檔的 `ON CONFLICT DO UPDATE` 不會覆寫它，`set_favourite` 只改這個欄位。
 - **壞檔逐篇隔離已移除**：SQLCipher 是 page-level 加密 + HMAC，單一壞頁可能讓整個 DB 無法開啟，沒有「列出第 N 篇壞檔」的概念。完整性由 `check_vault_integrity`（`cipher_integrity_check` + `integrity_check`）負責。遷移時無法解讀的 XML 原始位元組會存進加密的 `legacy_broken` 表，舊的「損壞」分頁仍可列出與匯出。
-- **救援靠備份**：DB 若無法開啟，App 不會建立空 DB；使用者要從設定頁還原先前匯出的加密 `.tar`。`backup::install` 只替換 DB 與附件，舊資料保留在 `*.local-backup-*`。
+- **救援靠備份**：DB 若無法開啟，App 不會建立空 DB；使用者要在解鎖畫面的救援流程中還原加密 `.tar`。`backup::install` 只替換 DB 與附件，舊資料保留在 `*.local-backup-*`。
 - **受限的平行 I/O**：舊 XML 的掃描、遷移與匯入來源檔仍可走 `pool.rs` 的專用 Rayon pool（上限 `min(4, cores)`）；SQLCipher 寫入本身以單一連線／transaction 序列化，避免多個 writer 互相鎖住。平行結果最後才合併，輸出穩定。
 - **搜尋查詢的平行門檻**：`SearchIndex` 記錄原始文字總量，低於 2 MiB 時循序掃描（避免 Rayon 喚醒成本），超過才把文件分給同一個 I/O pool；收集後一律依日期新到舊排序。
 - **壞檔唯讀鎖定**：`selectDate` 在載入前先查壞檔清單，命中就直接鎖定、完全不呼叫 `get_entry`；`saveNow` 與 `scheduleSave` 也都在 `lockedDate` 有值時提早返回。三層防線確保空白編輯器不可能覆蓋掉一個只是暫時解不開的檔案——這是壞檔處理裡唯一會造成永久資料損失的路徑。

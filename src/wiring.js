@@ -454,15 +454,6 @@ export function initEventWiring(deps) {
     if (e.target === els.settingsOverlay) deps.closeSettings();
   });
 
-  // Encrypted backup export/restore. Guarded because the DOM tests may use a
-  // reduced settings document.
-  if (els.settingsBackupBtn) {
-    on(els.settingsBackupBtn, "click", deps.exportBackup);
-  }
-  if (els.settingsRestoreBtn) {
-    on(els.settingsRestoreBtn, "click", deps.restoreBackup);
-  }
-
   // Recovery phrase settings + one-time display dialog.
   if (els.recoveryGenerateBtn) {
     on(els.recoveryGenerateBtn, "click", deps.openRecovery);
@@ -502,8 +493,9 @@ export function initEventWiring(deps) {
     });
   }
 
-  // The vault-wide actions hosted by the settings dialog. Each one closes the
-  // dialog before handing over, so only one overlay is ever on screen.
+  // The vault-wide actions hosted by the settings dialog. Import and the
+  // folder picker close the dialog before handing over; statistics hides it and
+  // the settings dialog returns when the statistics close.
   on(els.settingsImportBtn, "click", deps.openImportFromSettings);
   on(els.settingsStatsBtn, "click", deps.openStatsFromSettings);
   on(els.settingsChangeDirBtn, "click", deps.changeDiaryDirFromSettings);

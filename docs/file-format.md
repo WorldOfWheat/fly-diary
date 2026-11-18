@@ -275,7 +275,7 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 
 ### 加密備份（`.tar`）
 
-設定頁匯出的備份是未壓縮的 tar，沒有額外的 manifest 檔，結構固定：
+`export_backup` 產生的備份是未壓縮的 tar，沒有額外的 manifest 檔，結構固定：
 
 ```text
 diary.db                     # VACUUM INTO 快照（SQLCipher 密文）
@@ -306,7 +306,7 @@ attachments/YYYY-MM-DD/<32 hex>.bin
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
 按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。資料夾內是 `diary.db`、`vault.xml`、
-`recovery.xml` 與 `attachments/`；備份請用設定頁的「匯出備份」，不要直接複製執行中的
+`recovery.xml` 與 `attachments/`；備份請先鎖定日記，再複製整個資料夾，不要只複製執行中的
 `diary.db`。**沒有密碼或回復短語就無法還原內容**；只複製 `diary.db` 也打不開，因為 DB key
 來自 `vault.xml` 裡包裝的 diary key。
 

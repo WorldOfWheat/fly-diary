@@ -83,4 +83,5 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 > 行動版（`#[cfg(mobile)]`）的差異：`get_settings` 的 `mobile: true` 會讓解鎖畫面隱藏
 > 「瀏覽…」與「切換工作區」，設定頁也隱藏變更路徑按鈕；`pick_diary_dir` 仍直接回傳
 > App 私有資料夾、`pick_import_dir` 回報不支援 `.txt` 資料夾匯入、選單列不建置。
-> 備份匯出／還原在桌面與 Android 都可用，檔案位置由系統選擇器決定。
+> 加密備份 `.tar` 的還原在桌面與 Android 都可用，檔案位置由系統選擇器決定；
+> 一般備份建議直接複製整個日記資料夾。

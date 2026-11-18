@@ -14,8 +14,9 @@ import { animateOverlayExit } from "./lib/motion.js";
 //
 // It also hosts the vault-wide actions that used to be footer buttons: the
 // storage location, import and statistics. Those are not settings, so they do
-// not take part in `saveSettings`; they simply close the dialog and hand over
-// to the controller that owns them.
+// not take part in `saveSettings`; they hand over to the controller that owns
+// them. Statistics is a detour rather than a hand-off, so the dialog is hidden
+// and brought back when the statistics close.
 //
 // `deps` shape:
 //
@@ -29,11 +30,6 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   openStats          — () => void
 //   changeDiaryDir     — () => void | Promise<void>
 //   openRecovery       — () => void | Promise<void>
-//   flushSave          — () => Promise<void>
-//   flushAndLock       — () => Promise<void>
-//   afterRestore       — () => Promise<void>, reloads after a backup restore
-//   beginNativePicker  — () => void, marks a native folder picker as open
-//   endNativePicker    — () => void, marks it as closed
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -57,6 +53,9 @@ export function createSettingsDialog(deps) {
    * passphrase fields are empty.
    */
   let vaultKdf = null;
+
+  /** Whether closing the statistics should bring this dialog back. */
+  let returnToSettings = false;
 
   /** Whether the settings dialog is open. */
   function isSettingsOpen() {
@@ -227,84 +226,6 @@ export function createSettingsDialog(deps) {
     }
   }
 
-
-  /** Write a one-line result under the backup buttons. */
-  function showBackupStatus(text, saved = false) {
-    if (!els.settingsBackupStatus) return;
-    els.settingsBackupStatus.textContent = text;
-    els.settingsBackupStatus.classList.toggle("is-saved", saved);
-  }
-
-  /**
-   * Export an encrypted snapshot archive.
-   *
-   * The pending autosave is flushed first so the archive cannot miss the last
-   * keystrokes. Cancelling the save dialog is not an error.
-   */
-  async function exportBackup() {
-    if (!els.settingsBackupBtn) return;
-    els.settingsBackupBtn.disabled = true;
-    showBackupStatus("");
-    try {
-      await deps.flushSave?.();
-      deps.beginNativePicker?.();
-      let path;
-      try {
-        path = await deps.invoke("export_backup");
-      } finally {
-        deps.endNativePicker?.();
-      }
-      if (path) {
-        showBackupStatus(deps.t("backup.exported", { path }), true);
-      }
-    } catch (err) {
-      console.error("export_backup failed:", err);
-      showBackupStatus(
-        deps.t("backup.exportFailed", {
-          message: typeof err === "string" ? err : String(err),
-        })
-      );
-    } finally {
-      els.settingsBackupBtn.disabled = false;
-    }
-  }
-
-  /**
-   * Replace the database and attachments with an encrypted backup.
-   *
-   * The current database and attachments are kept in a sibling backup folder,
-   * so the confirmation can honestly say the old data is recoverable.
-   */
-  async function restoreBackup() {
-    if (!els.settingsRestoreBtn) return;
-    if (!confirm(deps.t("backup.restoreConfirm"))) return;
-    els.settingsRestoreBtn.disabled = true;
-    showBackupStatus("");
-    try {
-      await deps.flushSave?.();
-      deps.beginNativePicker?.();
-      let path;
-      try {
-        path = await deps.invoke("restore_backup");
-      } finally {
-        deps.endNativePicker?.();
-      }
-      if (path) {
-        await deps.afterRestore?.();
-        showBackupStatus(deps.t("backup.restored", { path }), true);
-      }
-    } catch (err) {
-      console.error("restore_backup failed:", err);
-      showBackupStatus(
-        deps.t("backup.restoreFailed", {
-          message: typeof err === "string" ? err : String(err),
-        })
-      );
-    } finally {
-      els.settingsRestoreBtn.disabled = false;
-    }
-  }
-
   /** Open the settings dialog and populate it from the backend. */
   async function openSettings() {
     els.settingsError.textContent = "";
@@ -312,7 +233,7 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
-    showBackupStatus("");
+    returnToSettings = false;
 
     // Not awaited: the path and build info are informational, so the dialog
     // should not wait on extra round trips before it appears.
@@ -362,6 +283,7 @@ export function createSettingsDialog(deps) {
 
   /** Close the settings dialog without saving. */
   function closeSettings() {
+    returnToSettings = false;
     animateOverlayExit(els.settingsOverlay, { redactInputs: true });
     els.settingsOverlay.hidden = true;
     focusTrap.deactivate();
@@ -382,6 +304,30 @@ export function createSettingsDialog(deps) {
   function handOver(action) {
     closeSettings();
     return action();
+  }
+
+  /**
+   * Open statistics without losing the settings dialog.
+   *
+   * Statistics is a temporary detour, so the dialog is only hidden; the
+   * statistics controller calls `returnFromStats` when it closes, which shows
+   * the dialog again with its scroll position and unsaved fields intact.
+   */
+  function openStats() {
+    returnToSettings = true;
+    els.settingsOverlay.hidden = true;
+    focusTrap.deactivate({ restore: false });
+    return deps.openStats();
+  }
+
+  /** Bring the settings dialog back after the statistics close. */
+  function returnFromStats() {
+    if (!returnToSettings) return false;
+    returnToSettings = false;
+    els.settingsOverlay.hidden = false;
+    focusTrap.activate();
+    els.settingsStatsBtn?.focus?.();
+    return true;
   }
 
   /** Measure this machine and fill the advanced inputs with the result. */
@@ -499,10 +445,9 @@ export function createSettingsDialog(deps) {
     refreshRecoveryStatus,
     removeRecovery,
     openRecovery,
-    exportBackup,
-    restoreBackup,
+    openStats,
+    returnFromStats,
     openImport: () => handOver(deps.openImport),
-    openStats: () => handOver(deps.openStats),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),
   };
 }

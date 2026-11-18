@@ -21,7 +21,8 @@ diary/
 ```
 
 資料庫是權威來源，沒有每日衍生檔。舊 XML 只在一次性遷移時讀取，成功後刪除。
-備份是使用者明確匯出的 `.tar`（資料庫快照 + 金鑰包裝檔 + 附件），不是背景同步。
+備份是使用者手動複製整個日記資料夾（資料庫 + 金鑰包裝檔 + 附件），不是背景同步。
+後端仍保留 `export_backup`／`restore_backup` 產生與還原一致的 `.tar` 快照，供解鎖失敗時的救援流程使用。
 
 ## 金鑰階層
 
@@ -120,7 +121,7 @@ CREATE TABLE legacy_broken (
 
 ## 加密備份 `.tar`
 
-備份是使用者從設定頁匯出的單一檔案，內容是未壓縮的 tar：
+`export_backup` 產生的是單一檔案，內容是未壓縮的 tar：
 
 ```text
 diary.db                     # VACUUM INTO 的一致快照（仍是 SQLCipher 密文）
@@ -171,15 +172,13 @@ XML 仍是唯一真相。若某個 XML 連原始位元組都無法讀取，它�
   DB 無法開啟。`check_vault_integrity` 會跑 `cipher_integrity_check` 與
   `integrity_check`。
 - **DB 無法開啟時**：`unlock` 回報 `databaseError` 後，解鎖畫面會出現「還原加密備份」；
-  重新輸入密碼後會直接開啟備份檔並還原。解鎖後也可從設定頁執行。App 不會自動建立空 DB，
-  避免覆蓋唯一副本。
+  重新輸入密碼後會直接開啟備份檔並還原。App 不會自動建立空 DB，避免覆蓋唯一副本。
 - **刪除後的殘留**：`DELETE` 只把 page 放回 free list。`secure_delete=ON` 會先把
   內容歸零再加密，但仍建議刪除後執行 `PRAGMA wal_checkpoint(TRUNCATE)`，並定期
   `VACUUM`／`incremental_vacuum`。`VACUUM INTO` 備份只寫 live pages，不含 free list。
-- **備份**：設定頁的「匯出備份」會產生自包含的 `.tar`。完整的手動備份等價於
-  `diary.db`（一致的 `VACUUM INTO` 快照）+ `vault.xml` + `recovery.xml` +
-  `attachments/`。只複製執行中的 `diary.db` 不是一致快照，請先鎖定並 checkpoint，
-  或使用內建匯出。
+- **備份**：完整的手動備份等價於複製整個日記資料夾（`diary.db` + `vault.xml` +
+  `recovery.xml` + `attachments/`）。請先鎖定日記並 checkpoint，避免複製到不一致的
+  資料庫。後端仍提供 `export_backup` 產生一致的 `VACUUM INTO` `.tar` 快照。
 - **降級**：舊版 App 只認識 XML，SQLCipher 版本不再產生 XML。升級後請不要降級；
   舊版會看到空日記，或把新內容寫成 XML，造成分岔。
 

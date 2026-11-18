@@ -1911,26 +1911,6 @@ function resetEditorState() {
 }
 
 /**
- * Reload the visible diary after an in-place backup restore.
- *
- * The session key is unchanged (the backup was verified against it), but the
- * database and attachments were replaced, so the editor, list, search index and
- * stats must all be rebuilt from disk.
- */
-async function reloadAfterRestore() {
-  // The backend dropped the in-memory full-text index, so a restored diary
-  // must not keep showing search hits that point at the old database.
-  searchQuery = "";
-  searchResults = null;
-  if (els.search) els.search.value = "";
-  currentView = "all";
-  syncViewTabs("all");
-  resetEditorState();
-  await refreshList({ scanBroken: true });
-  syncHeaderActions();
-}
-
-/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
@@ -2235,6 +2215,8 @@ function createControllers() {
     t,
     formatDate,
     weekdayName,
+    // Statistics is opened from settings, so closing it shows settings again.
+    onClose: () => settingsDialog?.returnFromStats?.(),
   });
 
   settingsDialog = createSettingsDialog({
@@ -2251,11 +2233,6 @@ function createControllers() {
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
     openRecovery: () => recoveryDialog.open(),
-    flushSave: flushPendingSave,
-    flushAndLock: lockAndFlush,
-    afterRestore: reloadAfterRestore,
-    beginNativePicker,
-    endNativePicker,
   });
 
   recoveryDialog = createRecoveryDialog({
@@ -2506,8 +2483,6 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
-    exportBackup: settingsDialog.exportBackup,
-    restoreBackup: settingsDialog.restoreBackup,
     // Recovery phrase: create/show-once dialog and removal.
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,

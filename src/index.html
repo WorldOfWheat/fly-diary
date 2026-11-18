@@ -489,7 +489,7 @@
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
-            <div class="modal-body">
+            <div class="modal-body settings-body">
                 <!-- Diary: where it lives, plus the two tools that act on the
                      whole vault. These used to be footer buttons; they are
                      settings-shaped rather than writing-shaped, so they belong
@@ -517,23 +517,16 @@
                     </div>
                 </details>
 
-                <!-- Encrypted backup archive: a consistent SQLCipher snapshot,
-                     the key wrappers and every attachment sidecar in one file. -->
+                <!-- Backup guidance only. The diary folder is self-contained,
+                     so copying the whole folder is a complete backup. -->
                 <details class="settings-section" open>
                     <summary class="settings-disclosure">
                         <h3 class="settings-heading" data-i18n="settings.backup">備份</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.backupHint">
-                        匯出一個加密備份檔，內含資料庫快照、金鑰包裝檔與所有附件。
-                        檔案本身仍是密文；沒有密碼或回復短語依然無法讀取。
+                        建議定期備份整個日記資料夾，包含資料庫、金鑰檔案與所有附件，
+                        並將備份保存在另一個安全的位置。
                     </p>
-                    <div class="settings-actions">
-                        <button id="settings-backup-btn" class="btn-browse" type="button"
-                            data-i18n="settings.backupExport">匯出備份</button>
-                        <button id="settings-restore-btn" class="btn-danger" type="button"
-                            data-i18n="settings.backupRestore">還原備份</button>
-                    </div>
-                    <p id="settings-backup-status" class="settings-hint" aria-live="polite"></p>
                 </details>
 
                 <!-- Auto-lock -->
@@ -618,9 +611,30 @@
                     </details>
                 </details>
 
+                <!-- Recovery phrase: a second, optional way to reach the diary
+                     key. It is off by default and can be regenerated or removed
+                     at any time; the phrase itself is only ever shown once. -->
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
+                    </summary>
+                    <p class="settings-hint" data-i18n="recovery.settingsHint">
+                        啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
+                        忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
+                    </p>
+                    <p id="recovery-status" class="settings-hint settings-recovery-status"></p>
+                    <div class="settings-actions">
+                        <button id="recovery-generate-btn" class="btn-browse" type="button"
+                            data-i18n="recovery.generate">產生回復短語</button>
+                        <button id="recovery-remove-btn" class="btn-danger" type="button"
+                            data-i18n="recovery.remove" hidden>停用回復短語</button>
+                    </div>
+                </details>
+
                 <!-- About: build metadata. The commit hash is embedded at
                      compile time so a running binary can be traced back to an
-                     exact source revision. -->
+                     exact source revision. Kept last because it is reference
+                     material rather than a setting. -->
                 <details class="settings-section" open>
                     <summary class="settings-disclosure">
                         <h3 class="settings-heading" data-i18n="settings.about">關於</h3>
@@ -639,26 +653,6 @@
                     <div class="settings-row">
                         <span class="settings-label" data-i18n="settings.author">作者</span>
                         <span id="settings-app-author" class="settings-path"></span>
-                    </div>
-                </details>
-
-                <!-- Recovery phrase: a second, optional way to reach the diary
-                     key. It is off by default and can be regenerated or removed
-                     at any time; the phrase itself is only ever shown once. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
-                        <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
-                    </summary>
-                    <p class="settings-hint" data-i18n="recovery.settingsHint">
-                        啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
-                        忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
-                    </p>
-                    <p id="recovery-status" class="settings-hint settings-recovery-status"></p>
-                    <div class="settings-actions">
-                        <button id="recovery-generate-btn" class="btn-browse" type="button"
-                            data-i18n="recovery.generate">產生回復短語</button>
-                        <button id="recovery-remove-btn" class="btn-danger" type="button"
-                            data-i18n="recovery.remove" hidden>停用回復短語</button>
                     </div>
                 </details>
             </div>
