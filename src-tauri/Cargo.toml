@@ -5,7 +5,7 @@ description = "A simple one-entry-per-day diary app"
 authors = ["WorldOfWheat"]
 repository = "https://github.com/WorldOfWheat/fly-diary"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90.0"
 
 [lib]
 name = "fly_diary_lib"
@@ -32,7 +32,7 @@ base64 = "0.23"
 zeroize = { version = "1", features = ["derive"] }
 
 # --- Encrypted SQLite storage (SQLCipher) ---
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 # --- Legacy XML format (one-time migration only) ---
 quick-xml = "0.42"

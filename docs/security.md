@@ -208,6 +208,11 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - **自動審計**：`.github/workflows/security.yml` 在 PR 與每週排程跑 `cargo audit`
   與 `pnpm audit`；release 也把同一個 workflow 當成發佈前的 gate，審計沒過就不會 publish。
   Dependabot 每週檢查 npm、Cargo 與 GitHub Actions。
+- **已知審計例外**：`src-tauri/.cargo/audit.toml` 忽略 `RUSTSEC-2024-0429`（glib
+  `VariantStrIter` unsound，修補於 glib 0.20.0）。Tauri 2 的 Linux stack（tauri、tao、
+  wry、muda、webkit2gtk）仍綁定 GTK3 的 gtk/glib 0.18 系列，0.18.5 是最終版且沒有
+  回溯修補；本 App 與 stack 都沒有呼叫 `array_iter_str`／`VariantStrIter`，因此該路徑
+  不可達。等 Tauri 改用 gtk 0.19+／glib 0.22+ 時應移除這個例外。
 - **建置來源證明**：release 產物會用 `actions/attest-build-provenance` 產生
   provenance，使用者可用 `gh attestation verify <file>` 驗證。
 - **手動設定（GitHub repo settings，程式無法代勞）**：為 `v*` 開啟 tag protection、

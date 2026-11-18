@@ -1,0 +1,10 @@
+# RUSTSEC-2024-0429 is an informational "unsound" advisory in glib's
+# `VariantStrIter`, fixed in glib 0.20.0. Tauri 2's Linux stack (tauri, tao,
+# wry, muda, webkit2gtk) still depends on the GTK3 bindings, which pin
+# gtk/glib to the semver-incompatible 0.18 series; glib 0.18.5 is the final
+# release of that series and there is no patched 0.18.x. The app never calls
+# `VariantStrIter` itself and the GTK3 stack does not iterate string variants
+# through it, so the unsound path is unreachable here.
+# Revisit when Tauri moves to gtk 0.19+ / glib 0.22+.
+[advisories]
+ignore = ["RUSTSEC-2024-0429"]
