@@ -66,7 +66,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "2.0.0",
+      version: "2.0.1",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -255,7 +255,7 @@ test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "2.0.0");
+    assert.equal(els.settingsAppVersion.textContent, "2.0.1");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
