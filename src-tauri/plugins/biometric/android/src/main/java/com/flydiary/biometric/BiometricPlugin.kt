@@ -68,6 +68,9 @@ class DeleteArgs {
 class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
   private val keyStore: KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
 
+  /** Keep the prompt alive while it is showing; a local reference can be collected. */
+  private var activePrompt: BiometricPrompt? = null
+
   @Command
   fun status(invoke: Invoke) {
     try {
@@ -111,10 +114,9 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
         val key = createKey(args.alias)
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        cipher.updateAAD(args.aad.toByteArray(Charsets.UTF_8))
         val iv = cipher.iv ?: throw IllegalStateException("The cipher did not produce an IV")
 
-        authenticate(invoke, cipher) { unlocked ->
+        authenticate(invoke, cipher, args.aad.toByteArray(Charsets.UTF_8)) { unlocked ->
           val ciphertext =
             unlocked.doFinal(Base64.decode(args.payload, Base64.NO_WRAP))
           val result = JSObject()
@@ -142,9 +144,8 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
           key,
           GCMParameterSpec(GCM_TAG_BITS, Base64.decode(args.iv, Base64.NO_WRAP)),
         )
-        cipher.updateAAD(args.aad.toByteArray(Charsets.UTF_8))
 
-        authenticate(invoke, cipher) { unlocked ->
+        authenticate(invoke, cipher, args.aad.toByteArray(Charsets.UTF_8)) { unlocked ->
           val plaintext =
             unlocked.doFinal(Base64.decode(args.ciphertext, Base64.NO_WRAP))
           val result = JSObject()
@@ -200,6 +201,7 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
   private fun authenticate(
     invoke: Invoke,
     cipher: Cipher,
+    aad: ByteArray,
     onSuccess: (Cipher) -> Unit,
   ) {
     val prompt =
@@ -210,8 +212,14 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
           override fun onAuthenticationSucceeded(
             result: BiometricPrompt.AuthenticationResult,
           ) {
+            activePrompt = null
             try {
-              onSuccess(result.cryptoObject?.cipher ?: cipher)
+              val unlocked = result.cryptoObject?.cipher ?: cipher
+              // AAD must be set after authentication: on Keystore2 an
+              // auth-per-use key rejects updateAAD before the auth token
+              // exists ("Key user not authenticated").
+              unlocked.updateAAD(aad)
+              onSuccess(unlocked)
             } catch (error: Exception) {
               invoke.reject(message(error))
             }
@@ -221,12 +229,26 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
             errorCode: Int,
             errString: CharSequence,
           ) {
+            activePrompt = null
+            val reason = errString.toString()
             when (errorCode) {
               BiometricPrompt.ERROR_USER_CANCELED,
               BiometricPrompt.ERROR_NEGATIVE_BUTTON,
               BiometricPrompt.ERROR_CANCELED ->
-                invoke.reject("BIOMETRIC_CANCELED: $errString")
-              else -> invoke.reject("BIOMETRIC_FAILED: $errString")
+                invoke.reject("BIOMETRIC_CANCELED: $reason")
+              BiometricPrompt.ERROR_LOCKOUT ->
+                invoke.reject("BIOMETRIC_LOCKOUT: $reason")
+              BiometricPrompt.ERROR_LOCKOUT_PERMANENT ->
+                invoke.reject("BIOMETRIC_LOCKOUT_PERMANENT: $reason")
+              BiometricPrompt.ERROR_NO_BIOMETRICS ->
+                invoke.reject("BIOMETRIC_NOT_ENROLLED: $reason")
+              BiometricPrompt.ERROR_HW_NOT_PRESENT ->
+                invoke.reject("BIOMETRIC_NO_HARDWARE: $reason")
+              BiometricPrompt.ERROR_HW_UNAVAILABLE ->
+                invoke.reject("BIOMETRIC_UNAVAILABLE: $reason")
+              BiometricPrompt.ERROR_SECURITY_UPDATE_REQUIRED ->
+                invoke.reject("BIOMETRIC_SECURITY_UPDATE: $reason")
+              else -> invoke.reject("BIOMETRIC_FAILED($errorCode): $reason")
             }
           }
 
@@ -235,6 +257,7 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
           }
         },
       )
+    activePrompt = prompt
 
     val info =
       BiometricPrompt.PromptInfo.Builder()
@@ -244,15 +267,20 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
         .setNegativeButtonText(activity.getString(android.R.string.cancel))
         .build()
 
-    prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
+    try {
+      prompt.authenticate(info, BiometricPrompt.CryptoObject(cipher))
+    } catch (error: Exception) {
+      activePrompt = null
+      invoke.reject(message(error))
+    }
   }
 
-  private fun message(error: Exception): String =
-    when (error) {
-      is KeyPermanentlyInvalidatedException ->
-        "BIOMETRIC_KEY_INVALIDATED: ${error.message ?: "Biometric enrollment changed"}"
-      is UnrecoverableKeyException ->
-        "BIOMETRIC_KEY_INVALIDATED: ${error.message ?: "The biometric key is unusable"}"
-      else -> "BIOMETRIC_FAILED: ${error.message ?: "Biometric authentication failed"}"
+  private fun message(error: Exception): String {
+    val detail = error.message ?: "Biometric authentication failed"
+    return when (error) {
+      is KeyPermanentlyInvalidatedException -> "BIOMETRIC_KEY_INVALIDATED: $detail"
+      is UnrecoverableKeyException -> "BIOMETRIC_KEY_INVALIDATED: $detail"
+      else -> "BIOMETRIC_FAILED: ${error.javaClass.simpleName}: $detail"
     }
+  }
 }
