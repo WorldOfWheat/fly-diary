@@ -46,9 +46,14 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `recover_vault(phrase, newPassphrase, kdf?)` | 用回復短語解開 diary key，以新密碼重新包裝 `vault.xml` 並解鎖；回傳 `{ legacy, databaseError }` |
 | `create_vault(passphrase, kdf?)`          | 建立 vault、空 SQLCipher DB 並立即解鎖，可指定 KDF 參數                      |
 | `unlock(passphrase)`                      | 驗證密碼，將金鑰載入記憶體；回傳 `{ legacy, databaseError }`                  |
+| `biometric_status()`                      | Android 生物辨識是否可用／已啟用；桌面回傳 `unsupported_platform`             |
+| `biometric_enable(passphrase)`            | 需解鎖；再次驗證密碼，經 `BiometricPrompt` 用 Keystore 包裝 diary key         |
+| `biometric_disable()`                     | 需解鎖；刪除 `biometric.json` 與 Keystore alias                               |
+| `biometric_unlock()`                      | 透過 `BiometricPrompt` 解開 diary key 並載入 session；失敗回到密碼解鎖         |
 | `migrate_storage()`                       | 把舊 XML 日記遷移成 SQLCipher（需解鎖）；成功後刪除 XML                      |
 | `export_backup()`                         | 需解鎖；開啟存檔對話框，匯出加密 `.tar`（DB 快照 + 金鑰包裝檔 + 附件）        |
-| `restore_backup()`                        | 需解鎖；選擇 `.tar`，驗證屬於同一個 vault 後替換 DB 與附件，舊資料保留在 `*.local-backup-*` |
+| `import_backup(passphrase, targetDir?, overwrite)` | 不需目前 vault；解開 `.tar` 的 `vault.xml`、驗證 DB 後安裝成新日記本，舊 vault 保留在 `*.local-backup-*` |
+| `restore_backup()`                        | 需解鎖；選擇 `.tar`，驗證屬於同一個 vault 後只替換 DB 與附件，舊資料保留在 `*.local-backup-*` |
 | `check_vault_integrity()`                 | 執行 SQLCipher `cipher_integrity_check` 與 SQLite `integrity_check`         |
 | `lock()`                                  | 清除記憶體中的金鑰                                                           |
 | `is_unlocked()`                           | 目前是否已解鎖                                                               |
@@ -83,4 +88,5 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 > 行動版（`#[cfg(mobile)]`）的差異：`get_settings` 的 `mobile: true` 會讓解鎖畫面隱藏
 > 「瀏覽…」與「切換工作區」，設定頁也隱藏變更路徑按鈕；`pick_diary_dir` 仍直接回傳
 > App 私有資料夾、`pick_import_dir` 回報不支援 `.txt` 資料夾匯入、選單列不建置。
-> 備份匯出／還原在桌面與 Android 都可用，檔案位置由系統選擇器決定。
+> 加密備份 `.tar` 的還原在桌面與 Android 都可用，檔案位置由系統選擇器決定；
+> 一般備份建議直接複製整個日記資料夾。

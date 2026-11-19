@@ -41,9 +41,20 @@
 //   closeSettings       — () => void
 //   saveSettings        — () => void
 //   calibrateKdf        — () => void
+//   biometricUnlock     — () => void
+//   enableBiometric     — () => void
+//   disableBiometric    — () => void
+//   restoreBackup       — () => void
+//   exportBackup        — () => void
+//   openImportBackup    — () => void
+//   openImportBackupFromLock — () => void
+//   closeImportBackup   — () => void
+//   confirmImportBackup — () => void
+//   isImportBackupOpen  — () => boolean
 //   openStats           — () => void
 //   closeStats          — () => void
 //   isStatsOpen         — () => boolean
+//   toggleSidebar       — () => void
 //   setView             — (view: "all" | "favourites") => void
 //   startImport         — () => void
 //   closeImport         — () => void
@@ -207,6 +218,12 @@ export function initEventWiring(deps) {
   // Recovery phrase form, which replaces the passphrase form on the same card.
   if (els.recoveryOpen) on(els.recoveryOpen, "click", deps.showRecoveryForm);
   if (els.lockRestore) on(els.lockRestore, "click", deps.restoreFromLock);
+  if (els.lockBiometric) {
+    on(els.lockBiometric, "click", deps.biometricUnlock);
+  }
+  if (els.lockImport) {
+    on(els.lockImport, "click", deps.openImportBackupFromLock);
+  }
   if (els.recoveryBack) on(els.recoveryBack, "click", deps.hideRecoveryForm);
   if (els.recoveryForm) on(els.recoveryForm, "submit", deps.handleRecoverySubmit);
 
@@ -454,15 +471,6 @@ export function initEventWiring(deps) {
     if (e.target === els.settingsOverlay) deps.closeSettings();
   });
 
-  // Encrypted backup export/restore. Guarded because the DOM tests may use a
-  // reduced settings document.
-  if (els.settingsBackupBtn) {
-    on(els.settingsBackupBtn, "click", deps.exportBackup);
-  }
-  if (els.settingsRestoreBtn) {
-    on(els.settingsRestoreBtn, "click", deps.restoreBackup);
-  }
-
   // Recovery phrase settings + one-time display dialog.
   if (els.recoveryGenerateBtn) {
     on(els.recoveryGenerateBtn, "click", deps.openRecovery);
@@ -502,11 +510,37 @@ export function initEventWiring(deps) {
     });
   }
 
-  // The vault-wide actions hosted by the settings dialog. Each one closes the
-  // dialog before handing over, so only one overlay is ever on screen.
+  // The vault-wide actions hosted by the settings dialog. Import and the
+  // folder picker close the dialog before handing over; statistics hides it and
+  // the settings dialog returns when the statistics close.
   on(els.settingsImportBtn, "click", deps.openImportFromSettings);
   on(els.settingsStatsBtn, "click", deps.openStatsFromSettings);
   on(els.settingsChangeDirBtn, "click", deps.changeDiaryDirFromSettings);
+  if (els.settingsRestoreBtn) {
+    on(els.settingsRestoreBtn, "click", deps.restoreBackup);
+  }
+  if (els.settingsTarExportBtn) {
+    on(els.settingsTarExportBtn, "click", deps.exportBackup);
+  }
+  if (els.settingsTarImportBtn) {
+    on(els.settingsTarImportBtn, "click", deps.openImportBackup);
+  }
+  if (els.settingsBiometricEnable) {
+    on(els.settingsBiometricEnable, "click", deps.enableBiometric);
+  }
+  if (els.settingsBiometricDisable) {
+    on(els.settingsBiometricDisable, "click", deps.disableBiometric);
+  }
+
+  // Encrypted tar import dialog.
+  if (els.backupImportOverlay) {
+    on(els.backupImportClose, "click", deps.closeImportBackup);
+    on(els.backupImportCancel, "click", deps.closeImportBackup);
+    on(els.backupImportConfirm, "click", deps.confirmImportBackup);
+    on(els.backupImportOverlay, "mousedown", (e) => {
+      if (e.target === els.backupImportOverlay) deps.closeImportBackup();
+    });
+  }
 
   // Statistics dialog.
   on(els.statsClose, "click", deps.closeStats);
@@ -532,6 +566,13 @@ export function initEventWiring(deps) {
   // -------------------------------------------------------------------------
   // Sidebar
   // -------------------------------------------------------------------------
+
+  if (els.sidebarCollapse) {
+    on(els.sidebarCollapse, "click", deps.toggleSidebar);
+  }
+  if (els.sidebarExpand) {
+    on(els.sidebarExpand, "click", deps.toggleSidebar);
+  }
 
   on(els.viewAll, "click", () => deps.setView("all"));
   on(els.viewFavourites, "click", () => deps.setView("favourites"));
@@ -589,6 +630,12 @@ export function initEventWiring(deps) {
     if (e.key === "Escape" && deps.isAttachmentViewerOpen?.()) {
       e.preventDefault();
       deps.closeAttachmentViewer();
+      return;
+    }
+
+    if (e.key === "Escape" && deps.isImportBackupOpen?.()) {
+      e.preventDefault();
+      deps.closeImportBackup();
       return;
     }
 

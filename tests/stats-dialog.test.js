@@ -102,6 +102,18 @@ test("closeStats hides the dialog", () => {
   });
 });
 
+test("closeStats notifies the opener so settings can return", () => {
+  const onClose = spy();
+  withStats(
+    ({ stats, els }) => {
+      els.statsOverlay.hidden = false;
+      stats.closeStats();
+      assert.equal(onClose.count(), 1);
+    },
+    { onClose }
+  );
+});
+
 // ---------------------------------------------------------------------------
 // Cards
 // ---------------------------------------------------------------------------

@@ -57,6 +57,37 @@ export function createAutoLock({
     return true;
   }
 
+  /**
+   * Resume after the webview was hidden.
+   *
+   * Android may throttle timers while the app is in the background, so the
+   * wall-clock deadline is authoritative. A background shorter than the
+   * configured interval must not grant a fresh one: re-arm with the remaining
+   * time, and lock immediately if the deadline already passed.
+   */
+  function resume() {
+    if (deadline === null || !isUnlocked()) return false;
+    const remaining = deadline - now();
+    if (remaining <= 0) {
+      stop();
+      lock();
+      return true;
+    }
+    // Re-arm unconditionally. The old timer may have been throttled or dropped
+    // while hidden, but its callback could still arrive later; clear it first
+    // so a resumed session can never lock twice.
+    if (timer !== null) {
+      clearTimer(timer);
+      timer = null;
+    }
+    timer = setTimer(() => {
+      timer = null;
+      deadline = null;
+      lock();
+    }, remaining);
+    return false;
+  }
+
   function setMinutes(next) {
     minutes = Number(next) || 0;
     reset();
@@ -66,5 +97,5 @@ export function createAutoLock({
     return minutes;
   }
 
-  return { reset, stop, setMinutes, getMinutes, expireIfDue };
+  return { reset, resume, stop, setMinutes, getMinutes, expireIfDue };
 }

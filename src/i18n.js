@@ -64,6 +64,12 @@ const zhHant = {
   "lock.databaseError":
     "密碼正確，但加密資料庫無法開啟（{message}）。請還原先前匯出的加密備份。",
   "lock.restoreBackup": "還原加密備份",
+  "lock.importBackup": "匯入加密備份",
+  "lock.biometric": "使用生物辨識解鎖",
+  "lock.biometricFailed": "生物辨識失敗：{message}",
+  "lock.biometricCanceled": "已取消生物辨識",
+  "lock.biometricInvalidated":
+    "裝置上的生物辨識註冊已變更，請用密碼解鎖後重新啟用生物辨識。",
   "lock.pathLabel": "日記儲存資料夾",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "瀏覽…",
@@ -105,6 +111,10 @@ const zhHant = {
   // --- Sidebar -------------------------------------------------------------
   "sidebar.newToday": "今天",
   "sidebar.newTodayTitle": "前往今天 (Ctrl/Cmd+T)",
+  "sidebar.collapse": "收合側邊欄",
+  "sidebar.collapseTitle": "收合側邊欄",
+  "sidebar.expand": "展開側邊欄",
+  "sidebar.expandTitle": "展開側邊欄",
   "sidebar.search": "搜尋日期、標題或內容…",
   "sidebar.searchLabel": "搜尋日期、標題或內容",
   "sidebar.searchFailed": "搜尋失敗",
@@ -131,6 +141,32 @@ const zhHant = {
   "settings.version": "版本",
   "settings.commit": "Commit",
   "settings.author": "作者",
+  "settings.biometric": "生物辨識解鎖",
+  "settings.biometricHint":
+    "使用 Android 的指紋或臉部辨識解鎖。日記金鑰會由 Android Keystore 包裝，金鑰只會在生物辨識成功後短暫解開；指紋資料不會離開系統。變更裝置上的生物辨識註冊後，需要重新啟用。",
+  "settings.biometricPass": "目前密碼",
+  "settings.biometricEnable": "啟用生物辨識",
+  "settings.biometricDisable": "停用生物辨識",
+  "settings.biometricDisableConfirm":
+    "停用後就必須用密碼解鎖。要移除這台裝置上的生物辨識金鑰嗎？",
+  "settings.biometricPassRequired": "請先輸入目前密碼",
+  "settings.biometricEnabled": "已啟用：這台裝置可以使用生物辨識解鎖。",
+  "settings.biometricDisabled": "尚未啟用生物辨識解鎖。",
+  "settings.biometricEnabledDone": "生物辨識解鎖已啟用。",
+  "settings.biometricDisabledDone": "生物辨識解鎖已停用。",
+  "settings.biometricEnableFailed": "啟用失敗：{message}",
+  "settings.biometricDisableFailed": "停用失敗：{message}",
+  "biometric.reasonNoHardware": "此裝置沒有可用的生物辨識硬體。",
+  "biometric.reasonNotEnrolled": "請先在系統設定註冊指紋或臉部。",
+  "biometric.reasonNoDeviceCredential":
+    "請先設定螢幕鎖定（PIN、圖形或密碼），Android Keystore 才能保護金鑰。",
+  "biometric.reasonUnavailable": "生物辨識暫時無法使用，請稍後再試。",
+  "biometric.reasonSecurityUpdate": "系統需要安全性更新後才能使用生物辨識。",
+  "biometric.reasonUnsupported": "此裝置不支援強生物辨識。",
+  "biometric.reasonKeyMissing": "先前的生物辨識金鑰已不存在，請重新啟用。",
+  "biometric.reasonStale": "先前的生物辨識資料已失效，請重新啟用。",
+  "biometric.reasonNotConfigured": "請先建立或匯入日記本。",
+  "biometric.reasonUnknown": "無法確認生物辨識狀態。",
   "settings.autoLock": "閒置自動鎖定",
   "settings.autoLockHint": "閒置超過指定時間後自動鎖定日記，需要重新輸入密碼。",
   "settings.autoLockLabel": "鎖定時間",
@@ -167,15 +203,39 @@ const zhHant = {
   "settings.errSave": "儲存失敗：{message}",
   "settings.backup": "備份",
   "settings.backupHint":
-    "匯出一個加密備份檔，內含資料庫快照、金鑰包裝檔與所有附件。檔案本身仍是密文；沒有密碼或回復短語依然無法讀取。",
-  "settings.backupExport": "匯出備份",
-  "settings.backupRestore": "還原備份",
+    "建議定期備份整個日記資料夾，包含資料庫、金鑰檔案與所有附件，並將備份保存在另一個安全的位置。",
+  "settings.backupRestoreHint":
+    "「還原加密備份」只適用於同一個日記本。它會用目前解鎖的金鑰驗證 .tar，替換資料庫與附件，但不會修改密碼、回復短語或金鑰包裝檔。目前資料會保留在日記資料夾旁的 *.local-backup-*；備份之後的變更不會合併回來。跨裝置或建立新日記本請使用下方的「資料移轉」。",
+  "settings.backupRestore": "還原加密備份",
+  "settings.backupRestoreTitle": "用同一個日記本的加密備份還原資料庫與附件",
+  "settings.transfer": "資料移轉",
+  "settings.transferHint":
+    "匯出一個加密的 .tar，內含資料庫快照、金鑰包裝檔與所有圖片。適合換裝置、備份到另一個位置，或在 App 資料被清除後重新匯入。檔案本身仍是密文，需要原本的密碼才能解開。",
+  "settings.transferWarning":
+    "匯入會採用備份裡的 vault（包含它的密碼與回復短語），並取代目前日記本；現有資料會先保留在 *.local-backup-*。這不是同步，也不會合併兩邊的變更。",
+  "settings.transferExport": "匯出加密備份",
+  "settings.transferExportTitle": "匯出包含所有圖片的加密 tar",
+  "settings.transferImport": "匯入加密備份…",
+  "settings.transferImportTitle": "從加密 tar 匯入一個日記本",
   "backup.exported": "備份已匯出到 {path}",
   "backup.exportFailed": "匯出失敗：{message}",
-  "backup.restoreConfirm":
-    "還原會以備份中的資料庫與附件取代目前內容。目前的資料會保留在日記資料夾旁的 local-backup 目錄。要繼續嗎？",
-  "backup.restored": "已還原備份；還原前的資料保留在 {path}",
+  "backup.restored": "已從 {path} 還原；舊資料保留在 *.local-backup-*",
   "backup.restoreFailed": "還原失敗：{message}",
+  "backup.restoreConfirm":
+    "還原會用目前的金鑰驗證備份，並替換資料庫與附件。目前資料會保留在 *.local-backup-*，但備份之後的變更不會回來。要繼續嗎？",
+  "backup.importTitle": "匯入加密備份",
+  "backup.importHint":
+    "選擇由 Fly Diary 匯出的 .tar。檔案包含加密資料庫、金鑰包裝檔與所有圖片；匯入後會使用該備份的密碼，因此請輸入當初建立備份時的密碼。",
+  "backup.importWarning":
+    "匯入會取代目前日記本；現有資料會先移到日記資料夾旁的 *.local-backup-*。若只是要修復目前日記本，請使用設定 → 備份的「還原加密備份」。",
+  "backup.importPass": "備份密碼",
+  "backup.importPassRequired": "請輸入備份密碼",
+  "backup.importReplaceConfirm":
+    "這個資料夾已經有日記本。匯入會用備份裡的 vault 取代它，現有資料會移到 *.local-backup-*。要繼續嗎？",
+  "backup.importWorking": "正在匯入加密備份…",
+  "backup.importFailed": "匯入失敗：{message}",
+  "backup.imported": "已匯入 {files} 個檔案與 {attachments} 張圖片",
+  "backup.importSubmit": "選擇檔案並匯入",
   "recovery.settingsTitle": "回復短語",
   "recovery.settingsHint":
     "啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。",
@@ -460,6 +520,12 @@ const en = {
   "lock.databaseError":
     "The passphrase is correct, but the encrypted database cannot be opened ({message}). Restore an encrypted backup.",
   "lock.restoreBackup": "Restore encrypted backup",
+  "lock.importBackup": "Import encrypted backup",
+  "lock.biometric": "Unlock with biometrics",
+  "lock.biometricFailed": "Biometric authentication failed: {message}",
+  "lock.biometricCanceled": "Biometric authentication canceled",
+  "lock.biometricInvalidated":
+    "The biometric enrollment on this device changed. Unlock with your passphrase and enable biometrics again.",
   "lock.pathLabel": "Diary folder",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "Browse…",
@@ -502,6 +568,10 @@ const en = {
   // --- Sidebar -------------------------------------------------------------
   "sidebar.newToday": "Today",
   "sidebar.newTodayTitle": "Go to today (Ctrl/Cmd+T)",
+  "sidebar.collapse": "Collapse sidebar",
+  "sidebar.collapseTitle": "Collapse sidebar",
+  "sidebar.expand": "Expand sidebar",
+  "sidebar.expandTitle": "Expand sidebar",
   "sidebar.search": "Search date, title or content…",
   "sidebar.searchLabel": "Search date, title or content",
   "sidebar.searchFailed": "Search failed",
@@ -529,6 +599,39 @@ const en = {
   "settings.version": "Version",
   "settings.commit": "Commit",
   "settings.author": "Author",
+  "settings.biometric": "Biometric unlock",
+  "settings.biometricHint":
+    "Unlock with Android fingerprint or face recognition. The diary key is wrapped by an Android Keystore key that only becomes usable after a successful biometric prompt; fingerprint data never leaves the system. Changing the device's biometric enrollment requires enabling it again.",
+  "settings.biometricPass": "Current passphrase",
+  "settings.biometricEnable": "Enable biometrics",
+  "settings.biometricDisable": "Disable biometrics",
+  "settings.biometricDisableConfirm":
+    "Disabling removes this device's biometric key; you will need the passphrase to unlock. Continue?",
+  "settings.biometricPassRequired": "Enter the current passphrase first",
+  "settings.biometricEnabled":
+    "Enabled: this device can unlock with biometrics.",
+  "settings.biometricDisabled": "Biometric unlock is not enabled.",
+  "settings.biometricEnabledDone": "Biometric unlock enabled.",
+  "settings.biometricDisabledDone": "Biometric unlock disabled.",
+  "settings.biometricEnableFailed": "Could not enable biometrics: {message}",
+  "settings.biometricDisableFailed": "Could not disable biometrics: {message}",
+  "biometric.reasonNoHardware": "This device has no usable biometric hardware.",
+  "biometric.reasonNotEnrolled":
+    "Register a fingerprint or face in the system settings first.",
+  "biometric.reasonNoDeviceCredential":
+    "Set a screen lock (PIN, pattern or passphrase) so Android Keystore can protect the key.",
+  "biometric.reasonUnavailable":
+    "Biometrics are temporarily unavailable; try again later.",
+  "biometric.reasonSecurityUpdate":
+    "A system security update is required before biometrics can be used.",
+  "biometric.reasonUnsupported":
+    "This device does not support strong biometrics.",
+  "biometric.reasonKeyMissing":
+    "The previous biometric key no longer exists; enable it again.",
+  "biometric.reasonStale":
+    "The previous biometric enrollment is no longer valid; enable it again.",
+  "biometric.reasonNotConfigured": "Create or import a diary first.",
+  "biometric.reasonUnknown": "Could not determine the biometric status.",
   "settings.autoLock": "Idle auto-lock",
   "settings.autoLockHint":
     "Lock the diary after a period of inactivity, requiring the passphrase again.",
@@ -567,15 +670,43 @@ const en = {
   "settings.errSave": "Could not save: {message}",
   "settings.backup": "Backup",
   "settings.backupHint":
-    "Export one encrypted archive containing a database snapshot, the key wrappers and every attachment. The archive stays ciphertext; it cannot be read without the passphrase or recovery phrase.",
-  "settings.backupExport": "Export backup",
-  "settings.backupRestore": "Restore backup",
+    "Back up the whole diary folder regularly, including the database, key files and every attachment, and keep the copy in another safe location.",
+  "settings.backupRestoreHint":
+    "Restore encrypted backup only works for the same diary vault. It verifies the .tar with the currently unlocked key and replaces the database and attachments, but it does not change the passphrase, recovery phrase or key wrappers. The current data is kept in *.local-backup-* next to the diary folder; changes made after the backup are not merged. Use Data transfer below when moving to another device or creating a new diary.",
+  "settings.backupRestore": "Restore encrypted backup",
+  "settings.backupRestoreTitle":
+    "Restore the database and attachments from a backup of this same vault",
+  "settings.transfer": "Data transfer",
+  "settings.transferHint":
+    "Export one encrypted .tar containing a database snapshot, the key wrappers and every image. Use it to move to another device, keep an off-site copy, or recover after the app's data was cleared. The archive stays encrypted and needs the original passphrase.",
+  "settings.transferWarning":
+    "Import adopts the vault inside the backup (including its passphrase and recovery phrase) and replaces the current diary. Existing data is kept in *.local-backup-* first. This is not synchronisation and does not merge changes from both sides.",
+  "settings.transferExport": "Export encrypted backup",
+  "settings.transferExportTitle":
+    "Export an encrypted tar containing every image",
+  "settings.transferImport": "Import encrypted backup…",
+  "settings.transferImportTitle":
+    "Import a diary from an encrypted tar archive",
   "backup.exported": "Backup exported to {path}",
   "backup.exportFailed": "Export failed: {message}",
-  "backup.restoreConfirm":
-    "Restoring replaces the current database and attachments with the backup. The current data is kept in a local-backup folder next to the diary. Continue?",
-  "backup.restored": "Backup restored; the previous data is kept at {path}",
+  "backup.restored":
+    "Restored from {path}; the previous data is kept in *.local-backup-*",
   "backup.restoreFailed": "Restore failed: {message}",
+  "backup.restoreConfirm":
+    "Restore verifies the backup with the current key and replaces the database and attachments. The current data is kept in *.local-backup-*, but changes made after the backup will not come back. Continue?",
+  "backup.importTitle": "Import encrypted backup",
+  "backup.importHint":
+    "Choose a .tar exported by Fly Diary. It contains the encrypted database, key wrappers and every image. Import uses that backup's passphrase, so enter the passphrase that was used when the backup was created.",
+  "backup.importWarning":
+    "Import replaces the current diary. Existing data is moved to *.local-backup-* next to the diary folder first. If you only need to repair the current diary, use Settings → Backup → Restore encrypted backup.",
+  "backup.importPass": "Backup passphrase",
+  "backup.importPassRequired": "Enter the backup passphrase",
+  "backup.importReplaceConfirm":
+    "This folder already contains a diary. Import will replace it with the vault from the backup, and the existing data will be moved to *.local-backup-*. Continue?",
+  "backup.importWorking": "Importing encrypted backup…",
+  "backup.importFailed": "Import failed: {message}",
+  "backup.imported": "Imported {files} file(s) and {attachments} image(s)",
+  "backup.importSubmit": "Choose a file and import",
   "recovery.settingsTitle": "Recovery phrase",
   "recovery.settingsHint":
     "When enabled, the app generates 12 BIP39 English words. Write them on paper and store them away from the diary; they can reset the passphrase if you forget it. The phrase is a second key: anyone who has it and the diary files can read everything.",

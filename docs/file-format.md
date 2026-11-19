@@ -275,7 +275,7 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 
 ### 加密備份（`.tar`）
 
-設定頁匯出的備份是未壓縮的 tar，沒有額外的 manifest 檔，結構固定：
+`export_backup` 產生的備份是未壓縮的 tar，沒有額外的 manifest 檔，結構固定：
 
 ```text
 diary.db                     # VACUUM INTO 快照（SQLCipher 密文）
@@ -286,14 +286,19 @@ attachments/YYYY-MM-DD/<32 hex>.bin
 
 - 檔名建議為 `fly-diary-backup-YYYY-MM-DD.tar`，但 App 不依賴檔名。
 - `diary.db` 是 `VACUUM INTO` 的輸出，等同一致快照；不含 `-wal`／`-shm`。
-- `vault.xml` 與 `recovery.xml` 讓備份在 App 無法解鎖時仍可手動救援；App 內還原
-  會驗證但不會覆寫目前的包裝檔。
+- `vault.xml` 與 `recovery.xml` 讓備份在 App 無法解鎖時仍可手動救援。
 - 解壓時只接受上述路徑；`..`、絕對路徑、重複路徑、非預期檔名與超過大小上限的
   項目都會被拒絕。
-- 還原只替換 `diary.db` 與 `attachments/`，舊資料移至
-  `<diary>.local-backup-<timestamp>`；`diary.db-wal`、`diary.db-shm`、
-  `migration.journal` 與暫存檔不會進備份。
-- 備份不是同步：沒有三方比較、衝突清單或自動上傳。
+- **還原**（設定 → 備份）只替換 `diary.db` 與 `attachments/`，舊資料移至
+  `<diary>.local-backup-<timestamp>`；它要求備份屬於目前解鎖的同一個 vault，
+  且不會覆寫目前的 `vault.xml`／`recovery.xml`。
+- **匯入**（設定 → 資料移轉，或第一次啟動的解鎖畫面）會用備份的密碼解開
+  `vault.xml`，驗證資料庫後把 `vault.xml`、`recovery.xml`、`diary.db` 與
+  `attachments/` 一起安裝；舊 vault（含金鑰包裝檔）會先移到
+  `<diary>.local-backup-<timestamp>`。這適合換裝置或在 App 資料被清除後重建。
+- `biometric.json` 是裝置綁定的 Android Keystore 包裝，**不會進 `.tar`**；匯入新 vault 時會跟舊的 `vault.xml`／`recovery.xml` 一起移到 `*.local-backup-*`。
+- `diary.db-wal`、`diary.db-shm`、`migration.journal` 與暫存檔不會進備份。
+- 備份、還原與匯入都不是同步：沒有三方比較、衝突清單、自動上傳或變更合併。
 
 ## 日記儲存位置
 
@@ -306,13 +311,14 @@ attachments/YYYY-MM-DD/<32 hex>.bin
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
 按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。資料夾內是 `diary.db`、`vault.xml`、
-`recovery.xml` 與 `attachments/`；備份請用設定頁的「匯出備份」，不要直接複製執行中的
+`recovery.xml`、選用的 `biometric.json`（Android 裝置綁定）與 `attachments/`；備份請先鎖定日記，再複製整個資料夾，不要只複製執行中的
 `diary.db`。**沒有密碼或回復短語就無法還原內容**；只複製 `diary.db` 也打不開，因為 DB key
 來自 `vault.xml` 裡包裝的 diary key。
 
 行動版（Android／iOS）沒有檔案系統資料夾選擇器，日記固定存放在 App 私有資料夾：解鎖畫面只在
 第一次啟動時顯示唯讀路徑，不提供「瀏覽…」或「切換工作區」；設定頁也不顯示變更路徑按鈕。
-備份檔可透過系統檔案選擇器存到 SAF 可寫入的位置。
+備份檔可透過系統檔案選擇器存到 SAF 可寫入的位置；第一次啟動或設定 → 資料移轉也能從
+`.tar` 匯入，不需要先手動把檔案放進 App 私有資料夾。
 
 ### 切換工作區
 

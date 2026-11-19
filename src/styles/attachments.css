@@ -10,7 +10,7 @@
   width: 100%;
   max-width: calc(var(--measure) + 3.5rem);
   margin-inline: auto;
-  padding: 0 1.75rem 0.5rem;
+  padding: 0 var(--space-14) var(--space-2);
   min-width: 0;
 }
 
@@ -42,7 +42,7 @@
 
 .btn-attachment {
   flex: none;
-  padding: 0.25rem 0.625rem;
+  padding: var(--space-2) var(--space-5);
   font-size: 0.75rem;
   color: var(--accent);
   border: 1px solid var(--border);
@@ -64,7 +64,7 @@
   display: flex;
   gap: 0.5rem;
   min-height: 0;
-  padding: 0.125rem 0 0.25rem;
+  padding: var(--space-1) 0 var(--space-2);
   overflow-x: auto;
   overscroll-behavior-x: contain;
   scrollbar-width: thin;
@@ -77,8 +77,8 @@
 .attachment-item {
   position: relative;
   flex: none;
-  width: 5.5rem;
-  height: 5.5rem;
+  width: 4.5rem;
+  height: 4.5rem;
   overflow: hidden;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -209,6 +209,10 @@
   color: var(--text-muted);
 }
 
+.attachment-status:empty {
+  display: none;
+}
+
 /* Lightbox. Layout is gated on `:not([hidden])` so a hidden overlay cannot sit
    invisibly over the app and swallow clicks. */
 .attachment-viewer {
@@ -222,9 +226,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: max(1rem, env(safe-area-inset-top))
-    max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom))
-    max(1rem, env(safe-area-inset-left));
+  padding: max(var(--space-8), env(safe-area-inset-top))
+    max(var(--space-8), env(safe-area-inset-right)) max(var(--space-8), env(safe-area-inset-bottom))
+    max(var(--space-8), env(safe-area-inset-left));
   animation: overlay-in 0.12s ease-out;
 }
 
@@ -261,7 +265,7 @@
 }
 
 .attachment-viewer-close {
-  padding: 0.375rem 1rem;
+  padding: var(--space-3) var(--space-8);
   font-size: 0.75rem;
   color: var(--on-accent);
   background: var(--accent);

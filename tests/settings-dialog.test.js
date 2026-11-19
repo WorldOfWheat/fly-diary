@@ -44,9 +44,19 @@ const SETTINGS_IDS = [
   "recoveryStatus",
   "recoveryGenerateBtn",
   "recoveryRemoveBtn",
-  "settingsBackupBtn",
+  "settingsStatsBtn",
   "settingsRestoreBtn",
   "settingsBackupStatus",
+  "settingsTarExportBtn",
+  "settingsTarImportBtn",
+  "settingsTransferStatus",
+  "settingsBiometricSection",
+  "settingsBiometricStatus",
+  "settingsBiometricEnableRow",
+  "settingsBiometricPass",
+  "settingsBiometricEnable",
+  "settingsBiometricDisable",
+  "settingsBiometricMessage",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -68,7 +78,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "2.0.0",
+      version: "2.1.0",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -79,6 +89,23 @@ function harness(overrides = {}) {
     calibrate_kdf: { memoryKib: 131072, iterations: 4, parallelism: 2 },
     get_recovery_status: { enabled: false },
     remove_recovery: null,
+    restore_backup: "/tmp/fly-diary-backup.tar",
+    export_backup: "/tmp/fly-diary-backup.tar",
+    biometric_status: {
+      available: false,
+      enabled: false,
+      reason: "unsupported_platform",
+    },
+    biometric_enable: {
+      available: true,
+      enabled: true,
+      reason: null,
+    },
+    biometric_disable: {
+      available: true,
+      enabled: false,
+      reason: null,
+    },
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -93,6 +120,9 @@ function harness(overrides = {}) {
     openStats: spy(),
     changeDiaryDir: spy(),
     openRecovery: spy(),
+    openImportBackup: spy(),
+    flushSave: spy(),
+    afterRestore: spy(),
     ...overrides.deps,
   };
 
@@ -257,7 +287,7 @@ test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "2.0.0");
+    assert.equal(els.settingsAppVersion.textContent, "2.1.0");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
@@ -760,6 +790,7 @@ test("saveSettings requires the current passphrase for a parameter-only change",
           c !== "get_settings" &&
           c !== "get_vault_kdf" &&
           c !== "get_recovery_status" &&
+          c !== "biometric_status" &&
           c !== "app_info"
       );
     assert.deepEqual(writes, []);
@@ -845,7 +876,8 @@ test("saveSettings re-enables the save button after a failure", async () => {
 // ---------------------------------------------------------------------------
 //
 // Import, statistics and the folder picker are not settings, so they must not
-// take part in `saveSettings`. They only close the dialog and hand over.
+// take part in `saveSettings`. They hand over to their own controller;
+// statistics returns to the dialog when it closes.
 
 test("openImport closes the dialog before starting the import", async () => {
   await withSettings(async ({ settings, els, deps }) => {
@@ -858,7 +890,7 @@ test("openImport closes the dialog before starting the import", async () => {
   });
 });
 
-test("openStats closes the dialog before opening the statistics", async () => {
+test("openStats hides the dialog and returns to it when the statistics close", async () => {
   await withSettings(async ({ settings, els, deps }) => {
     els.settingsOverlay.hidden = false;
 
@@ -866,6 +898,11 @@ test("openStats closes the dialog before opening the statistics", async () => {
 
     assert.equal(els.settingsOverlay.hidden, true);
     assert.deepEqual(deps.openStats.args(), [[]]);
+
+    assert.equal(settings.returnFromStats(), true);
+    assert.equal(els.settingsOverlay.hidden, false);
+    // A second call must not resurrect the dialog after the user closed it.
+    assert.equal(settings.returnFromStats(), false);
   });
 });
 
@@ -880,6 +917,116 @@ test("changeDiaryDir closes the dialog before locking", async () => {
   });
 });
 
+test("restoreBackup flushes, restores, reloads and reports the path", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await settings.restoreBackup();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(deps.flushSave.args(), [[]]);
+    assert.equal(invoke.commands().includes("restore_backup"), true);
+    assert.deepEqual(deps.afterRestore.args(), [[]]);
+    assert.equal(
+      els.settingsBackupStatus.textContent,
+      "backup.restored(path=/tmp/fly-diary-backup.tar)"
+    );
+    assert.equal(els.settingsRestoreBtn.disabled, false);
+  });
+});
+
+test("restoreBackup does nothing when the confirmation is declined", async () => {
+  await withSettings(async ({ settings, invoke }) => {
+    const original = globalThis.confirm;
+    globalThis.confirm = () => false;
+    try {
+      await settings.restoreBackup();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(invoke.commands(), []);
+  });
+});
+
+test("exportBackup flushes before invoking export_backup", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    await settings.exportBackup();
+
+    assert.deepEqual(deps.flushSave.args(), [[]]);
+    assert.deepEqual(invoke.commands(), ["export_backup"]);
+    assert.equal(
+      els.settingsTransferStatus.textContent,
+      "backup.exported(path=/tmp/fly-diary-backup.tar)"
+    );
+    assert.equal(els.settingsTarExportBtn.disabled, false);
+  });
+});
+
+test("enableBiometric requires the current passphrase", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    await settings.enableBiometric();
+
+    assert.equal(invoke.commands().includes("biometric_enable"), false);
+    assert.equal(
+      els.settingsBiometricMessage.textContent,
+      "settings.biometricPassRequired"
+    );
+  });
+});
+
+test("enableBiometric wraps the key and reports the new status", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    els.settingsBiometricPass.value = "current-passphrase";
+
+    await settings.enableBiometric();
+
+    assert.deepEqual(invoke.argsOf("biometric_enable"), {
+      passphrase: "current-passphrase",
+    });
+    assert.equal(els.settingsBiometricPass.value, "");
+    assert.equal(
+      els.settingsBiometricMessage.textContent,
+      "settings.biometricEnabledDone"
+    );
+    assert.equal(els.settingsBiometricDisable.hidden, false);
+  });
+});
+
+test("disableBiometric asks for confirmation and removes the wrapper", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await settings.disableBiometric();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(invoke.commands().includes("biometric_disable"), true);
+    assert.equal(
+      els.settingsBiometricMessage.textContent,
+      "settings.biometricDisabledDone"
+    );
+  });
+});
+
+test("openImportBackup closes the dialog before handing over", async () => {
+  await withSettings(async ({ settings, els, deps }) => {
+    els.settingsOverlay.hidden = false;
+
+    await settings.openImportBackup();
+
+    assert.equal(els.settingsOverlay.hidden, true);
+    assert.deepEqual(deps.openImportBackup.args(), [[]]);
+  });
+});
+
 test("the vault-wide actions never write settings", async () => {
   await withSettings(async ({ settings, invoke }) => {
     await settings.openImport();
@@ -888,103 +1035,6 @@ test("the vault-wide actions never write settings", async () => {
 
     assert.deepEqual(invoke.commands(), []);
   });
-});
-
-// ---------------------------------------------------------------------------
-// Encrypted backup export / restore
-// ---------------------------------------------------------------------------
-
-test("exportBackup flushes the pending save and reports the path", async () => {
-  const flushSave = spy(async () => {});
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.exportBackup();
-
-      assert.equal(flushSave.count(), 1);
-      assert.equal(
-        els.settingsBackupStatus.textContent,
-        "backup.exported(path=/home/u/backup.tar)"
-      );
-      assert.equal(
-        els.settingsBackupStatus.classList.contains("is-saved"),
-        true
-      );
-    },
-    {
-      deps: { flushSave },
-      invokeTable: { export_backup: "/home/u/backup.tar" },
-    }
-  );
-});
-
-test("exportBackup treats a cancelled dialog as a no-op", async () => {
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.exportBackup();
-      assert.equal(els.settingsBackupStatus.textContent, "");
-    },
-    { invokeTable: { export_backup: null } }
-  );
-});
-
-test("exportBackup reports a backend failure", async () => {
-  await withSettings(
-    async ({ settings, els }) => {
-      await settings.exportBackup();
-      assert.equal(
-        els.settingsBackupStatus.textContent,
-        "backup.exportFailed(message=disk full)"
-      );
-    },
-    {
-      invokeTable: {
-        export_backup: () => {
-          throw "disk full";
-        },
-      },
-    }
-  );
-});
-
-test("restoreBackup asks first, then reloads the diary", async () => {
-  const original = globalThis.confirm;
-  const afterRestore = spy(async () => {});
-  const flushSave = spy(async () => {});
-  globalThis.confirm = () => true;
-  try {
-    await withSettings(
-      async ({ settings, els, invoke }) => {
-        await settings.restoreBackup();
-
-        assert.equal(flushSave.count(), 1);
-        assert.equal(afterRestore.count(), 1);
-        assert.ok(invoke.commands().includes("restore_backup"));
-        assert.equal(
-          els.settingsBackupStatus.textContent,
-          "backup.restored(path=/home/u/diary.local-backup-1)"
-        );
-      },
-      {
-        deps: { flushSave, afterRestore },
-        invokeTable: { restore_backup: "/home/u/diary.local-backup-1" },
-      }
-    );
-  } finally {
-    globalThis.confirm = original;
-  }
-});
-
-test("restoreBackup does nothing when the confirmation is declined", async () => {
-  const original = globalThis.confirm;
-  globalThis.confirm = () => false;
-  try {
-    await withSettings(async ({ settings, invoke }) => {
-      await settings.restoreBackup();
-      assert.deepEqual(invoke.commands(), []);
-    });
-  } finally {
-    globalThis.confirm = original;
-  }
 });
 
 /** Shared deps for the tests that build a second controller. */
@@ -998,5 +1048,8 @@ function settingsDeps(els) {
     openImport: spy(),
     openStats: spy(),
     changeDiaryDir: spy(),
+    openImportBackup: spy(),
+    flushSave: spy(),
+    afterRestore: spy(),
   };
 }

@@ -14,8 +14,9 @@ import { animateOverlayExit } from "./lib/motion.js";
 //
 // It also hosts the vault-wide actions that used to be footer buttons: the
 // storage location, import and statistics. Those are not settings, so they do
-// not take part in `saveSettings`; they simply close the dialog and hand over
-// to the controller that owns them.
+// not take part in `saveSettings`; they hand over to the controller that owns
+// them. Statistics is a detour rather than a hand-off, so the dialog is hidden
+// and brought back when the statistics close.
 //
 // `deps` shape:
 //
@@ -29,11 +30,10 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   openStats          — () => void
 //   changeDiaryDir     — () => void | Promise<void>
 //   openRecovery       — () => void | Promise<void>
+//   openImportBackup   — () => void | Promise<void>
 //   flushSave          — () => Promise<void>
-//   flushAndLock       — () => Promise<void>
-//   afterRestore       — () => Promise<void>, reloads after a backup restore
-//   beginNativePicker  — () => void, marks a native folder picker as open
-//   endNativePicker    — () => void, marks it as closed
+//   afterRestore       — () => Promise<void>
+//   beginNativePicker / endNativePicker — optional picker guard
 
 /** Fallback choices if the backend does not report any. */
 const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
@@ -57,6 +57,9 @@ export function createSettingsDialog(deps) {
    * passphrase fields are empty.
    */
   let vaultKdf = null;
+
+  /** Whether closing the statistics should bring this dialog back. */
+  let returnToSettings = false;
 
   /** Whether the settings dialog is open. */
   function isSettingsOpen() {
@@ -215,6 +218,238 @@ export function createSettingsDialog(deps) {
     }
   }
 
+  /** Write a one-line result under a vault action. */
+  function showSectionStatus(el, text, saved = false) {
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle("is-saved", saved);
+  }
+
+  /** Clear both vault-action status lines. */
+  function clearVaultStatus() {
+    showSectionStatus(els.settingsBackupStatus, "");
+    showSectionStatus(els.settingsTransferStatus, "");
+  }
+
+  /**
+   * Export the whole vault as one encrypted tar.
+   *
+   * The pending autosave is flushed first, otherwise the snapshot would miss
+   * the last keystrokes. Cancelling the save dialog is not an error.
+   */
+  async function exportBackup() {
+    if (!els.settingsTarExportBtn) return;
+    els.settingsTarExportBtn.disabled = true;
+    showSectionStatus(els.settingsTransferStatus, "");
+    try {
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("export_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        showSectionStatus(
+          els.settingsTransferStatus,
+          deps.t("backup.exported", { path }),
+          true
+        );
+      }
+    } catch (err) {
+      console.error("export_backup failed:", err);
+      showSectionStatus(
+        els.settingsTransferStatus,
+        deps.t("backup.exportFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsTarExportBtn.disabled = false;
+    }
+  }
+
+  /**
+   * Restore a tar into the *current* vault.
+   *
+   * This is the rescue path: the session key stays the same, `vault.xml` and
+   * `recovery.xml` are not replaced, and the backend keeps the old database and
+   * attachments in `*.local-backup-*`. Importing a different vault lives in the
+   * separate transfer section.
+   */
+  async function restoreBackup() {
+    if (!els.settingsRestoreBtn) return;
+    if (!confirm(deps.t("backup.restoreConfirm"))) return;
+    els.settingsRestoreBtn.disabled = true;
+    showSectionStatus(els.settingsBackupStatus, "");
+    try {
+      await deps.flushSave?.();
+      deps.beginNativePicker?.();
+      let path;
+      try {
+        path = await deps.invoke("restore_backup");
+      } finally {
+        deps.endNativePicker?.();
+      }
+      if (path) {
+        await deps.afterRestore?.();
+        showSectionStatus(
+          els.settingsBackupStatus,
+          deps.t("backup.restored", { path }),
+          true
+        );
+      }
+    } catch (err) {
+      console.error("restore_backup failed:", err);
+      showSectionStatus(
+        els.settingsBackupStatus,
+        deps.t("backup.restoreFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsRestoreBtn.disabled = false;
+    }
+  }
+
+  /** Open the separate tar-import dialog. */
+  function openImportBackup() {
+    return handOver(deps.openImportBackup);
+  }
+
+  /** Human-readable explanation for an unavailable biometric state. */
+  function biometricReasonText(reason) {
+    switch (reason) {
+      case "no_hardware":
+        return deps.t("biometric.reasonNoHardware");
+      case "not_enrolled":
+        return deps.t("biometric.reasonNotEnrolled");
+      case "no_device_credential":
+        return deps.t("biometric.reasonNoDeviceCredential");
+      case "unavailable":
+        return deps.t("biometric.reasonUnavailable");
+      case "security_update":
+        return deps.t("biometric.reasonSecurityUpdate");
+      case "unsupported":
+        return deps.t("biometric.reasonUnsupported");
+      case "key_missing":
+        return deps.t("biometric.reasonKeyMissing");
+      case "stale":
+        return deps.t("biometric.reasonStale");
+      case "not_configured":
+        return deps.t("biometric.reasonNotConfigured");
+      default:
+        return deps.t("biometric.reasonUnknown");
+    }
+  }
+
+  function showBiometricMessage(text, saved = false) {
+    if (!els.settingsBiometricMessage) return;
+    els.settingsBiometricMessage.textContent = text;
+    els.settingsBiometricMessage.classList.toggle("is-saved", saved);
+  }
+
+  /**
+   * Paint the Android biometric section.
+   *
+   * `unsupported_platform` hides the whole block on desktop. Other reasons stay
+   * visible so the user can see why the button is disabled (no enrolled
+   * fingerprint, no screen lock, and so on).
+   */
+  function renderBiometric(status) {
+    const section = els.settingsBiometricSection;
+    if (!section) return;
+    if (!status || status.reason === "unsupported_platform") {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+
+    const enrolled = Boolean(status.enabled);
+    if (els.settingsBiometricEnableRow) {
+      els.settingsBiometricEnableRow.hidden = enrolled;
+    }
+    if (els.settingsBiometricEnable) {
+      els.settingsBiometricEnable.hidden = enrolled;
+      els.settingsBiometricEnable.disabled = !status.available;
+    }
+    if (els.settingsBiometricDisable) {
+      els.settingsBiometricDisable.hidden = !enrolled;
+    }
+    if (els.settingsBiometricStatus) {
+      els.settingsBiometricStatus.textContent = enrolled
+        ? status.available
+          ? deps.t("settings.biometricEnabled")
+          : biometricReasonText(status.reason)
+        : status.available
+          ? deps.t("settings.biometricDisabled")
+          : biometricReasonText(status.reason);
+    }
+  }
+
+  async function refreshBiometric() {
+    if (!els.settingsBiometricSection) return;
+    try {
+      const status = await deps.invoke("biometric_status");
+      renderBiometric(status);
+    } catch (err) {
+      console.error("biometric_status failed:", err);
+      // Older backends or non-Android builds simply do not offer the feature.
+      renderBiometric({ reason: "unsupported_platform" });
+    }
+  }
+
+  async function enableBiometric() {
+    if (!els.settingsBiometricEnable) return;
+    const passphrase = els.settingsBiometricPass?.value ?? "";
+    if (!passphrase) {
+      showBiometricMessage(deps.t("settings.biometricPassRequired"));
+      els.settingsBiometricPass?.focus?.();
+      return;
+    }
+
+    els.settingsBiometricEnable.disabled = true;
+    showBiometricMessage("");
+    try {
+      const status = await deps.invoke("biometric_enable", { passphrase });
+      if (els.settingsBiometricPass) els.settingsBiometricPass.value = "";
+      renderBiometric(status);
+      showBiometricMessage(deps.t("settings.biometricEnabledDone"), true);
+    } catch (err) {
+      showBiometricMessage(
+        deps.t("settings.biometricEnableFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsBiometricEnable.disabled = false;
+      void refreshBiometric();
+    }
+  }
+
+  async function disableBiometric() {
+    if (!els.settingsBiometricDisable) return;
+    if (!confirm(deps.t("settings.biometricDisableConfirm"))) return;
+
+    els.settingsBiometricDisable.disabled = true;
+    showBiometricMessage("");
+    try {
+      const status = await deps.invoke("biometric_disable");
+      renderBiometric(status);
+      showBiometricMessage(deps.t("settings.biometricDisabledDone"), true);
+    } catch (err) {
+      showBiometricMessage(
+        deps.t("settings.biometricDisableFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsBiometricDisable.disabled = false;
+      void refreshBiometric();
+    }
+  }
+
   /** Show the folder the diary is stored in. */
   async function renderDiaryPath() {
     try {
@@ -227,84 +462,6 @@ export function createSettingsDialog(deps) {
     }
   }
 
-
-  /** Write a one-line result under the backup buttons. */
-  function showBackupStatus(text, saved = false) {
-    if (!els.settingsBackupStatus) return;
-    els.settingsBackupStatus.textContent = text;
-    els.settingsBackupStatus.classList.toggle("is-saved", saved);
-  }
-
-  /**
-   * Export an encrypted snapshot archive.
-   *
-   * The pending autosave is flushed first so the archive cannot miss the last
-   * keystrokes. Cancelling the save dialog is not an error.
-   */
-  async function exportBackup() {
-    if (!els.settingsBackupBtn) return;
-    els.settingsBackupBtn.disabled = true;
-    showBackupStatus("");
-    try {
-      await deps.flushSave?.();
-      deps.beginNativePicker?.();
-      let path;
-      try {
-        path = await deps.invoke("export_backup");
-      } finally {
-        deps.endNativePicker?.();
-      }
-      if (path) {
-        showBackupStatus(deps.t("backup.exported", { path }), true);
-      }
-    } catch (err) {
-      console.error("export_backup failed:", err);
-      showBackupStatus(
-        deps.t("backup.exportFailed", {
-          message: typeof err === "string" ? err : String(err),
-        })
-      );
-    } finally {
-      els.settingsBackupBtn.disabled = false;
-    }
-  }
-
-  /**
-   * Replace the database and attachments with an encrypted backup.
-   *
-   * The current database and attachments are kept in a sibling backup folder,
-   * so the confirmation can honestly say the old data is recoverable.
-   */
-  async function restoreBackup() {
-    if (!els.settingsRestoreBtn) return;
-    if (!confirm(deps.t("backup.restoreConfirm"))) return;
-    els.settingsRestoreBtn.disabled = true;
-    showBackupStatus("");
-    try {
-      await deps.flushSave?.();
-      deps.beginNativePicker?.();
-      let path;
-      try {
-        path = await deps.invoke("restore_backup");
-      } finally {
-        deps.endNativePicker?.();
-      }
-      if (path) {
-        await deps.afterRestore?.();
-        showBackupStatus(deps.t("backup.restored", { path }), true);
-      }
-    } catch (err) {
-      console.error("restore_backup failed:", err);
-      showBackupStatus(
-        deps.t("backup.restoreFailed", {
-          message: typeof err === "string" ? err : String(err),
-        })
-      );
-    } finally {
-      els.settingsRestoreBtn.disabled = false;
-    }
-  }
-
   /** Open the settings dialog and populate it from the backend. */
   async function openSettings() {
     els.settingsError.textContent = "";
@@ -312,7 +469,10 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
-    showBackupStatus("");
+    if (els.settingsBiometricPass) els.settingsBiometricPass.value = "";
+    clearVaultStatus();
+    showBiometricMessage("");
+    returnToSettings = false;
 
     // Not awaited: the path and build info are informational, so the dialog
     // should not wait on extra round trips before it appears.
@@ -350,6 +510,10 @@ export function createSettingsDialog(deps) {
     // block closed so the headings act as a menu; desktop keeps them open.
     setSectionsOpen(!mobile);
 
+    // Android-only. Desktop hides the block as soon as the backend reports
+    // `unsupported_platform`; the rest of the dialog does not wait on it.
+    void refreshBiometric();
+
     els.settingsOverlay.hidden = false;
     focusTrap.activate();
     if (mobile) {
@@ -362,6 +526,7 @@ export function createSettingsDialog(deps) {
 
   /** Close the settings dialog without saving. */
   function closeSettings() {
+    returnToSettings = false;
     animateOverlayExit(els.settingsOverlay, { redactInputs: true });
     els.settingsOverlay.hidden = true;
     focusTrap.deactivate();
@@ -370,6 +535,9 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    if (els.settingsBiometricPass) els.settingsBiometricPass.value = "";
+    clearVaultStatus();
+    showBiometricMessage("");
   }
 
   /**
@@ -382,6 +550,30 @@ export function createSettingsDialog(deps) {
   function handOver(action) {
     closeSettings();
     return action();
+  }
+
+  /**
+   * Open statistics without losing the settings dialog.
+   *
+   * Statistics is a temporary detour, so the dialog is only hidden; the
+   * statistics controller calls `returnFromStats` when it closes, which shows
+   * the dialog again with its scroll position and unsaved fields intact.
+   */
+  function openStats() {
+    returnToSettings = true;
+    els.settingsOverlay.hidden = true;
+    focusTrap.deactivate({ restore: false });
+    return deps.openStats();
+  }
+
+  /** Bring the settings dialog back after the statistics close. */
+  function returnFromStats() {
+    if (!returnToSettings) return false;
+    returnToSettings = false;
+    els.settingsOverlay.hidden = false;
+    focusTrap.activate();
+    els.settingsStatsBtn?.focus?.();
+    return true;
   }
 
   /** Measure this machine and fill the advanced inputs with the result. */
@@ -499,10 +691,14 @@ export function createSettingsDialog(deps) {
     refreshRecoveryStatus,
     removeRecovery,
     openRecovery,
+    openStats,
+    returnFromStats,
     exportBackup,
     restoreBackup,
+    openImportBackup,
+    enableBiometric,
+    disableBiometric,
     openImport: () => handOver(deps.openImport),
-    openStats: () => handOver(deps.openStats),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),
   };
 }

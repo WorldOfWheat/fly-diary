@@ -100,10 +100,18 @@
             <button id="lock-submit" class="btn-primary lock-submit" type="submit"
                 data-i18n="lock.submitUnlock">解鎖</button>
 
+            <!-- Shown when Android biometric unlock is enrolled for this vault. -->
+            <button id="lock-biometric" class="btn-browse lock-recovery-open" type="button"
+                data-i18n="lock.biometric" hidden>使用生物辨識解鎖</button>
+
             <!-- Shown only after the passphrase was accepted but diary.db is
                  unreadable. Restoring is the supported rescue path. -->
             <button id="lock-restore" class="btn-browse lock-recovery-open" type="button"
                 data-i18n="lock.restoreBackup" hidden>還原加密備份</button>
+
+            <!-- First run only: adopt a vault from an encrypted .tar backup. -->
+            <button id="lock-import" class="btn-browse lock-recovery-open" type="button"
+                data-i18n="lock.importBackup" hidden>匯入加密備份</button>
 
             <!-- Optional second way in. Hidden unless the current vault has a
                  recovery phrase; the panel replaces this form rather than
@@ -143,13 +151,23 @@
     </div>
 
     <div class="app" id="app" hidden>
-        <aside class="sidebar">
+        <aside class="sidebar" id="app-sidebar">
             <header class="sidebar-header">
                 <h1>Fly Diary</h1>
-                <button id="new-today" class="btn-primary" data-i18n="sidebar.newToday"
-                    data-i18n-title="sidebar.newTodayTitle" title="前往今天 (Ctrl/Cmd+T)">
-                    今天
-                </button>
+                <div class="sidebar-header-actions">
+                    <button id="new-today" class="btn-primary" data-i18n="sidebar.newToday"
+                        data-i18n-title="sidebar.newTodayTitle" title="前往今天 (Ctrl/Cmd+T)">
+                        今天
+                    </button>
+                    <button id="sidebar-collapse" class="btn-icon sidebar-toggle" type="button"
+                        data-i18n-title="sidebar.collapseTitle" data-i18n-aria-label="sidebar.collapse"
+                        title="收合側邊欄" aria-label="收合側邊欄" aria-controls="app-sidebar"
+                        aria-expanded="true">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M15 5l-7 7 7 7" />
+                        </svg>
+                    </button>
+                </div>
             </header>
             <!-- View switch: the same list, filtered to favourites or not.
                  Both views share the virtual scroller, so switching is just a
@@ -187,6 +205,17 @@
 
         <main class="editor">
             <header class="editor-header">
+                <!-- Desktop-only: brings the sidebar back after it was collapsed.
+                     Hidden while the sidebar is open, and on phone layouts where
+                     the list is already a separate layer. -->
+                <button id="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button"
+                    data-i18n-title="sidebar.expandTitle" data-i18n-aria-label="sidebar.expand"
+                    title="展開側邊欄" aria-label="展開側邊欄" aria-controls="app-sidebar"
+                    aria-expanded="false">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M9 5l7 7-7 7" />
+                    </svg>
+                </button>
                 <!-- Phone-only: returns from the editor layer to the list layer.
                      Hidden on wider viewports, where both panes are visible at
                      once and there is nothing to go back to. -->
@@ -478,6 +507,50 @@
         </div>
     </div>
 
+    <!-- Encrypted tar import. Deliberately separate from the folder-import
+         dialog: this adopts the archive's vault (including its key wrappers),
+         so it is the migration path for a new device or a wiped app. -->
+    <div id="backup-import-overlay" class="modal-overlay" hidden>
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="backup-import-title">
+            <header class="modal-head">
+                <h2 id="backup-import-title" class="modal-title" data-i18n="backup.importTitle">
+                    匯入加密備份
+                </h2>
+                <button id="backup-import-close" class="modal-close" type="button"
+                    data-i18n-title="common.close" data-i18n-aria-label="common.close" title="關閉"
+                    aria-label="關閉">×</button>
+            </header>
+
+            <div class="modal-body">
+                <p class="settings-hint" data-i18n="backup.importHint">
+                    選擇由 Fly Diary 匯出的 .tar。檔案包含加密資料庫、金鑰包裝檔與所有
+                    圖片；匯入後會使用該備份的密碼，因此請輸入當初建立備份時的密碼。
+                </p>
+                <p class="settings-hint" data-i18n="backup.importWarning">
+                    匯入會取代目前日記本；現有資料會先移到日記資料夾旁的
+                    *.local-backup-*。若只是要修復目前日記本，請使用設定 → 備份的
+                    「還原加密備份」。
+                </p>
+                <label class="settings-row" for="backup-import-pass">
+                    <span class="settings-label" data-i18n="backup.importPass">備份密碼</span>
+                    <input id="backup-import-pass" class="settings-input" type="password"
+                        autocomplete="current-password" data-i18n-placeholder="backup.importPass"
+                        placeholder="備份密碼" />
+                </label>
+                <p id="backup-import-status" class="settings-hint settings-status"
+                    aria-live="polite"></p>
+                <p id="backup-import-error" class="import-error" role="alert"></p>
+            </div>
+
+            <footer class="modal-foot">
+                <button id="backup-import-cancel" class="btn-browse" type="button"
+                    data-i18n="common.cancel">取消</button>
+                <button id="backup-import-confirm" class="btn-primary" type="button"
+                    data-i18n="backup.importSubmit">選擇檔案並匯入</button>
+            </footer>
+        </div>
+    </div>
+
     <!-- Settings dialog: auto-lock timing and the passphrase / Argon2id
          controls. Only reachable while unlocked, because changing the
          passphrase needs the current one and the vault must be readable. -->
@@ -489,7 +562,7 @@
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
-            <div class="modal-body">
+            <div class="modal-body settings-body">
                 <!-- Diary: where it lives, plus the two tools that act on the
                      whole vault. These used to be footer buttons; they are
                      settings-shaped rather than writing-shaped, so they belong
@@ -517,23 +590,62 @@
                     </div>
                 </details>
 
-                <!-- Encrypted backup archive: a consistent SQLCipher snapshot,
-                     the key wrappers and every attachment sidecar in one file. -->
+                <!-- Backup guidance and the same-vault restore rescue. This
+                     section deliberately does not export or import archives;
+                     those live in the separate transfer section below. -->
                 <details class="settings-section" open>
                     <summary class="settings-disclosure">
                         <h3 class="settings-heading" data-i18n="settings.backup">備份</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.backupHint">
-                        匯出一個加密備份檔，內含資料庫快照、金鑰包裝檔與所有附件。
-                        檔案本身仍是密文；沒有密碼或回復短語依然無法讀取。
+                        建議定期備份整個日記資料夾，包含資料庫、金鑰檔案與所有附件，
+                        並將備份保存在另一個安全的位置。
+                    </p>
+                    <p class="settings-hint" data-i18n="settings.backupRestoreHint">
+                        「還原加密備份」只適用於同一個日記本：它會用目前解鎖的金鑰驗證
+                        .tar，替換資料庫與附件，但不會修改密碼、回復短語或金鑰包裝檔。
+                        目前資料會保留在日記資料夾旁的 *.local-backup-*；備份之後的
+                        變更不會合併回來。跨裝置或建立新日記本請使用下方的「資料移轉」。
                     </p>
                     <div class="settings-actions">
-                        <button id="settings-backup-btn" class="btn-browse" type="button"
-                            data-i18n="settings.backupExport">匯出備份</button>
                         <button id="settings-restore-btn" class="btn-danger" type="button"
-                            data-i18n="settings.backupRestore">還原備份</button>
+                            data-i18n="settings.backupRestore"
+                            data-i18n-title="settings.backupRestoreTitle"
+                            title="用同一個日記本的加密備份還原資料庫與附件">還原加密備份</button>
                     </div>
-                    <p id="settings-backup-status" class="settings-hint" aria-live="polite"></p>
+                    <p id="settings-backup-status" class="settings-hint settings-status"
+                        aria-live="polite"></p>
+                </details>
+
+                <!-- Tar archive transfer: independent from the backup section
+                     because importing adopts a different vault and replaces the
+                     current one, while restoring is only a same-vault rescue. -->
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.transfer">資料移轉</h3>
+                    </summary>
+                    <p class="settings-hint" data-i18n="settings.transferHint">
+                        匯出一個加密的 .tar，內含資料庫快照、金鑰包裝檔與所有圖片。
+                        適合換裝置、備份到另一個位置，或在 App 資料被清除後重新匯入。
+                        檔案本身仍是密文，需要原本的密碼才能解開。
+                    </p>
+                    <p class="settings-hint" data-i18n="settings.transferWarning">
+                        匯入會採用備份裡的 vault（包含它的密碼與回復短語），並取代目前
+                        日記本；現有資料會先保留在 *.local-backup-*。這不是同步，也不會
+                        合併兩邊的變更。
+                    </p>
+                    <div class="settings-actions">
+                        <button id="settings-tar-export-btn" class="btn-browse" type="button"
+                            data-i18n="settings.transferExport"
+                            data-i18n-title="settings.transferExportTitle"
+                            title="匯出包含所有圖片的加密 tar">匯出加密備份</button>
+                        <button id="settings-tar-import-btn" class="btn-browse" type="button"
+                            data-i18n="settings.transferImport"
+                            data-i18n-title="settings.transferImportTitle"
+                            title="從加密 tar 匯入一個日記本">匯入加密備份…</button>
+                    </div>
+                    <p id="settings-transfer-status" class="settings-hint settings-status"
+                        aria-live="polite"></p>
                 </details>
 
                 <!-- Auto-lock -->
@@ -548,6 +660,36 @@
                         <span class="settings-label" data-i18n="settings.autoLockLabel">鎖定時間</span>
                         <select id="auto-lock-select" class="settings-select"></select>
                     </label>
+                </details>
+
+                <!-- Android biometric unlock. Hidden on desktop and when the
+                     platform reports no secure strong biometric hardware. -->
+                <details id="settings-biometric-section" class="settings-section" open hidden>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.biometric">生物辨識解鎖</h3>
+                    </summary>
+                    <p class="settings-hint" data-i18n="settings.biometricHint">
+                        使用 Android 的指紋或臉部辨識解鎖。日記金鑰會由 Android Keystore
+                        包裝，金鑰只會在生物辨識成功後短暫解開；指紋資料不會離開系統。
+                        變更裝置上的生物辨識註冊後，需要重新啟用。
+                    </p>
+                    <p id="settings-biometric-status" class="settings-hint settings-status"
+                        aria-live="polite"></p>
+                    <label id="settings-biometric-enable-row" class="settings-row"
+                        for="settings-biometric-pass">
+                        <span class="settings-label" data-i18n="settings.biometricPass">目前密碼</span>
+                        <input id="settings-biometric-pass" class="settings-input" type="password"
+                            autocomplete="current-password"
+                            data-i18n-placeholder="settings.biometricPass" placeholder="目前密碼" />
+                    </label>
+                    <div class="settings-actions">
+                        <button id="settings-biometric-enable" class="btn-browse" type="button"
+                            data-i18n="settings.biometricEnable">啟用生物辨識</button>
+                        <button id="settings-biometric-disable" class="btn-danger" type="button"
+                            data-i18n="settings.biometricDisable" hidden>停用生物辨識</button>
+                    </div>
+                    <p id="settings-biometric-message" class="settings-hint settings-status"
+                        aria-live="polite"></p>
                 </details>
 
                 <!-- Autosave -->
@@ -573,8 +715,6 @@
                         變更密碼只會重新包裝日記金鑰，不會重新加密日記內容，因此速度很快。
                     </p>
 
-                    <div id="vault-kdf" class="settings-kdf"></div>
-
                     <label class="settings-row" for="settings-current-pass">
                         <span class="settings-label" data-i18n="settings.currentPass">目前密碼</span>
                         <input id="settings-current-pass" class="settings-input" type="password"
@@ -598,6 +738,7 @@
                         <p class="settings-hint" data-i18n="settings.advancedHint">
                             提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。
                         </p>
+                        <div id="vault-kdf" class="settings-kdf"></div>
                         <div class="settings-kdf-grid">
                             <label class="settings-label" for="settings-kdf-memory" data-i18n="lock.kdfMemory">記憶體
                                 (MiB)</label>
@@ -618,9 +759,30 @@
                     </details>
                 </details>
 
+                <!-- Recovery phrase: a second, optional way to reach the diary
+                     key. It is off by default and can be regenerated or removed
+                     at any time; the phrase itself is only ever shown once. -->
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
+                    </summary>
+                    <p class="settings-hint" data-i18n="recovery.settingsHint">
+                        啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
+                        忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
+                    </p>
+                    <p id="recovery-status" class="settings-hint settings-recovery-status"></p>
+                    <div class="settings-actions">
+                        <button id="recovery-generate-btn" class="btn-browse" type="button"
+                            data-i18n="recovery.generate">產生回復短語</button>
+                        <button id="recovery-remove-btn" class="btn-danger" type="button"
+                            data-i18n="recovery.remove" hidden>停用回復短語</button>
+                    </div>
+                </details>
+
                 <!-- About: build metadata. The commit hash is embedded at
                      compile time so a running binary can be traced back to an
-                     exact source revision. -->
+                     exact source revision. Kept last because it is reference
+                     material rather than a setting. -->
                 <details class="settings-section" open>
                     <summary class="settings-disclosure">
                         <h3 class="settings-heading" data-i18n="settings.about">關於</h3>
@@ -639,26 +801,6 @@
                     <div class="settings-row">
                         <span class="settings-label" data-i18n="settings.author">作者</span>
                         <span id="settings-app-author" class="settings-path"></span>
-                    </div>
-                </details>
-
-                <!-- Recovery phrase: a second, optional way to reach the diary
-                     key. It is off by default and can be regenerated or removed
-                     at any time; the phrase itself is only ever shown once. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
-                        <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
-                    </summary>
-                    <p class="settings-hint" data-i18n="recovery.settingsHint">
-                        啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
-                        忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
-                    </p>
-                    <p id="recovery-status" class="settings-hint settings-recovery-status"></p>
-                    <div class="settings-actions">
-                        <button id="recovery-generate-btn" class="btn-browse" type="button"
-                            data-i18n="recovery.generate">產生回復短語</button>
-                        <button id="recovery-remove-btn" class="btn-danger" type="button"
-                            data-i18n="recovery.remove" hidden>停用回復短語</button>
                     </div>
                 </details>
             </div>

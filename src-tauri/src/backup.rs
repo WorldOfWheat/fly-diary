@@ -371,11 +371,36 @@ fn create_private_file(path: &Path) -> io::Result<File> {
 ///
 /// On failure the previous database and attachments are moved back.
 pub fn install(staging: &Path, dir: &Path) -> Result<PathBuf, String> {
+    install_common(staging, dir, false)
+}
+
+/// Install an extracted archive as a complete vault.
+///
+/// Unlike [`install`], this also replaces `vault.xml` and `recovery.xml`. It is
+/// used to import a backup as a new diary, so the imported vault keeps the key
+/// wrappers it was created with. The caller must verify the archive and unlock
+/// it before calling this function.
+pub fn install_import(staging: &Path, dir: &Path) -> Result<PathBuf, String> {
+    install_common(staging, dir, true)
+}
+
+fn install_common(
+    staging: &Path,
+    dir: &Path,
+    replace_key_wrappers: bool,
+) -> Result<PathBuf, String> {
     let staged_db = staging.join("diary.db");
     let staged_attachments = staging.join("attachments");
+    let staged_vault = staging.join("vault.xml");
     if !staged_db.is_file() {
         return Err("The backup does not contain diary.db".to_string());
     }
+    if replace_key_wrappers && !staged_vault.is_file() {
+        return Err("The backup does not contain vault.xml".to_string());
+    }
+
+    fsutil::create_private_dir(dir)
+        .map_err(|e| format!("Failed to create the diary directory: {e}"))?;
 
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
     let parent = dir
@@ -394,7 +419,13 @@ pub fn install(staging: &Path, dir: &Path) -> Result<PathBuf, String> {
     fsutil::create_private_dir(&backup)
         .map_err(|e| format!("Failed to create {}: {e}", backup.display()))?;
 
-    let current = ["diary.db", "diary.db-wal", "diary.db-shm", "attachments"];
+    let mut current = vec!["diary.db", "diary.db-wal", "diary.db-shm", "attachments"];
+    if replace_key_wrappers {
+        // The biometric wrapper is device-bound. Import adopts a different
+        // vault, so the old wrapper must go with the old key wrappers instead
+        // of surviving next to the imported database.
+        current.extend(["vault.xml", "recovery.xml", crate::biometric::WRAPPER_FILE]);
+    }
     let mut moved_out = Vec::new();
     for item in current {
         let source = dir.join(item);
@@ -418,6 +449,17 @@ pub fn install(staging: &Path, dir: &Path) -> Result<PathBuf, String> {
             fs::rename(&staged_attachments, dir.join("attachments"))
                 .map_err(|e| format!("Failed to install the backup attachments: {e}"))?;
             moved_in.push("attachments");
+        }
+        if replace_key_wrappers {
+            fs::rename(&staged_vault, dir.join("vault.xml"))
+                .map_err(|e| format!("Failed to install the backup key wrapper: {e}"))?;
+            moved_in.push("vault.xml");
+            let staged_recovery = staging.join("recovery.xml");
+            if staged_recovery.is_file() {
+                fs::rename(&staged_recovery, dir.join("recovery.xml"))
+                    .map_err(|e| format!("Failed to install the backup recovery file: {e}"))?;
+                moved_in.push("recovery.xml");
+            }
         }
         fsutil::sync_dir(dir).map_err(|e| format!("Failed to flush the diary directory: {e}"))?;
         Ok(())
@@ -568,6 +610,89 @@ mod tests {
         assert!(error.contains("truncated"), "unexpected: {error}");
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_install_adopts_the_archive_vault() {
+        let source = temp_dir("import-source");
+        let key = storage::create_vault(&source, "passphrase-123", params()).unwrap();
+        db::write_entry(&source, &key, "2026-10-23", "Imported", "Body").unwrap();
+        let image =
+            attachments::save_attachment(&source, &key, "2026-10-23", "image/webp", WEBP, 100, 50)
+                .unwrap();
+
+        let cache = temp_dir("import-cache");
+        let snapshot = cache.join("snapshot.db");
+        let archive = cache.join("backup.tar");
+        let mut output = File::create(&archive).unwrap();
+        export(&source, &key, &snapshot, &mut output).unwrap();
+        drop(output);
+
+        let mut input = File::open(&archive).unwrap();
+        let staging = cache.join("staging");
+        extract(&mut input, &staging).unwrap();
+
+        let parent = temp_dir("import-target");
+        let target = parent.join("diary");
+        let backup = install_import(&staging, &target).unwrap();
+
+        assert!(backup.is_dir());
+        assert!(target.join("diary.db").is_file());
+        assert!(target.join("vault.xml").is_file());
+        assert_eq!(
+            db::read_entry(&target, &key, "2026-10-23")
+                .unwrap()
+                .unwrap()
+                .title,
+            "Imported"
+        );
+        let data = attachments::read_attachment(&target, &key, "2026-10-23", &image.id).unwrap();
+        assert_eq!(crypto::b64_decode(&data.data).unwrap(), WEBP);
+
+        let _ = fs::remove_dir_all(&parent);
+        let _ = fs::remove_dir_all(&source);
+        let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn import_install_keeps_the_previous_vault_aside() {
+        let source = temp_dir("import-replace-source");
+        let key = storage::create_vault(&source, "passphrase-123", params()).unwrap();
+        db::write_entry(&source, &key, "2026-10-23", "Imported", "Body").unwrap();
+
+        let cache = temp_dir("import-replace-cache");
+        let snapshot = cache.join("snapshot.db");
+        let archive = cache.join("backup.tar");
+        let mut output = File::create(&archive).unwrap();
+        export(&source, &key, &snapshot, &mut output).unwrap();
+        drop(output);
+
+        let mut input = File::open(&archive).unwrap();
+        let staging = cache.join("staging");
+        extract(&mut input, &staging).unwrap();
+
+        let target = temp_dir("import-replace-target");
+        let old_key = storage::create_vault(&target, "old-passphrase-123", params()).unwrap();
+        db::write_entry(&target, &old_key, "2026-10-24", "Old", "Body").unwrap();
+
+        let backup = install_import(&staging, &target).unwrap();
+
+        assert!(backup.join("diary.db").is_file());
+        assert!(backup.join("vault.xml").is_file());
+        assert!(db::key_matches(&target, &key).unwrap());
+        assert!(!db::key_matches(&target, &old_key).unwrap());
+        assert_eq!(
+            db::read_entry(&target, &key, "2026-10-23")
+                .unwrap()
+                .unwrap()
+                .title,
+            "Imported"
+        );
+
+        let _ = fs::remove_dir_all(&backup);
+        let _ = fs::remove_dir_all(&source);
+        let _ = fs::remove_dir_all(&cache);
+        let _ = fs::remove_dir_all(&target);
     }
 
     #[test]

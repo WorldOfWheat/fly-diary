@@ -8,12 +8,14 @@ function harness({ unlocked = true } = {}) {
   const cleared = [];
   let locks = 0;
   let clock = 1_000;
+  const isUnlocked =
+    typeof unlocked === "function" ? unlocked : () => unlocked;
 
   const autoLock = createAutoLock({
     lock: () => {
       locks += 1;
     },
-    isUnlocked: () => unlocked,
+    isUnlocked,
     setTimer: (fn, ms) => {
       scheduled = { fn, ms, id: Symbol("timer") };
       return scheduled.id;
@@ -41,6 +43,10 @@ function harness({ unlocked = true } = {}) {
       const timer = scheduled;
       scheduled = null;
       timer.fn();
+    },
+    /** Simulate a webview that suspended the timer while backgrounded. */
+    suppress() {
+      scheduled = null;
     },
   };
 }
@@ -130,6 +136,65 @@ test("a throttled timer locks on the first check after its deadline", () => {
   // A second activity event does not lock twice.
   assert.equal(h.autoLock.expireIfDue(), false);
   assert.equal(h.locks, 1);
+});
+
+test("resuming before the deadline re-arms the remaining time", () => {
+  const h = harness();
+
+  h.autoLock.setMinutes(5);
+  h.advance(2 * 60_000);
+  h.suppress();
+
+  assert.equal(h.autoLock.resume(), false);
+  // 3 minutes left, not a fresh 5-minute interval.
+  assert.equal(h.scheduled.ms, 3 * 60_000);
+  assert.equal(h.locks, 0);
+});
+
+test("resuming after the deadline locks immediately", () => {
+  const h = harness();
+
+  h.autoLock.setMinutes(5);
+  h.advance(5 * 60_000);
+  h.suppress();
+
+  assert.equal(h.autoLock.resume(), true);
+  assert.equal(h.locks, 1);
+  assert.equal(h.scheduled, null);
+});
+
+test("resuming with a live timer keeps the original deadline", () => {
+  const h = harness();
+
+  h.autoLock.setMinutes(5);
+  const id = h.scheduled.id;
+  h.advance(60_000);
+
+  assert.equal(h.autoLock.resume(), false);
+  assert.notEqual(h.scheduled.id, id);
+  assert.equal(h.scheduled.ms, 4 * 60_000);
+  assert.deepEqual(h.cleared, [id]);
+  assert.equal(h.locks, 0);
+});
+
+test("resume does nothing when auto-lock is off", () => {
+  const h = harness();
+
+  h.autoLock.setMinutes(0);
+
+  assert.equal(h.autoLock.resume(), false);
+  assert.equal(h.scheduled, null);
+  assert.equal(h.locks, 0);
+});
+
+test("resume does nothing while the app is locked", () => {
+  let unlocked = true;
+  const h = harness({ unlocked: () => unlocked });
+  h.autoLock.setMinutes(5);
+  unlocked = false;
+
+  assert.equal(h.autoLock.resume(), false);
+  assert.equal(h.locks, 0);
 });
 
 test("expireIfDue does nothing when auto-lock is off", () => {

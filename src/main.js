@@ -41,6 +41,7 @@ import { createImportDialog } from "./import-dialog.js";
 import { createStatsDialog } from "./stats-dialog.js";
 import { createSettingsDialog } from "./settings-dialog.js";
 import { createRecoveryDialog } from "./recovery-dialog.js";
+import { createBackupImportDialog } from "./backup-dialog.js";
 import { createLockScreen } from "./lock-screen.js";
 import { createAttachmentGallery } from "./attachments.js";
 import { createNativeFileDrop } from "./native-drop.js";
@@ -80,6 +81,10 @@ let searchSeq = 0;
 const SEARCH_DEBOUNCE_MS = 200;
 /** LocalStorage key for the "Looking back" collapsed state. */
 const HISTORY_COLLAPSED_KEY = "fly-diary:history-collapsed";
+/** LocalStorage key for the desktop sidebar collapsed state. */
+const SIDEBAR_COLLAPSED_KEY = "fly-diary:sidebar-collapsed";
+/** Whether the desktop sidebar is currently collapsed. */
+let sidebarCollapsed = false;
 /**
  * Which sidebar view is showing: `"all"`, `"favourites"` or `"broken"`.
  *
@@ -200,8 +205,12 @@ let statsDialog;
 let settingsDialog;
 /** @type {ReturnType<typeof createRecoveryDialog>} */
 let recoveryDialog;
+/** @type {ReturnType<typeof createBackupImportDialog>} */
+let backupImportDialog;
 /** @type {ReturnType<typeof createLockScreen>} */
 let lockScreen;
+/** Where the tar-import dialog was opened from, for cancel behaviour. */
+let importBackupOrigin = null;
 /** @type {ReturnType<typeof createAttachmentGallery>} */
 let attachmentGallery;
 /** @type {ReturnType<typeof createNativeFileDrop>} */
@@ -1186,6 +1195,55 @@ function initHistoryDisclosure() {
 }
 
 /**
+ * Reflect the collapsed state on the app shell and both toggle buttons.
+ *
+ * The class is what the stylesheet keys off; the buttons carry `aria-expanded`
+ * so the control still describes the sidebar when only its icon is visible.
+ */
+function applySidebarCollapsed() {
+  if (els.app) {
+    els.app.classList.toggle("is-sidebar-collapsed", sidebarCollapsed);
+  }
+  for (const button of [els.sidebarCollapse, els.sidebarExpand]) {
+    button?.setAttribute?.("aria-expanded", String(!sidebarCollapsed));
+  }
+}
+
+/**
+ * Collapse or expand the sidebar, persist the choice, and optionally move
+ * focus to the toggle that is still visible.
+ */
+function setSidebarCollapsed(collapsed, { moveFocus = false } = {}) {
+  if (collapsed === sidebarCollapsed) return;
+  sidebarCollapsed = collapsed;
+  applySidebarCollapsed();
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Private mode or a locked-down webview: the state just won't persist.
+  }
+  if (moveFocus) {
+    const target = collapsed ? els.sidebarExpand : els.sidebarCollapse;
+    target?.focus?.();
+  }
+}
+
+/** Toggle the sidebar from either edge control. */
+function toggleSidebar() {
+  setSidebarCollapsed(!sidebarCollapsed, { moveFocus: true });
+}
+
+/** Restore the sidebar preference saved by a previous session. */
+function initSidebarCollapse() {
+  try {
+    sidebarCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    sidebarCollapsed = false;
+  }
+  applySidebarCollapsed();
+}
+
+/**
  * Apply a broken-file list to the sidebar and its tab.
  *
  * The tab is hidden entirely when nothing is broken, so a healthy diary never
@@ -1931,6 +1989,67 @@ async function reloadAfterRestore() {
 }
 
 /**
+ * Open the tar-import dialog from the settings dialog.
+ *
+ * Flush the editor first: importing replaces the current vault, so any pending
+ * keystrokes should at least be in the old database that is moved aside.
+ */
+async function openImportBackupFromSettings() {
+  await flushPendingSave();
+  importBackupOrigin = "settings";
+  backupImportDialog.open();
+}
+
+/** Open the tar-import dialog from the lock screen's first-run state. */
+function openImportBackupFromLock() {
+  importBackupOrigin = "lock";
+  const targetDir = els.diaryDir?.value?.trim() || null;
+  backupImportDialog.open({ targetDir });
+}
+
+/** Reopen settings when an import opened from there is cancelled. */
+function handleImportBackupClosed() {
+  if (importBackupOrigin !== "settings") {
+    importBackupOrigin = null;
+    return;
+  }
+  importBackupOrigin = null;
+  // If the diary locked while the dialog was open, stay on the lock screen.
+  if (!els.app.hidden) settingsDialog.openSettings();
+}
+
+/**
+ * Hand off after a successful tar import.
+ *
+ * The backend has already replaced the session key with the imported vault's
+ * diary key. A lock-screen import can enter the app directly; an import from
+ * settings must rebuild the editor/list because the database underneath them
+ * changed.
+ */
+async function afterBackupImport(report) {
+  importBackupOrigin = null;
+  // The old WebView state belongs to the old database. In particular, never let
+  // a pending autosave write its old text into the imported vault.
+  clearPendingSave();
+
+  if (els.app.hidden) {
+    await enterApp();
+  } else {
+    await reloadAfterRestore();
+    const today = await invoke("today");
+    await selectDate(today);
+  }
+
+  setStatus(
+    t("backup.imported", {
+      files: report?.files ?? 0,
+      attachments: report?.attachments ?? 0,
+    }),
+    true
+  );
+}
+
+/**
  * Flush the pending autosave, then lock the session.
  *
  * The write has to happen *before* `invoke("lock")`, otherwise the last
@@ -1993,6 +2112,18 @@ function resetAutoLockTimer() {
   autoLock.reset();
 }
 
+/**
+ * Resume the countdown after the app becomes visible again.
+ *
+ * Android throttles timers while the app is backgrounded, but backgrounding
+ * itself must not lock a diary that still has time left on its auto-lock
+ * interval. `resume()` checks the wall-clock deadline and re-arms with the
+ * remaining time without extending it.
+ */
+function resumeAutoLockTimer() {
+  autoLock.resume();
+}
+
 /** Stop the countdown, e.g. while the app is locked or the setting is off. */
 function stopAutoLockTimer() {
   autoLock.stop();
@@ -2018,32 +2149,36 @@ function setAutoLockMinutes(minutes) {
 }
 
 /**
- * Lock on OS suspend, app backgrounding, or resume.
+ * Apply the auto-lock deadline across OS suspend and app backgrounding.
  *
- * Tauri emits `tauri://suspended` / `tauri://resumed` on platforms that support
- * it; `visibilitychange` covers webview backgrounding, including Android. Going
- * through `lockNow()` saves first, so a pending keystroke is not lost.
+ * Android emits `tauri://suspended` / `tauri://resumed` and also fires
+ * `visibilitychange` / `pagehide` when the user switches apps or swipes the
+ * task away. None of those events may lock immediately: a diary with a 5-minute
+ * auto-lock interval should still be open after a 30-second switch to another
+ * app. The wall-clock deadline in `createAutoLock` is authoritative; hiding
+ * only records that a native picker is responsible for the transition, and
+ * showing checks whether the deadline passed.
  */
 function initSuspendLock() {
-  const lockIfUnlocked = () => {
-    if (els.app.hidden) return;
-    if (nativePickerGuard.suppresses()) return;
-    lockScreen.lockNow();
-  };
   const handleHide = () => {
     if (nativePickerGuard.isOpen()) nativePickerWasHidden = true;
-    lockIfUnlocked();
+  };
+  const handleShow = () => {
+    // Returning from a picker is not a lock event: close the guard and let the
+    // idle timer resume with the time it had left.
+    if (nativePickerWasHidden) {
+      endNativePicker();
+      return;
+    }
+    resumeAutoLockTimer();
   };
   listen("tauri://suspended", handleHide);
-  listen("tauri://resumed", lockIfUnlocked);
+  listen("tauri://resumed", handleShow);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       handleHide();
     } else {
-      // Returning from a picker is not a lock event: close the guard and let
-      // the idle timer start a fresh interval.
-      if (nativePickerWasHidden) endNativePicker();
-      else resetAutoLockTimer();
+      handleShow();
     }
   });
   // `focus` covers pickers that do not change visibility. Only end after a
@@ -2059,15 +2194,16 @@ function initSuspendLock() {
  * Route the Android hardware/gesture back button through the overlay stack.
  *
  * Registering this listener replaces Tauri's default back action, which would
- * leave the activity when no WebView history exists. Leaving the activity fires
- * `pagehide`/`visibilitychange` and therefore looks like "closing settings logs
- * me out". Instead, back closes the topmost DOM overlay; the diary stays
- * unlocked. Only an empty stack exits the app (the normal Android behaviour,
- * and the only path that intentionally triggers the suspend lock).
+ * leave the activity when no WebView history exists. Leaving the activity still
+ * looks like "closing settings logs me out" even though backgrounding now
+ * follows the idle auto-lock deadline. Instead, back closes the topmost DOM
+ * overlay; the diary stays unlocked. Only an empty stack exits the app (the
+ * normal Android behaviour).
  */
 function handleAndroidBack() {
   const action = backButtonAction({
     attachmentViewer: attachmentGallery.isViewerOpen(),
+    backupImport: backupImportDialog?.isOpen?.() ?? false,
     recovery: recoveryDialog.isOpen(),
     stats: statsDialog.isStatsOpen(),
     importDialog: importDialog.isImportOpen(),
@@ -2080,6 +2216,9 @@ function handleAndroidBack() {
   switch (action) {
     case "closeAttachments":
       attachmentGallery.closeViewer();
+      return;
+    case "closeBackupImport":
+      backupImportDialog.close();
       return;
     case "closeRecovery":
       recoveryDialog.close();
@@ -2124,8 +2263,9 @@ function initAutoLock() {
       passive: true,
     });
   }
-  // Coming back to the window is activity too.
-  window.addEventListener("focus", resetAutoLockTimer);
+  // Coming back to the window checks the existing deadline; it must not grant
+  // a fresh interval after a short trip to another app.
+  window.addEventListener("focus", resumeAutoLockTimer);
 }
 
 // ---------------------------------------------------------------------------
@@ -2235,6 +2375,8 @@ function createControllers() {
     t,
     formatDate,
     weekdayName,
+    // Statistics is opened from settings, so closing it shows settings again.
+    onClose: () => settingsDialog?.returnFromStats?.(),
   });
 
   settingsDialog = createSettingsDialog({
@@ -2251,9 +2393,19 @@ function createControllers() {
     openStats: () => statsDialog.openStats(),
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
     openRecovery: () => recoveryDialog.open(),
+    openImportBackup: openImportBackupFromSettings,
     flushSave: flushPendingSave,
-    flushAndLock: lockAndFlush,
     afterRestore: reloadAfterRestore,
+    beginNativePicker,
+    endNativePicker,
+  });
+
+  backupImportDialog = createBackupImportDialog({
+    els,
+    invoke,
+    t,
+    onImported: afterBackupImport,
+    onClosed: handleImportBackupClosed,
     beginNativePicker,
     endNativePicker,
   });
@@ -2441,7 +2593,9 @@ function wireEvents() {
     els,
     // Lock screen
     handleUnlockSubmit: lockScreen.handleUnlockSubmit,
+    biometricUnlock: lockScreen.handleBiometric,
     restoreFromLock: lockScreen.restoreFromLock,
+    openImportBackupFromLock,
     browseForDir: lockScreen.browseForDir,
     openWorkspacePicker: lockScreen.openWorkspacePicker,
     cancelWorkspacePicker: lockScreen.cancelWorkspacePicker,
@@ -2506,8 +2660,10 @@ function wireEvents() {
     closeSettings: settingsDialog.closeSettings,
     saveSettings: settingsDialog.saveSettings,
     calibrateKdf: settingsDialog.calibrateKdf,
-    exportBackup: settingsDialog.exportBackup,
     restoreBackup: settingsDialog.restoreBackup,
+    exportBackup: settingsDialog.exportBackup,
+    enableBiometric: settingsDialog.enableBiometric,
+    disableBiometric: settingsDialog.disableBiometric,
     // Recovery phrase: create/show-once dialog and removal.
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,
@@ -2519,6 +2675,11 @@ function wireEvents() {
     openImportFromSettings: settingsDialog.openImport,
     openStatsFromSettings: settingsDialog.openStats,
     changeDiaryDirFromSettings: settingsDialog.changeDiaryDir,
+    openImportBackup: settingsDialog.openImportBackup,
+    // Encrypted tar import dialog.
+    closeImportBackup: () => backupImportDialog.close(),
+    confirmImportBackup: () => backupImportDialog.submit(),
+    isImportBackupOpen: () => backupImportDialog?.isOpen?.() ?? false,
     // Statistics
     closeStats: statsDialog.closeStats,
     isStatsOpen: statsDialog.isStatsOpen,
@@ -2528,6 +2689,7 @@ function wireEvents() {
     isImportOpen: importDialog.isImportOpen,
     isImportDone: importDialog.isImportDone,
     // Sidebar
+    toggleSidebar,
     setView,
     setSearchQuery: (query) => {
       searchQuery = query;
@@ -2590,6 +2752,7 @@ async function init() {
   // Same for the theme: resolve it before the first paint so the app never
   // flashes light before switching to dark.
   initTheme();
+  initSidebarCollapse();
   initHistoryDisclosure();
   if (phoneLayout) {
     if (typeof phoneLayout.addEventListener === "function") {

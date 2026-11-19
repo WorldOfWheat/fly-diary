@@ -1,6 +1,6 @@
 [package]
 name = "fly-diary"
-version = "2.0.0"
+version = "2.1.0"
 description = "A simple one-entry-per-day diary app"
 authors = ["WorldOfWheat"]
 repository = "https://github.com/WorldOfWheat/fly-diary"
@@ -18,6 +18,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
+fly-diary-biometric = { path = "plugins/biometric" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["clock"] }

@@ -23,6 +23,13 @@ test("back closes the attachment viewer before any other surface", () => {
   );
 });
 
+test("back closes the tar-import dialog above settings", () => {
+  assert.equal(
+    backButtonAction({ backupImport: true, recovery: true, settings: true }),
+    "closeBackupImport"
+  );
+});
+
 test("back closes the recovery dialog above settings", () => {
   assert.equal(
     backButtonAction({ recovery: true, settings: true, calendar: true }),

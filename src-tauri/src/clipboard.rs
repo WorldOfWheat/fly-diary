@@ -5,7 +5,9 @@
 //! carries no `File`. The image is re-encoded as PNG and returned as base64 so
 //! it enters the same resize/encrypt pipeline as every other attachment.
 
+#[cfg(desktop)]
 use base64::engine::general_purpose::STANDARD as B64;
+#[cfg(desktop)]
 use base64::Engine;
 use serde::Serialize;
 use std::path::Path;
