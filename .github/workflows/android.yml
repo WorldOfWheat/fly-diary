@@ -1,0 +1,166 @@
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Build a debug APK, or a signed release APK and AAB"
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+        default: release
+  push:
+    tags: ["v*"]
+
+# Building and signing need no repository writes; artifacts are attached to the
+# workflow run instead of a GitHub release.
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    # Signing secrets live in the same protected environment as the desktop
+    # release job. Debug builds do not read them.
+    environment: release
+    env:
+      # Tags are release builds; manual runs choose their mode.
+      BUILD_MODE: ${{ github.event_name == 'push' && 'release' || inputs.mode }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # pnpm must be installed before setup-node, otherwise `cache: pnpm`
+      # cannot resolve `pnpm store path`. The version comes from the
+      # `packageManager` field in package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.13.0
+          cache: pnpm
+
+      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager --install \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            "ndk;30.0.16248370"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: 1.98.1
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      # gen/android is generated and gitignored, so recreate it on every run;
+      # the second command applies the backup and FLAG_SECURE hardening patch.
+      - name: Generate and harden Android project
+        run: |
+          pnpm tauri android init --ci
+          node scripts/harden-android.mjs
+
+      - name: Decode release keystore
+        if: env.BUILD_MODE == 'release'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is not configured for the release environment"
+              exit 1
+            fi
+          done
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+
+      # A debug build needs one ABI and is signed by the Android debug key, so
+      # the workflow run always produces an installable APK without secrets.
+      - name: Build debug APK
+        if: env.BUILD_MODE == 'debug'
+        run: pnpm tauri android build --ci --debug --apk --target aarch64
+
+      - name: Build release APK and AAB
+        if: env.BUILD_MODE == 'release'
+        run: pnpm tauri android build --ci --apk --aab
+
+      - name: Sign release APK and AAB
+        if: env.BUILD_MODE == 'release'
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          APK="src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk"
+          AAB="src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+
+          "$BUILD_TOOLS/zipalign" -f -p 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$KEYSTORE_PATH" \
+            --ks-pass env:KEYSTORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --ks-key-alias "$KEY_ALIAS" \
+            --out "FlyDiary-$VERSION.apk" \
+            "$RUNNER_TEMP/aligned.apk"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "FlyDiary-$VERSION.apk"
+
+          cp "$AAB" "FlyDiary-$VERSION.aab"
+          jarsigner \
+            -keystore "$KEYSTORE_PATH" \
+            -storepass:env KEYSTORE_PASSWORD \
+            -keypass:env KEY_PASSWORD \
+            -sigalg SHA256withRSA \
+            -digestalg SHA-256 \
+            "FlyDiary-$VERSION.aab" "$KEY_ALIAS"
+          jarsigner -verify "FlyDiary-$VERSION.aab"
+
+      - name: Upload debug APK
+        if: env.BUILD_MODE == 'debug'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fly-diary-debug-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload signed release APK and AAB
+        if: env.BUILD_MODE == 'release'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fly-diary-release-apk-and-aab
+          path: |
+            FlyDiary-*.apk
+            FlyDiary-*.aab
+          if-no-files-found: error
+          retention-days: 30
