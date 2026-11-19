@@ -2,6 +2,10 @@
 // `tests/` can drive the vault lifecycle through the same API the commands use.
 pub mod attachments;
 mod backup;
+// Most of this module only runs on Android; the desktop build still defines
+// no-op status commands so the frontend can ask about availability.
+#[cfg_attr(not(target_os = "android"), allow(dead_code, unused_imports))]
+mod biometric;
 mod bip39;
 mod clipboard;
 pub mod crypto;
@@ -68,7 +72,7 @@ fn default_diary_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 ///
 /// Returns an error when the app has not been configured yet, so callers can
 /// distinguish "first run" from "configured but locked".
-fn diary_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn diary_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let config = config_dir(app)?;
     let settings = settings::read_settings(&config)?
         .ok_or_else(|| "Diary is not configured yet".to_string())?;
@@ -187,7 +191,7 @@ fn clear_search(app: &tauri::AppHandle) {
 /// Every command below that does I/O goes through this helper. The closure must
 /// be `Send + 'static`, which is why the session key is copied out before the
 /// call rather than borrowed from the mutex guard.
-async fn blocking<T, F>(what: &'static str, work: F) -> Result<T, String>
+pub(crate) async fn blocking<T, F>(what: &'static str, work: F) -> Result<T, String>
 where
     F: FnOnce() -> Result<T, String> + Send + 'static,
     T: Send + 'static,
@@ -667,6 +671,47 @@ async fn unlock(
 fn lock(app: tauri::AppHandle, session: tauri::State<'_, SharedSession>) {
     *session.lock().unwrap() = Session::default();
     clear_search(&app);
+}
+
+/// Whether Android biometric unlock is available and enabled.
+#[tauri::command]
+async fn biometric_status(app: tauri::AppHandle) -> Result<biometric::Status, String> {
+    biometric::status(&app).await
+}
+
+/// Wrap the current diary key with an Android Keystore biometric key.
+#[tauri::command]
+async fn biometric_enable(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+    passphrase: String,
+) -> Result<biometric::Status, String> {
+    let _ = session_key(&session)?;
+    biometric::enable(&app, &passphrase).await
+}
+
+/// Remove the biometric wrapper and its Keystore key.
+#[tauri::command]
+async fn biometric_disable(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<biometric::Status, String> {
+    let _ = session_key(&session)?;
+    biometric::disable(&app).await
+}
+
+/// Unlock the diary after a successful biometric prompt.
+#[tauri::command]
+async fn biometric_unlock(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<(), String> {
+    let key = biometric::unlock(&app).await?;
+    *session.lock().unwrap() = Session {
+        key: Some(LockedKey::new(&key)),
+    };
+    clear_search(&app);
+    Ok(())
 }
 
 /// The Argon2id parameters currently recorded in the vault.
@@ -1815,6 +1860,7 @@ pub fn run() {
         .plugin(navigation_guard())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(fly_diary_biometric::init())
         .manage(SharedSession::default())
         .manage(SharedSearch::default());
 
@@ -1840,6 +1886,10 @@ pub fn run() {
             migrate_storage,
             check_vault_integrity,
             lock,
+            biometric_status,
+            biometric_enable,
+            biometric_disable,
+            biometric_unlock,
             is_unlocked,
             get_vault_kdf,
             calibrate_kdf,

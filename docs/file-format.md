@@ -296,6 +296,7 @@ attachments/YYYY-MM-DD/<32 hex>.bin
   `vault.xml`，驗證資料庫後把 `vault.xml`、`recovery.xml`、`diary.db` 與
   `attachments/` 一起安裝；舊 vault（含金鑰包裝檔）會先移到
   `<diary>.local-backup-<timestamp>`。這適合換裝置或在 App 資料被清除後重建。
+- `biometric.json` 是裝置綁定的 Android Keystore 包裝，**不會進 `.tar`**；匯入新 vault 時會跟舊的 `vault.xml`／`recovery.xml` 一起移到 `*.local-backup-*`。
 - `diary.db-wal`、`diary.db-shm`、`migration.journal` 與暫存檔不會進備份。
 - 備份、還原與匯入都不是同步：沒有三方比較、衝突清單、自動上傳或變更合併。
 
@@ -310,7 +311,7 @@ attachments/YYYY-MM-DD/<32 hex>.bin
 
 選定後路徑寫入設定檔，之後每次啟動都從設定檔讀取。目前路徑顯示在設定頁的「日記本」區塊，
 按那裡的「路徑」按鈕可重新選擇（會先鎖定日記）。資料夾內是 `diary.db`、`vault.xml`、
-`recovery.xml` 與 `attachments/`；備份請先鎖定日記，再複製整個資料夾，不要只複製執行中的
+`recovery.xml`、選用的 `biometric.json`（Android 裝置綁定）與 `attachments/`；備份請先鎖定日記，再複製整個資料夾，不要只複製執行中的
 `diary.db`。**沒有密碼或回復短語就無法還原內容**；只複製 `diary.db` 也打不開，因為 DB key
 來自 `vault.xml` 裡包裝的 diary key。
 

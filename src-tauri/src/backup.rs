@@ -421,7 +421,10 @@ fn install_common(
 
     let mut current = vec!["diary.db", "diary.db-wal", "diary.db-shm", "attachments"];
     if replace_key_wrappers {
-        current.extend(["vault.xml", "recovery.xml"]);
+        // The biometric wrapper is device-bound. Import adopts a different
+        // vault, so the old wrapper must go with the old key wrappers instead
+        // of surviving next to the imported database.
+        current.extend(["vault.xml", "recovery.xml", crate::biometric::WRAPPER_FILE]);
     }
     let mut moved_out = Vec::new();
     for item in current {

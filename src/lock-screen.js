@@ -91,6 +91,10 @@ export function createLockScreen(deps) {
   let databaseBroken = false;
   /** Whether the current vault has a recovery sidecar to unlock with. */
   let recoveryAvailable = false;
+  /** Whether Android biometric unlock is enrolled for the current vault. */
+  let biometricEnabled = false;
+  /** Prevent a double-tap from starting two BiometricPrompt sessions. */
+  let biometricBusy = false;
   /** Guard against double-clicking recovery while the workspace is committed. */
   let recoveryOpening = false;
   /** Tile inputs for the twelve-word recovery form. */
@@ -170,6 +174,51 @@ export function createLockScreen(deps) {
     if (els.recoveryUnlockError) els.recoveryUnlockError.textContent = "";
   }
 
+  /** Refresh whether the biometric unlock button should be offered. */
+  async function refreshBiometricStatus() {
+    try {
+      const status = await deps.invoke("biometric_status");
+      biometricEnabled = Boolean(status?.enabled) && Boolean(status?.available);
+    } catch (err) {
+      // Desktop, an older backend, or a transient Keystore failure: stay on the
+      // passphrase path rather than showing a button that cannot work.
+      console.error("biometric_status failed:", err);
+      biometricEnabled = false;
+    }
+    renderLockScreen();
+  }
+
+  /** Run BiometricPrompt and, on success, enter the diary. */
+  async function handleBiometric() {
+    if (!biometricEnabled || biometricBusy) return;
+    biometricBusy = true;
+    const button = els.lockBiometric;
+    if (button) button.disabled = true;
+    els.lockError.textContent = "";
+    try {
+      await deps.invoke("biometric_unlock");
+      await deps.enterApp();
+    } catch (err) {
+      const message = typeof err === "string" ? err : String(err);
+      if (message.includes("BIOMETRIC_CANCELED")) {
+        els.lockError.textContent = deps.t("lock.biometricCanceled");
+      } else if (
+        message.includes("BIOMETRIC_KEY_INVALIDATED") ||
+        message.includes("BIOMETRIC_STALE")
+      ) {
+        els.lockError.textContent = deps.t("lock.biometricInvalidated");
+        biometricEnabled = false;
+        renderLockScreen();
+        void refreshBiometricStatus();
+      } else {
+        els.lockError.textContent = deps.t("lock.biometricFailed", { message });
+      }
+    } finally {
+      biometricBusy = false;
+      if (button) button.disabled = false;
+    }
+  }
+
   function showLockScreen(message = "") {
     // Whatever triggered the lock, the one-time phrase dialog must not survive
     // it: an auto-lock or Ctrl+L can fire while it is open. `force` also wins
@@ -186,6 +235,9 @@ export function createLockScreen(deps) {
     recoveryMode = false;
     clearRecoveryFields();
     renderLockScreen();
+    // Enabling or disabling biometrics in settings must be reflected the next
+    // time the lock screen appears, without blocking the transition.
+    void refreshBiometricStatus();
     els.passphrase.focus();
   }
 
@@ -419,6 +471,10 @@ export function createLockScreen(deps) {
       // Replacing an existing vault is an explicit action in Settings.
       els.lockImport.hidden = vaultInitialized || recoveryMode;
     }
+    if (els.lockBiometric) {
+      els.lockBiometric.hidden =
+        !vaultInitialized || !biometricEnabled || recoveryMode || databaseBroken;
+    }
     if (els.lockForm && els.recoveryForm) {
       els.lockForm.hidden = recoveryMode;
       els.recoveryForm.hidden = !recoveryMode;
@@ -550,6 +606,7 @@ export function createLockScreen(deps) {
   /** Re-check whether the diary directory already holds a vault. */
   async function refreshVaultState() {
     vaultInitialized = await detectVault();
+    await refreshBiometricStatus();
   }
 
   /**
@@ -563,10 +620,12 @@ export function createLockScreen(deps) {
     if (!dir) {
       vaultInitialized = false;
       renderLockScreen();
+      void refreshBiometricStatus();
       return;
     }
     vaultInitialized = await detectVault(dir);
     renderLockScreen();
+    void refreshBiometricStatus();
   }
 
   /**
@@ -791,6 +850,7 @@ export function createLockScreen(deps) {
       if (unlockResult?.databaseError) {
         databaseBroken = true;
         if (els.lockRestore) els.lockRestore.hidden = false;
+        if (els.lockBiometric) els.lockBiometric.hidden = true;
         els.lockError.textContent = deps.t("lock.databaseError", {
           message: unlockResult.databaseError,
         });
@@ -894,6 +954,8 @@ export function createLockScreen(deps) {
     openWorkspacePicker,
     cancelWorkspacePicker,
     handleUnlockSubmit,
+    handleBiometric,
+    refreshBiometricStatus,
     restoreFromLock,
     browseForDir,
     changeDiaryDir,

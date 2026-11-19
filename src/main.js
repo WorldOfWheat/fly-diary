@@ -2112,6 +2112,18 @@ function resetAutoLockTimer() {
   autoLock.reset();
 }
 
+/**
+ * Resume the countdown after the app becomes visible again.
+ *
+ * Android throttles timers while the app is backgrounded, but backgrounding
+ * itself must not lock a diary that still has time left on its auto-lock
+ * interval. `resume()` checks the wall-clock deadline and re-arms with the
+ * remaining time without extending it.
+ */
+function resumeAutoLockTimer() {
+  autoLock.resume();
+}
+
 /** Stop the countdown, e.g. while the app is locked or the setting is off. */
 function stopAutoLockTimer() {
   autoLock.stop();
@@ -2137,32 +2149,36 @@ function setAutoLockMinutes(minutes) {
 }
 
 /**
- * Lock on OS suspend, app backgrounding, or resume.
+ * Apply the auto-lock deadline across OS suspend and app backgrounding.
  *
- * Tauri emits `tauri://suspended` / `tauri://resumed` on platforms that support
- * it; `visibilitychange` covers webview backgrounding, including Android. Going
- * through `lockNow()` saves first, so a pending keystroke is not lost.
+ * Android emits `tauri://suspended` / `tauri://resumed` and also fires
+ * `visibilitychange` / `pagehide` when the user switches apps or swipes the
+ * task away. None of those events may lock immediately: a diary with a 5-minute
+ * auto-lock interval should still be open after a 30-second switch to another
+ * app. The wall-clock deadline in `createAutoLock` is authoritative; hiding
+ * only records that a native picker is responsible for the transition, and
+ * showing checks whether the deadline passed.
  */
 function initSuspendLock() {
-  const lockIfUnlocked = () => {
-    if (els.app.hidden) return;
-    if (nativePickerGuard.suppresses()) return;
-    lockScreen.lockNow();
-  };
   const handleHide = () => {
     if (nativePickerGuard.isOpen()) nativePickerWasHidden = true;
-    lockIfUnlocked();
+  };
+  const handleShow = () => {
+    // Returning from a picker is not a lock event: close the guard and let the
+    // idle timer resume with the time it had left.
+    if (nativePickerWasHidden) {
+      endNativePicker();
+      return;
+    }
+    resumeAutoLockTimer();
   };
   listen("tauri://suspended", handleHide);
-  listen("tauri://resumed", lockIfUnlocked);
+  listen("tauri://resumed", handleShow);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       handleHide();
     } else {
-      // Returning from a picker is not a lock event: close the guard and let
-      // the idle timer start a fresh interval.
-      if (nativePickerWasHidden) endNativePicker();
-      else resetAutoLockTimer();
+      handleShow();
     }
   });
   // `focus` covers pickers that do not change visibility. Only end after a
@@ -2178,11 +2194,11 @@ function initSuspendLock() {
  * Route the Android hardware/gesture back button through the overlay stack.
  *
  * Registering this listener replaces Tauri's default back action, which would
- * leave the activity when no WebView history exists. Leaving the activity fires
- * `pagehide`/`visibilitychange` and therefore looks like "closing settings logs
- * me out". Instead, back closes the topmost DOM overlay; the diary stays
- * unlocked. Only an empty stack exits the app (the normal Android behaviour,
- * and the only path that intentionally triggers the suspend lock).
+ * leave the activity when no WebView history exists. Leaving the activity still
+ * looks like "closing settings logs me out" even though backgrounding now
+ * follows the idle auto-lock deadline. Instead, back closes the topmost DOM
+ * overlay; the diary stays unlocked. Only an empty stack exits the app (the
+ * normal Android behaviour).
  */
 function handleAndroidBack() {
   const action = backButtonAction({
@@ -2247,8 +2263,9 @@ function initAutoLock() {
       passive: true,
     });
   }
-  // Coming back to the window is activity too.
-  window.addEventListener("focus", resetAutoLockTimer);
+  // Coming back to the window checks the existing deadline; it must not grant
+  // a fresh interval after a short trip to another app.
+  window.addEventListener("focus", resumeAutoLockTimer);
 }
 
 // ---------------------------------------------------------------------------
@@ -2576,6 +2593,7 @@ function wireEvents() {
     els,
     // Lock screen
     handleUnlockSubmit: lockScreen.handleUnlockSubmit,
+    biometricUnlock: lockScreen.handleBiometric,
     restoreFromLock: lockScreen.restoreFromLock,
     openImportBackupFromLock,
     browseForDir: lockScreen.browseForDir,
@@ -2644,6 +2662,8 @@ function wireEvents() {
     calibrateKdf: settingsDialog.calibrateKdf,
     restoreBackup: settingsDialog.restoreBackup,
     exportBackup: settingsDialog.exportBackup,
+    enableBiometric: settingsDialog.enableBiometric,
+    disableBiometric: settingsDialog.disableBiometric,
     // Recovery phrase: create/show-once dialog and removal.
     openRecovery: settingsDialog.openRecovery,
     removeRecovery: settingsDialog.removeRecovery,

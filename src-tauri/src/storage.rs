@@ -674,6 +674,7 @@ pub fn create_vault(
     // not block creating a fresh diary. The same applies to a database left
     // behind after `vault.xml` was removed.
     let _ = remove_recovery(dir);
+    crate::biometric::remove_wrapper(dir);
     crate::db::remove_database(dir)?;
 
     let salt_b64 = crypto::new_salt_b64();

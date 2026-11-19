@@ -41,6 +41,9 @@
 //   closeSettings       — () => void
 //   saveSettings        — () => void
 //   calibrateKdf        — () => void
+//   biometricUnlock     — () => void
+//   enableBiometric     — () => void
+//   disableBiometric    — () => void
 //   restoreBackup       — () => void
 //   exportBackup        — () => void
 //   openImportBackup    — () => void
@@ -215,6 +218,9 @@ export function initEventWiring(deps) {
   // Recovery phrase form, which replaces the passphrase form on the same card.
   if (els.recoveryOpen) on(els.recoveryOpen, "click", deps.showRecoveryForm);
   if (els.lockRestore) on(els.lockRestore, "click", deps.restoreFromLock);
+  if (els.lockBiometric) {
+    on(els.lockBiometric, "click", deps.biometricUnlock);
+  }
   if (els.lockImport) {
     on(els.lockImport, "click", deps.openImportBackupFromLock);
   }
@@ -518,6 +524,12 @@ export function initEventWiring(deps) {
   }
   if (els.settingsTarImportBtn) {
     on(els.settingsTarImportBtn, "click", deps.openImportBackup);
+  }
+  if (els.settingsBiometricEnable) {
+    on(els.settingsBiometricEnable, "click", deps.enableBiometric);
+  }
+  if (els.settingsBiometricDisable) {
+    on(els.settingsBiometricDisable, "click", deps.disableBiometric);
   }
 
   // Encrypted tar import dialog.

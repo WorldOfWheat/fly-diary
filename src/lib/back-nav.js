@@ -5,9 +5,9 @@
 // The settings, stats, import, recovery, calendar and attachment-viewer
 // surfaces are DOM overlays, not separate activities or routes. The WebView
 // therefore has no history entry for them, and the default Android back action
-// would leave the activity entirely. Leaving the activity triggers the
-// suspend/pagehide lock in `main.js`, which looks like "closing settings logs
-// me out".
+// would leave the activity entirely. That looks like "closing settings logs
+// me out" even though backgrounding now follows the idle auto-lock deadline
+// instead of locking immediately.
 //
 // This pure helper decides what the back press should close, in the same order
 // the layered UI is drawn: the attachment viewer is topmost, the recovery

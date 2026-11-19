@@ -115,6 +115,10 @@ CREATE TABLE legacy_broken (
 `meta` 保存 `schema_version`、`format=sqlcipher`、`vault_id`、`key_id`。開啟時會比對
 `vault_id`／`key_id`；把 DB 從別的 vault 複製過來會直接拒絕。
 
+Android 生物辨識不改變這個 schema，也不改變 DB key 派生：`biometric.json` 只用
+Android Keystore 包裝同一把 diary key，解鎖後仍走原本的 HKDF→SQLCipher 路徑。它是
+裝置綁定的 sidecar，不屬於 DB，也不會進 `.tar`。
+
 `attachments` 沒有 foreign key，因為「有附件資料夾但沒有日記」的孤兒狀態是既有功能，
 設定頁需要能列出並清理它；刪除日記時由 `delete_entry` 明確刪除 attachment rows。
 `legacy_broken` 保存遷移時無法解密／解析的 XML 原始位元組，讓舊的「損壞」分頁仍可

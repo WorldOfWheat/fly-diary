@@ -318,6 +318,138 @@ export function createSettingsDialog(deps) {
     return handOver(deps.openImportBackup);
   }
 
+  /** Human-readable explanation for an unavailable biometric state. */
+  function biometricReasonText(reason) {
+    switch (reason) {
+      case "no_hardware":
+        return deps.t("biometric.reasonNoHardware");
+      case "not_enrolled":
+        return deps.t("biometric.reasonNotEnrolled");
+      case "no_device_credential":
+        return deps.t("biometric.reasonNoDeviceCredential");
+      case "unavailable":
+        return deps.t("biometric.reasonUnavailable");
+      case "security_update":
+        return deps.t("biometric.reasonSecurityUpdate");
+      case "unsupported":
+        return deps.t("biometric.reasonUnsupported");
+      case "key_missing":
+        return deps.t("biometric.reasonKeyMissing");
+      case "stale":
+        return deps.t("biometric.reasonStale");
+      case "not_configured":
+        return deps.t("biometric.reasonNotConfigured");
+      default:
+        return deps.t("biometric.reasonUnknown");
+    }
+  }
+
+  function showBiometricMessage(text, saved = false) {
+    if (!els.settingsBiometricMessage) return;
+    els.settingsBiometricMessage.textContent = text;
+    els.settingsBiometricMessage.classList.toggle("is-saved", saved);
+  }
+
+  /**
+   * Paint the Android biometric section.
+   *
+   * `unsupported_platform` hides the whole block on desktop. Other reasons stay
+   * visible so the user can see why the button is disabled (no enrolled
+   * fingerprint, no screen lock, and so on).
+   */
+  function renderBiometric(status) {
+    const section = els.settingsBiometricSection;
+    if (!section) return;
+    if (!status || status.reason === "unsupported_platform") {
+      section.hidden = true;
+      return;
+    }
+    section.hidden = false;
+
+    const enrolled = Boolean(status.enabled);
+    if (els.settingsBiometricEnableRow) {
+      els.settingsBiometricEnableRow.hidden = enrolled;
+    }
+    if (els.settingsBiometricEnable) {
+      els.settingsBiometricEnable.hidden = enrolled;
+      els.settingsBiometricEnable.disabled = !status.available;
+    }
+    if (els.settingsBiometricDisable) {
+      els.settingsBiometricDisable.hidden = !enrolled;
+    }
+    if (els.settingsBiometricStatus) {
+      els.settingsBiometricStatus.textContent = enrolled
+        ? status.available
+          ? deps.t("settings.biometricEnabled")
+          : biometricReasonText(status.reason)
+        : status.available
+          ? deps.t("settings.biometricDisabled")
+          : biometricReasonText(status.reason);
+    }
+  }
+
+  async function refreshBiometric() {
+    if (!els.settingsBiometricSection) return;
+    try {
+      const status = await deps.invoke("biometric_status");
+      renderBiometric(status);
+    } catch (err) {
+      console.error("biometric_status failed:", err);
+      // Older backends or non-Android builds simply do not offer the feature.
+      renderBiometric({ reason: "unsupported_platform" });
+    }
+  }
+
+  async function enableBiometric() {
+    if (!els.settingsBiometricEnable) return;
+    const passphrase = els.settingsBiometricPass?.value ?? "";
+    if (!passphrase) {
+      showBiometricMessage(deps.t("settings.biometricPassRequired"));
+      els.settingsBiometricPass?.focus?.();
+      return;
+    }
+
+    els.settingsBiometricEnable.disabled = true;
+    showBiometricMessage("");
+    try {
+      const status = await deps.invoke("biometric_enable", { passphrase });
+      if (els.settingsBiometricPass) els.settingsBiometricPass.value = "";
+      renderBiometric(status);
+      showBiometricMessage(deps.t("settings.biometricEnabledDone"), true);
+    } catch (err) {
+      showBiometricMessage(
+        deps.t("settings.biometricEnableFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsBiometricEnable.disabled = false;
+      void refreshBiometric();
+    }
+  }
+
+  async function disableBiometric() {
+    if (!els.settingsBiometricDisable) return;
+    if (!confirm(deps.t("settings.biometricDisableConfirm"))) return;
+
+    els.settingsBiometricDisable.disabled = true;
+    showBiometricMessage("");
+    try {
+      const status = await deps.invoke("biometric_disable");
+      renderBiometric(status);
+      showBiometricMessage(deps.t("settings.biometricDisabledDone"), true);
+    } catch (err) {
+      showBiometricMessage(
+        deps.t("settings.biometricDisableFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      els.settingsBiometricDisable.disabled = false;
+      void refreshBiometric();
+    }
+  }
+
   /** Show the folder the diary is stored in. */
   async function renderDiaryPath() {
     try {
@@ -337,7 +469,9 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    if (els.settingsBiometricPass) els.settingsBiometricPass.value = "";
     clearVaultStatus();
+    showBiometricMessage("");
     returnToSettings = false;
 
     // Not awaited: the path and build info are informational, so the dialog
@@ -376,6 +510,10 @@ export function createSettingsDialog(deps) {
     // block closed so the headings act as a menu; desktop keeps them open.
     setSectionsOpen(!mobile);
 
+    // Android-only. Desktop hides the block as soon as the backend reports
+    // `unsupported_platform`; the rest of the dialog does not wait on it.
+    void refreshBiometric();
+
     els.settingsOverlay.hidden = false;
     focusTrap.activate();
     if (mobile) {
@@ -397,7 +535,9 @@ export function createSettingsDialog(deps) {
     els.settingsCurrentPass.value = "";
     els.settingsNewPass.value = "";
     els.settingsNewPassConfirm.value = "";
+    if (els.settingsBiometricPass) els.settingsBiometricPass.value = "";
     clearVaultStatus();
+    showBiometricMessage("");
   }
 
   /**
@@ -556,6 +696,8 @@ export function createSettingsDialog(deps) {
     exportBackup,
     restoreBackup,
     openImportBackup,
+    enableBiometric,
+    disableBiometric,
     openImport: () => handOver(deps.openImport),
     changeDiaryDir: () => handOver(deps.changeDiaryDir),
   };

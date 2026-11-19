@@ -50,6 +50,13 @@ const SETTINGS_IDS = [
   "settingsTarExportBtn",
   "settingsTarImportBtn",
   "settingsTransferStatus",
+  "settingsBiometricSection",
+  "settingsBiometricStatus",
+  "settingsBiometricEnableRow",
+  "settingsBiometricPass",
+  "settingsBiometricEnable",
+  "settingsBiometricDisable",
+  "settingsBiometricMessage",
 ];
 
 /** The KDF parameters the fake backend reports. */
@@ -84,6 +91,21 @@ function harness(overrides = {}) {
     remove_recovery: null,
     restore_backup: "/tmp/fly-diary-backup.tar",
     export_backup: "/tmp/fly-diary-backup.tar",
+    biometric_status: {
+      available: false,
+      enabled: false,
+      reason: "unsupported_platform",
+    },
+    biometric_enable: {
+      available: true,
+      enabled: true,
+      reason: null,
+    },
+    biometric_disable: {
+      available: true,
+      enabled: false,
+      reason: null,
+    },
     ...(overrides.invokeTable ?? {}),
   });
 
@@ -768,6 +790,7 @@ test("saveSettings requires the current passphrase for a parameter-only change",
           c !== "get_settings" &&
           c !== "get_vault_kdf" &&
           c !== "get_recovery_status" &&
+          c !== "biometric_status" &&
           c !== "app_info"
       );
     assert.deepEqual(writes, []);
@@ -942,6 +965,54 @@ test("exportBackup flushes before invoking export_backup", async () => {
       "backup.exported(path=/tmp/fly-diary-backup.tar)"
     );
     assert.equal(els.settingsTarExportBtn.disabled, false);
+  });
+});
+
+test("enableBiometric requires the current passphrase", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    await settings.enableBiometric();
+
+    assert.equal(invoke.commands().includes("biometric_enable"), false);
+    assert.equal(
+      els.settingsBiometricMessage.textContent,
+      "settings.biometricPassRequired"
+    );
+  });
+});
+
+test("enableBiometric wraps the key and reports the new status", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    els.settingsBiometricPass.value = "current-passphrase";
+
+    await settings.enableBiometric();
+
+    assert.deepEqual(invoke.argsOf("biometric_enable"), {
+      passphrase: "current-passphrase",
+    });
+    assert.equal(els.settingsBiometricPass.value, "");
+    assert.equal(
+      els.settingsBiometricMessage.textContent,
+      "settings.biometricEnabledDone"
+    );
+    assert.equal(els.settingsBiometricDisable.hidden, false);
+  });
+});
+
+test("disableBiometric asks for confirmation and removes the wrapper", async () => {
+  await withSettings(async ({ settings, els, invoke }) => {
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await settings.disableBiometric();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(invoke.commands().includes("biometric_disable"), true);
+    assert.equal(
+      els.settingsBiometricMessage.textContent,
+      "settings.biometricDisabledDone"
+    );
   });
 });
 

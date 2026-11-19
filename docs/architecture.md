@@ -39,7 +39,7 @@ fly-diary/
 │   │   ├── history.js      # 「歷史上的今天」回顧卡片資料（純函式）
 │   │   ├── list-rows.js    # 虛擬清單的列模型：月份分隔、列位移、年份跳轉
 │   │   ├── motion.js       # 減少動態偵測與 overlay 關閉殘影
-│   │   ├── native-picker.js # 原生檔案／資料夾選擇器期間抑制 suspend lock
+│   │   ├── native-picker.js # 原生檔案／資料夾選擇器期間標記背景化來源
 │   │   └── stats.js        # 統計運算（連續天數、月度/星期分佈）
 │   ├── styles.css          # 入口：以 @import 載入 styles/ 的 partials
 │   └── styles/
@@ -90,6 +90,8 @@ fly-diary/
 │   ├── capabilities/
 │   │   └── default.json
 │   ├── gen/                # Tauri 產生的行動版專案（gitignored）
+│   ├── plugins/
+│   │   └── biometric/      # Android Tauri plugin：Keystore + BiometricPrompt
 │   ├── icons/
 │   ├── tests/
 │   │   ├── vault_lifecycle.rs      # 整合測試：建立→寫入→上鎖→解鎖→讀回
@@ -100,6 +102,7 @@ fly-diary/
 │       ├── lib.rs          # Tauri commands、解鎖 session、blocking() 與 mobile/desktop 分支
 │       ├── db.rs           # SQLCipher 主要儲存：HKDF、schema、遷移、完整性、快照
 │       ├── backup.rs       # 加密備份 tar：串流寫入／解壓、路徑驗證、原子換入／匯入
+│       ├── biometric.rs    # Android 生物辨識：包裝 diary key、狀態、啟用／停用、解鎖
 │       ├── settings.rs     # 設定檔（日記路徑、自動鎖定、自動儲存延遲）讀寫
 │       ├── crypto.rs       # 金鑰派生、KDF 校準、AES-256-GCM、recovery key 展開
 │       ├── bip39.rs        # BIP39 英文單字編碼／解碼、checksum、確認位置、wordlist 查詢
@@ -128,7 +131,8 @@ fly-diary/
 ## 設計重點
 
 - **設定與資料分離**：設定檔（`settings.xml`）只存日記路徑，放在平台 config 目錄；日記本體放在使用者指定的資料夾，兩者可分別備份或搬移。
-- **儲存與備份分離**：SQLCipher 是唯一儲存，沒有每日衍生檔。備份由 `backup.rs` 產生單一 `.tar`：`db::snapshot` 以 `VACUUM INTO` 寫出加密快照，再串流加入 `vault.xml`、`recovery.xml` 與附件 sidecar。還原先解到 cache、用目前 key 驗證 `vault_id`／`key_id` 與完整性，成功後才把 DB 與附件換入，舊資料留在 `*.local-backup-*`。
+- **儲存與備份分離**：SQLCipher 是唯一儲存，沒有每日衍生檔。備份由 `backup.rs` 產生單一 `.tar`：`db::snapshot` 以 `VACUUM INTO` 寫出加密快照，再串流加入 `vault.xml`、`recovery.xml` 與附件 sidecar。還原先解到 cache、用目前 key 驗證 `vault_id`／`key_id` 與完整性，成功後才把 DB 與附件換入，舊資料留在 `*.local-backup-*`；匯入則另外採用備份的 `vault.xml`／`recovery.xml`。
+- **生物辨識是另一層包裝，不是新金鑰階層**：Android 啟用時用目前密碼解開 diary key，再交給 Keystore 的 `BiometricPrompt` 金鑰包裝成 `biometric.json`。解鎖時只把包裝解回原本的 diary key，DB 與附件的金鑰派生完全沒變。包裝檔不進 `.tar`，匯入時跟舊金鑰包裝檔一起移到 `*.local-backup-*`。
 - **路徑驗證**：`settings::validate_diary_dir` 要求絕對路徑且不得為檔案系統根目錄，避免工作目錄變動導致日記「消失」。
 - **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`）。DB 以 `date TEXT PRIMARY KEY` 儲存，一天一列；附件資料夾名稱也由日期推導。
 - **標題也加密**：SQLCipher 加密整個 DB，標題與內容都在加密頁面內；`list_entries` 必須先以 diary key 開啟 DB。鎖定時側邊欄會清空，避免殘留任何標題。
@@ -160,7 +164,7 @@ fly-diary/
 - **可調 KDF**：首次建立 vault 時可在「進階選項」調整 Argon2id 的記憶體／迭代／平行度，參數寫入 `vault.xml`，之後解鎖沿用同一組參數；設定頁可隨時再調整。
 - **改密碼只重包金鑰**：`rewrap_vault` 用舊密碼解開 diary key、用新密碼與新 salt 重新包裝，只改寫 `vault.xml`。日記與索引完全不碰，所以不會有「改到一半壞掉」的風險，速度也不受日記數量影響。
 - **KDF 校準先高後低**：從 64 MiB 開始往下砍記憶體，第一次測量就是上限，慢機器不會先被一組過重的參數卡住；剩餘預算再換成迭代次數。平行度固定 1，讓結果可重現。
-- **閒置計時器只有一個**：`lib/auto-lock.js` 管理單一 `setTimeout`，所有活動事件都只是重設它，不累積計時器；鎖定與關閉設定頁時一併清除。除了 timeout，還會記錄 wall-clock deadline：WebView 在背景被節流或機器休眠醒來後，第一個活動事件（或視窗重新聚焦）會先檢查 deadline，已過期就立刻鎖定，不會默默重新計時。
+- **閒置計時器只有一個**：`lib/auto-lock.js` 管理單一 `setTimeout`，所有活動事件都只是重設它，不累積計時器；鎖定與關閉設定頁時一併清除。除了 timeout，還會記錄 wall-clock deadline。Android 背景化、`pagehide` 與 suspend 不再立即鎖定：回到前景時 `resume()` 會檢查 deadline，已過期才鎖定，未過期則用剩餘時間重新排程，不會重新給一個完整區間。
 - **設定頁需要解鎖才能開**：改密碼要驗證目前密碼、讀參數要讀 vault，所以設定頁只在解鎖後可達；鎖定時會自動關閉並清空密碼欄位。
 - **金鑰不落地**：金鑰只存在 `Mutex<Session>` 中並以 `Zeroizing` 包裝，`lock()` 或程式結束即抹除。
 - **抹除貫穿整條金鑰路徑**：`unlock_vault` / `create_vault` / `rewrap_vault` / `migrate_legacy_vault` 都直接回傳 `Zeroizing<[u8; 32]>`；`crypto::decrypt` / `decrypt_with_aad` 回傳 `Zeroizing<Vec<u8>>`。SQLCipher 的 raw-key SQL 字串也用 `Zeroizing<String>` 包住並在 `PRAGMA key` 後立即抹除；`Entry` 實作 `Drop` 抹除 `title` 與 `content`。`run_import` 從 session 取出的金鑰副本也包在 `Zeroizing` 裡。
@@ -174,7 +178,7 @@ fly-diary/
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
-- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`import_backup`、`restore_backup`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
+- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`import_backup`、`restore_backup`、`biometric_enable`、`biometric_unlock`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
 - **Argon2id 一定離開主執行緒**：`unlock`、`create_vault`、`change_passphrase` 各要跑一到兩次刻意放慢的 Argon2id 派生（單次約一秒），是最容易讓人感覺到凍結的地方。三者都改為 `async` 並把派生交給 `blocking()`；session 只在工作回傳後才寫入，因為 `tauri::State` 無法 move 進 `spawn_blocking`。
 - **金鑰先複製再交給背景執行緒**：`MutexGuard` 不是 `Send`，也不能讓鎖跨越整個寫入過程（會擋住 `lock` 與其他命令）。所有需要金鑰的命令都先用 `session_key()` 把 `[u8; 32]` 複製出來，再 move 進閉包；鎖只持有到複製完成為止。
 - **存檔的資料庫往返**：寫入一篇日記包含讀取舊列（保留收藏旗標）與 `INSERT ... ON CONFLICT` 寫入。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，必須離開主執行緒；raw key 沒有 KDF，每次開啟 DB 的成本很低。

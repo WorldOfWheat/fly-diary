@@ -73,6 +73,7 @@ const ELEMENT_IDS = [
   "lockForm",
   "lockRestore",
   "lockImport",
+  "lockBiometric",
   "browseDir",
   "switchWorkspace",
   "cancelWorkspace",
@@ -135,6 +136,8 @@ const ELEMENT_IDS = [
   "settingsRestoreBtn",
   "settingsTarExportBtn",
   "settingsTarImportBtn",
+  "settingsBiometricEnable",
+  "settingsBiometricDisable",
   "backupImportOverlay",
   "backupImportClose",
   "backupImportCancel",
@@ -200,6 +203,7 @@ function harness(overrides = {}) {
     els,
     handleUnlockSubmit: spy("handleUnlockSubmit"),
     restoreFromLock: spy("restoreFromLock"),
+    biometricUnlock: spy("biometricUnlock"),
     openImportBackupFromLock: spy("openImportBackupFromLock"),
     browseForDir: spy("browseForDir"),
     openWorkspacePicker: spy("openWorkspacePicker"),
@@ -250,6 +254,8 @@ function harness(overrides = {}) {
     calibrateKdf: spy("calibrateKdf"),
     restoreBackup: spy("restoreBackup"),
     exportBackup: spy("exportBackup"),
+    enableBiometric: spy("enableBiometric"),
+    disableBiometric: spy("disableBiometric"),
     openImportFromSettings: spy("openImportFromSettings"),
     openStatsFromSettings: spy("openStatsFromSettings"),
     changeDiaryDirFromSettings: spy("changeDiaryDirFromSettings"),
@@ -988,12 +994,27 @@ test("the settings dialog hosts import, statistics and the folder picker", () =>
     h.els.settingsTarImportBtn.dispatch("click");
     assert.deepEqual(h.names(), ["openImportBackup"]);
   });
+
+  withHarness((h) => {
+    h.els.settingsBiometricEnable.dispatch("click");
+    assert.deepEqual(h.names(), ["enableBiometric"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsBiometricDisable.dispatch("click");
+    assert.deepEqual(h.names(), ["disableBiometric"]);
+  });
 });
 
 test("the lock screen and import dialog reach their tar actions", () => {
   withHarness((h) => {
     h.els.lockImport.dispatch("click");
     assert.deepEqual(h.names(), ["openImportBackupFromLock"]);
+  });
+
+  withHarness((h) => {
+    h.els.lockBiometric.dispatch("click");
+    assert.deepEqual(h.names(), ["biometricUnlock"]);
   });
 
   withHarness((h) => {

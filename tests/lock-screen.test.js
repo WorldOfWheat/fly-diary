@@ -29,6 +29,7 @@ const LOCK_IDS = [
   "lockSubmit",
   "lockRestore",
   "lockImport",
+  "lockBiometric",
   "passphrase",
   "passphraseConfirm",
   "workspaceRow",
@@ -82,6 +83,12 @@ function harness(overrides = {}) {
     },
     vault_exists: true,
     recovery_exists: false,
+    biometric_status: {
+      available: false,
+      enabled: false,
+      reason: "no_hardware",
+    },
+    biometric_unlock: null,
     storage_status: { format: "sqlcipher", hasVault: true, hasDatabase: true },
     get_bip39_words: [
       "abandon",
@@ -368,6 +375,68 @@ test("renderLockScreen asks only for the passphrase for a returning user", () =>
     // Replacing an existing vault is an explicit action in Settings.
     assert.equal(els.lockImport.hidden, true);
   });
+});
+
+test("the biometric button follows the backend status", async () => {
+  await withLock(
+    async ({ lock, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+
+      await lock.refreshBiometricStatus();
+
+      assert.equal(els.lockBiometric.hidden, false);
+    },
+    {
+      invokeTable: {
+        biometric_status: { available: true, enabled: true, reason: null },
+      },
+    }
+  );
+});
+
+test("biometric unlock enters the diary on success", async () => {
+  await withLock(
+    async ({ lock, deps }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      await lock.refreshBiometricStatus();
+
+      await lock.handleBiometric();
+
+      assert.deepEqual(deps.enterApp.args(), [[]]);
+      assert.equal(lock.isVaultInitialized(), true);
+    },
+    {
+      invokeTable: {
+        biometric_status: { available: true, enabled: true, reason: null },
+        biometric_unlock: null,
+      },
+    }
+  );
+});
+
+test("a cancelled biometric prompt keeps the passphrase form available", async () => {
+  await withLock(
+    async ({ lock, deps, els }) => {
+      lock.setConfigured(true);
+      lock.setVaultInitialized(true);
+      await lock.refreshBiometricStatus();
+
+      await lock.handleBiometric();
+
+      assert.deepEqual(deps.enterApp.args(), []);
+      assert.equal(els.lockError.textContent, "lock.biometricCanceled");
+    },
+    {
+      invokeTable: {
+        biometric_status: { available: true, enabled: true, reason: null },
+        biometric_unlock: () => {
+          throw "BIOMETRIC_CANCELED: canceled";
+        },
+      },
+    }
+  );
 });
 
 test("renderLockScreen uses the existing-vault subtitle when unconfigured", () => {

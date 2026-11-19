@@ -65,6 +65,11 @@ const zhHant = {
     "密碼正確，但加密資料庫無法開啟（{message}）。請還原先前匯出的加密備份。",
   "lock.restoreBackup": "還原加密備份",
   "lock.importBackup": "匯入加密備份",
+  "lock.biometric": "使用生物辨識解鎖",
+  "lock.biometricFailed": "生物辨識失敗：{message}",
+  "lock.biometricCanceled": "已取消生物辨識",
+  "lock.biometricInvalidated":
+    "裝置上的生物辨識註冊已變更，請用密碼解鎖後重新啟用生物辨識。",
   "lock.pathLabel": "日記儲存資料夾",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "瀏覽…",
@@ -136,6 +141,32 @@ const zhHant = {
   "settings.version": "版本",
   "settings.commit": "Commit",
   "settings.author": "作者",
+  "settings.biometric": "生物辨識解鎖",
+  "settings.biometricHint":
+    "使用 Android 的指紋或臉部辨識解鎖。日記金鑰會由 Android Keystore 包裝，金鑰只會在生物辨識成功後短暫解開；指紋資料不會離開系統。變更裝置上的生物辨識註冊後，需要重新啟用。",
+  "settings.biometricPass": "目前密碼",
+  "settings.biometricEnable": "啟用生物辨識",
+  "settings.biometricDisable": "停用生物辨識",
+  "settings.biometricDisableConfirm":
+    "停用後就必須用密碼解鎖。要移除這台裝置上的生物辨識金鑰嗎？",
+  "settings.biometricPassRequired": "請先輸入目前密碼",
+  "settings.biometricEnabled": "已啟用：這台裝置可以使用生物辨識解鎖。",
+  "settings.biometricDisabled": "尚未啟用生物辨識解鎖。",
+  "settings.biometricEnabledDone": "生物辨識解鎖已啟用。",
+  "settings.biometricDisabledDone": "生物辨識解鎖已停用。",
+  "settings.biometricEnableFailed": "啟用失敗：{message}",
+  "settings.biometricDisableFailed": "停用失敗：{message}",
+  "biometric.reasonNoHardware": "此裝置沒有可用的生物辨識硬體。",
+  "biometric.reasonNotEnrolled": "請先在系統設定註冊指紋或臉部。",
+  "biometric.reasonNoDeviceCredential":
+    "請先設定螢幕鎖定（PIN、圖形或密碼），Android Keystore 才能保護金鑰。",
+  "biometric.reasonUnavailable": "生物辨識暫時無法使用，請稍後再試。",
+  "biometric.reasonSecurityUpdate": "系統需要安全性更新後才能使用生物辨識。",
+  "biometric.reasonUnsupported": "此裝置不支援強生物辨識。",
+  "biometric.reasonKeyMissing": "先前的生物辨識金鑰已不存在，請重新啟用。",
+  "biometric.reasonStale": "先前的生物辨識資料已失效，請重新啟用。",
+  "biometric.reasonNotConfigured": "請先建立或匯入日記本。",
+  "biometric.reasonUnknown": "無法確認生物辨識狀態。",
   "settings.autoLock": "閒置自動鎖定",
   "settings.autoLockHint": "閒置超過指定時間後自動鎖定日記，需要重新輸入密碼。",
   "settings.autoLockLabel": "鎖定時間",
@@ -490,6 +521,11 @@ const en = {
     "The passphrase is correct, but the encrypted database cannot be opened ({message}). Restore an encrypted backup.",
   "lock.restoreBackup": "Restore encrypted backup",
   "lock.importBackup": "Import encrypted backup",
+  "lock.biometric": "Unlock with biometrics",
+  "lock.biometricFailed": "Biometric authentication failed: {message}",
+  "lock.biometricCanceled": "Biometric authentication canceled",
+  "lock.biometricInvalidated":
+    "The biometric enrollment on this device changed. Unlock with your passphrase and enable biometrics again.",
   "lock.pathLabel": "Diary folder",
   "lock.pathPlaceholder": "/home/user/Documents/diary",
   "lock.browse": "Browse…",
@@ -563,6 +599,39 @@ const en = {
   "settings.version": "Version",
   "settings.commit": "Commit",
   "settings.author": "Author",
+  "settings.biometric": "Biometric unlock",
+  "settings.biometricHint":
+    "Unlock with Android fingerprint or face recognition. The diary key is wrapped by an Android Keystore key that only becomes usable after a successful biometric prompt; fingerprint data never leaves the system. Changing the device's biometric enrollment requires enabling it again.",
+  "settings.biometricPass": "Current passphrase",
+  "settings.biometricEnable": "Enable biometrics",
+  "settings.biometricDisable": "Disable biometrics",
+  "settings.biometricDisableConfirm":
+    "Disabling removes this device's biometric key; you will need the passphrase to unlock. Continue?",
+  "settings.biometricPassRequired": "Enter the current passphrase first",
+  "settings.biometricEnabled":
+    "Enabled: this device can unlock with biometrics.",
+  "settings.biometricDisabled": "Biometric unlock is not enabled.",
+  "settings.biometricEnabledDone": "Biometric unlock enabled.",
+  "settings.biometricDisabledDone": "Biometric unlock disabled.",
+  "settings.biometricEnableFailed": "Could not enable biometrics: {message}",
+  "settings.biometricDisableFailed": "Could not disable biometrics: {message}",
+  "biometric.reasonNoHardware": "This device has no usable biometric hardware.",
+  "biometric.reasonNotEnrolled":
+    "Register a fingerprint or face in the system settings first.",
+  "biometric.reasonNoDeviceCredential":
+    "Set a screen lock (PIN, pattern or passphrase) so Android Keystore can protect the key.",
+  "biometric.reasonUnavailable":
+    "Biometrics are temporarily unavailable; try again later.",
+  "biometric.reasonSecurityUpdate":
+    "A system security update is required before biometrics can be used.",
+  "biometric.reasonUnsupported":
+    "This device does not support strong biometrics.",
+  "biometric.reasonKeyMissing":
+    "The previous biometric key no longer exists; enable it again.",
+  "biometric.reasonStale":
+    "The previous biometric enrollment is no longer valid; enable it again.",
+  "biometric.reasonNotConfigured": "Create or import a diary first.",
+  "biometric.reasonUnknown": "Could not determine the biometric status.",
   "settings.autoLock": "Idle auto-lock",
   "settings.autoLockHint":
     "Lock the diary after a period of inactivity, requiring the passphrase again.",

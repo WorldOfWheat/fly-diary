@@ -967,6 +967,7 @@ dependencies = [
  "argon2",
  "base64 0.23.1",
  "chrono",
+ "fly-diary-biometric",
  "hkdf",
  "image",
  "libc",
@@ -982,6 +983,15 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "zeroize",
+]
+
+[[package]]
+name = "fly-diary-biometric"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

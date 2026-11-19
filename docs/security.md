@@ -143,7 +143,7 @@ v1，直到下次成功復原或重新產生短語。AAD 只能證明上下文�
 - **同使用者也讀不到**：Linux／Android 啟動時 `prctl(PR_SET_DUMPABLE, 0)`，關掉 `/proc/<pid>/mem` 與同使用者 `ptrace` attach；Unix 另保留 `RLIMIT_CORE = 0`。代價是 gdb／profiler 不能直接 attach，開發時若要除錯需暫時註解這行。
 - **一定會抹除**：`Drop` 先 zeroize 整段 key，再 `munlock`／`VirtualUnlock`，最後 `munmap`／`VirtualFree`。
 - **可失敗**：`mlock` 可能因 `RLIMIT_MEMLOCK`、sandbox 或平台限制而失敗；這時仍照常解鎖，只是少了「不進 swap」那層保證，不會把 App 卡住。
-- **suspend／resume**：前端監聽 Tauri 的 `tauri://suspended` / `tauri://resumed`、`visibilitychange` 與 `pagehide`，在背景化或休眠前走同一條「先存檔再鎖定」路徑；Android 另外由 `FLAG_SECURE` 阻止截圖與最近任務縮圖。HTML 檔案選擇器與 Android SAF 檔案選擇器也會讓 webview 短暫背景化，因此前端有一層 native-picker guard：選擇器開啟期間、以及關閉後 2 秒內不觸發 suspend lock；guard 最多維持 2 分鐘，避免選擇器沒有回報關閉時長期停用背景鎖定。
+- **suspend／resume 不立即鎖定**：Android 切到背景、滑掉任務或休眠時，前端只記錄 native picker 狀態，不會馬上鎖定；是否鎖定由「閒置自動鎖定」的 wall-clock deadline 決定。回到前景時 `resumeAutoLockTimer()` 會檢查 deadline：已逾時就鎖定，未逾時則以剩餘時間重新排程，不會重新給一個完整區間。這符合手機使用習慣（短暫切到別 App 不會被登出），代價是 timeout 到期前程序若被休眠，金鑰仍可能留在休眠映像中。Android 另由 `FLAG_SECURE` 阻止截圖與最近任務縮圖。HTML／SAF 選擇器會短暫背景化 webview，native-picker guard 讓選檔期間與返回時不會被誤認為一般背景化。
 
 這層保護只涵蓋**長時間存活的 session key**。`session_key()` 複製給背景工作的暫時副本、AES key schedule，以及 webview 裡的明文仍是架構性暴露，詳見「已知限制」。
 
@@ -156,8 +156,21 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - `android:allowBackup="true"`，以 `dataExtractionRules`（Android 12+）與 `fullBackupContent`（Android 11 以前）只包含日記資料、排除 cache。
 - `cloud-backup` 加上 `disableIfNoEncryptionCapabilities="true"`：裝置沒有可用的備份加密能力時就不上傳。
 - `recovery.xml` 會一起備份，但回復短語本身不在備份裡；取得備份仍需要密碼或短語才能解開 wrapped key。
+- `biometric.json` 是 Android Keystore 的裝置綁定包裝，不會進 `.tar`；它是否被 Android Auto Backup 帶走取決於系統備份範圍，但換裝置後 alias 不存在，仍必須用密碼解鎖再重新啟用。
 - `MainActivity` 設定 `FLAG_SECURE`，避免截圖、螢幕錄影與最近任務縮圖看到明文。
 - 備份與螢幕保護由 `scripts/harden-android.mjs` 套用；`src-tauri/gen/android` 仍保持 gitignored，重新產生 Android 專案後要用 `pnpm android:init`／`android:dev`／`android:build` 重新套用。
+
+### Android 生物辨識解鎖
+
+生物辨識是密碼之外的便利解鎖，不是第二因素。實作不使用指紋特徵值，也不儲存密碼：
+
+- 啟用時先用目前密碼解開 `vault.xml`，取得 diary key，再要求一次 `BiometricPrompt`。
+- Android Keystore 產生一把 AES-256-GCM key，設定 `setUserAuthenticationRequired(true)`、`BIOMETRIC_STRONG`、`setInvalidatedByBiometricEnrollment(true)`；每次使用都要通過 `CryptoObject` 授權。
+- 這把 Keystore key 只包裝 diary key，存成日記資料夾內的 `biometric.json`（IV、密文、alias、`vault_id`／`key_id`）。AAD 綁定 vault 與 key，包裝檔不能拿來解另一個 vault。
+- `biometric.json` **不會進 `.tar`**，因為 Keystore alias 是裝置綁定的；匯入新 vault 時舊包裝檔會跟舊金鑰包裝檔一起移到 `*.local-backup-*`。換裝置、重裝、清除 App 資料或變更生物辨識註冊後，都要用密碼解鎖再重新啟用。
+- 生物辨識失敗、取消或 Keystore key 因註冊變更而失效時，一律回到密碼解鎖；失效的包裝檔會被刪除。
+- 啟用需要再次輸入目前密碼，避免有人在已解鎖的 App 裡註冊自己的指紋。停用會刪除包裝檔與 Keystore alias。
+- 風險：生物辨識只證明「目前有人在裝置前」，不防脅迫；裝置解鎖後的惡意程式、root／注入工具仍可能在使用者授權時取得 session。需要更高保證時請使用密碼，並在系統層保護裝置。
 
 ### 加密備份、還原與匯入
 
@@ -239,7 +252,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - 日期只會出現在附件資料夾名稱 `attachments/YYYY-MM-DD/`；標題、內容與附件 metadata 皆已加密。
 - 舊版（SHA-256）vault 會在解鎖時自動遷移；v2 vault 會補上 `vault-id`／`key-id`。這些步驟仍需要重新加密 XML，完成前無法在設定頁變更密碼。遷移會先寫下 `migration.journal`（內含新 vault 的 salt 與包裝後的新 diary key）才開始改寫日記，所以中途斷電不會讓日記卡在「一半用舊金鑰、一半用新金鑰」；下次解鎖會偵測到 journal 並自動續跑。
 - 升級到 SQLCipher 後，舊 XML 的格式升級不再於解鎖後背景進行；`migrate_storage` 會一次讀取 v1–v4 並寫入 DB。這一步需要解鎖，且會先建立 `diary.db.migrating`，通過 `quick_check` 後才 rename；成功後刪除 XML。中斷只會留下可刪除的暫存 DB。無法解讀的 XML 原始位元組會存進加密的 `legacy_broken`，不會留在磁碟上。
-- 閒置計時只在 App 視窗內計算；另外會在 Tauri 的 suspend／resume、`visibilitychange`、`pagehide` 與 Android 背景化時鎖定。若平台沒有送出 suspend 事件，切到其他視窗時 WebView 可能節流計時器，這時要等回到 App 後由 wall-clock deadline 立刻鎖定；休眠瞬間仍可能有極短空窗。
+- 閒置計時使用 wall-clock deadline；Android 背景化、`pagehide` 與 suspend 不會立即鎖定，只會在回到前景時檢查 deadline，已逾時才鎖定。WebView 在背景可能節流計時器，因此 deadline 是權威來源；這也代表 timeout 到期前程序若被休眠，金鑰會留在休眠映像中。
 - KDF 校準的結果取決於當下機器負載，忙碌時可能選到偏保守的參數；重新校準即可。
 - SQLCipher 的 `INSERT`／`UPDATE`／附件 manifest 更新都在單一 transaction 內完成；DB 是唯一權威來源，沒有需要追平的衍生檔。
 - 原子寫入保證的是「檔案內容不會被截斷、且改名本身已 flush」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入；`fsync` 目錄同理，只把 flush 要求送到裝置。
@@ -263,7 +276,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - 檔案權限收緊只在 Unix 生效（`0600` / `0700`）。Windows 上沿用 `%APPDATA%` 既有的 per-user ACL，程式本身不額外設定 ACL；若把日記放在共用磁碟或同步資料夾，請自行確認該處的權限設定。
 - AAD 綁定只保護「搬檔」與「索引／日記互換」這類攻擊。若攻擊者同時能改寫檔名與檔案內容，仍可把某一天的密文連同檔名一起搬走——AAD 綁的是檔案自稱的日期，不是外部可信的時間來源。
 - 記憶體抹除只保證「程式主動抹除」。`release` profile 設了 `panic = "abort"`，panic 時不會執行 `Drop`，因此 `LockedKey` 的 zeroize／munmap 不會發生；不過行程會立刻結束，作業系統會回收該記憶體（core dump 已由 `RLIMIT_CORE = 0` 關閉）。
-- session key 已放進 `LockedKey`（mlock + `MADV_DONTDUMP` / `MADV_WIPEONFORK`），Windows 另排除 WER dump；但 `mlock` 是盡力而為，且**不阻止休眠**：hibernation 會把整份 RAM 寫到磁碟。App 會盡量在 suspend 前鎖定，但若需要在休眠映像中也不留下金鑰，請使用加密 swap／加密休眠或在系統層停用休眠。
+- session key 已放進 `LockedKey`（mlock + `MADV_DONTDUMP` / `MADV_WIPEONFORK`），Windows 另排除 WER dump；但 `mlock` 是盡力而為，且**不阻止休眠**：hibernation 會把整份 RAM 寫到磁碟。Android 背景化不再立即鎖定，而是等閒置 deadline；若需要在休眠映像中也不留下金鑰，請使用加密 swap／加密休眠或在系統層停用休眠。
 - 記憶體保護只涵蓋長時間存活的 session key。`session_key()` 的暫時副本、AES key schedule、Rust 配置器曾使用過的頁面，以及 webview 內的明文都可能不在鎖定頁內；root 權限的攻擊者也不受 `PR_SET_DUMPABLE` 限制。
 - 全文搜尋索引保存解鎖期間所有日記的明文標題與內容，且不在 `mlock` 頁內；鎖定時會清除並 zeroize，但休眠映像與行程記憶體 dump 仍可能帶走它。索引不會寫入日記資料夾，關閉 App 後不留下任何副本。
 - 前端（webview 內的 JS）持有解密後的標題與內容字串，V8 的 GC 不會抹除這些字串。鎖定時前端會清空編輯器，但無法保證舊字串已從記憶體消失；這是架構性限制。

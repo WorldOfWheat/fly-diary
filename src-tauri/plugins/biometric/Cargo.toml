@@ -1,0 +1,20 @@
+[package]
+name = "fly-diary-biometric"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90.0"
+description = "Android biometric unlock plugin for Fly Diary"
+license = "MIT"
+build = "build.rs"
+links = "fly-diary-biometric"
+
+[lib]
+name = "fly_diary_biometric"
+path = "src/lib.rs"
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

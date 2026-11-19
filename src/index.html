@@ -100,6 +100,10 @@
             <button id="lock-submit" class="btn-primary lock-submit" type="submit"
                 data-i18n="lock.submitUnlock">解鎖</button>
 
+            <!-- Shown when Android biometric unlock is enrolled for this vault. -->
+            <button id="lock-biometric" class="btn-browse lock-recovery-open" type="button"
+                data-i18n="lock.biometric" hidden>使用生物辨識解鎖</button>
+
             <!-- Shown only after the passphrase was accepted but diary.db is
                  unreadable. Restoring is the supported rescue path. -->
             <button id="lock-restore" class="btn-browse lock-recovery-open" type="button"
@@ -656,6 +660,36 @@
                         <span class="settings-label" data-i18n="settings.autoLockLabel">鎖定時間</span>
                         <select id="auto-lock-select" class="settings-select"></select>
                     </label>
+                </details>
+
+                <!-- Android biometric unlock. Hidden on desktop and when the
+                     platform reports no secure strong biometric hardware. -->
+                <details id="settings-biometric-section" class="settings-section" open hidden>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.biometric">生物辨識解鎖</h3>
+                    </summary>
+                    <p class="settings-hint" data-i18n="settings.biometricHint">
+                        使用 Android 的指紋或臉部辨識解鎖。日記金鑰會由 Android Keystore
+                        包裝，金鑰只會在生物辨識成功後短暫解開；指紋資料不會離開系統。
+                        變更裝置上的生物辨識註冊後，需要重新啟用。
+                    </p>
+                    <p id="settings-biometric-status" class="settings-hint settings-status"
+                        aria-live="polite"></p>
+                    <label id="settings-biometric-enable-row" class="settings-row"
+                        for="settings-biometric-pass">
+                        <span class="settings-label" data-i18n="settings.biometricPass">目前密碼</span>
+                        <input id="settings-biometric-pass" class="settings-input" type="password"
+                            autocomplete="current-password"
+                            data-i18n-placeholder="settings.biometricPass" placeholder="目前密碼" />
+                    </label>
+                    <div class="settings-actions">
+                        <button id="settings-biometric-enable" class="btn-browse" type="button"
+                            data-i18n="settings.biometricEnable">啟用生物辨識</button>
+                        <button id="settings-biometric-disable" class="btn-danger" type="button"
+                            data-i18n="settings.biometricDisable" hidden>停用生物辨識</button>
+                    </div>
+                    <p id="settings-biometric-message" class="settings-hint settings-status"
+                        aria-live="polite"></p>
                 </details>
 
                 <!-- Autosave -->
