@@ -152,7 +152,7 @@ pub async fn status(app: &AppHandle) -> Result<Status, String> {
         let alias = wrapper.as_ref().map(|enrollment| enrollment.alias.clone());
         let native = native_status(app, alias).await?;
 
-        if let Some(enrollment) = wrapper.as_ref() {
+        if let Some(_enrollment) = wrapper.as_ref() {
             if !native.key_exists {
                 remove_wrapper(&dir);
                 wrapper = None;
@@ -330,12 +330,25 @@ pub async fn unlock(app: &AppHandle) -> Result<Zeroizing<[u8; 32]>, String> {
 }
 
 #[cfg(target_os = "android")]
-async fn native_handle(
+async fn native_state<R>(
     app: &AppHandle,
-) -> Result<fly_diary_biometric::Biometric<tauri::Wry>, String> {
-    app.try_state::<fly_diary_biometric::Biometric<tauri::Wry>>()
-        .map(|state| state.inner().clone())
-        .ok_or_else(|| "The biometric plugin is not available".to_string())
+    task: impl FnOnce(&fly_diary_biometric::Biometric<tauri::Wry>) -> Result<R, String>
+        + Send
+        + 'static,
+    label: &'static str,
+) -> Result<R, String>
+where
+    R: Send + 'static,
+{
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let handle = app
+            .try_state::<fly_diary_biometric::Biometric<tauri::Wry>>()
+            .ok_or_else(|| "The biometric plugin is not available".to_string())?;
+        task(&handle)
+    })
+    .await
+    .map_err(|error| format!("{label} task failed: {error}"))?
 }
 
 #[cfg(target_os = "android")]
@@ -343,10 +356,7 @@ async fn native_status(
     app: &AppHandle,
     alias: Option<String>,
 ) -> Result<fly_diary_biometric::NativeStatus, String> {
-    let handle = native_handle(app).await?;
-    tauri::async_runtime::spawn_blocking(move || handle.status(alias))
-        .await
-        .map_err(|error| format!("Biometric status task failed: {error}"))?
+    native_state(app, move |handle| handle.status(alias), "Biometric status").await
 }
 
 #[cfg(target_os = "android")]
@@ -356,10 +366,12 @@ async fn native_enroll(
     payload: String,
     aad: String,
 ) -> Result<fly_diary_biometric::Enrollment, String> {
-    let handle = native_handle(app).await?;
-    tauri::async_runtime::spawn_blocking(move || handle.enroll(alias, payload, aad))
-        .await
-        .map_err(|error| format!("Biometric enrollment task failed: {error}"))?
+    native_state(
+        app,
+        move |handle| handle.enroll(alias, payload, aad),
+        "Biometric enrollment",
+    )
+    .await
 }
 
 #[cfg(target_os = "android")]
@@ -370,18 +382,22 @@ async fn native_decrypt(
     ciphertext: String,
     aad: String,
 ) -> Result<fly_diary_biometric::Decrypted, String> {
-    let handle = native_handle(app).await?;
-    tauri::async_runtime::spawn_blocking(move || handle.decrypt(alias, iv, ciphertext, aad))
-        .await
-        .map_err(|error| format!("Biometric unlock task failed: {error}"))?
+    native_state(
+        app,
+        move |handle| handle.decrypt(alias, iv, ciphertext, aad),
+        "Biometric unlock",
+    )
+    .await
 }
 
 #[cfg(target_os = "android")]
 async fn native_delete(app: &AppHandle, alias: String) -> Result<(), String> {
-    let handle = native_handle(app).await?;
-    tauri::async_runtime::spawn_blocking(move || handle.delete_key(alias))
-        .await
-        .map_err(|error| format!("Biometric cleanup task failed: {error}"))?
+    native_state(
+        app,
+        move |handle| handle.delete_key(alias),
+        "Biometric cleanup",
+    )
+    .await
 }
 
 #[cfg(test)]
