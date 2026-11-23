@@ -260,7 +260,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在 SQLCipher 裡；DB 檔大小仍會透露大約的日記量。
 - 完整備份是設定頁匯出的 `.tar`：`VACUUM INTO` 快照 + `vault.xml` + `recovery.xml` + `attachments/`。只複製執行中的 `diary.db` 不是一致快照，請先鎖定並 checkpoint，或使用內建匯出。快照只寫 live pages，不含 free list；`diary.db` 本身仍可能有已刪除資料的殘留。
 - 刪除後的 page 可能留在 SQLite free list；`secure_delete=ON` 會先把內容歸零再加密，但仍建議刪除後 checkpoint 並定期 `VACUUM`。
-- 圖片會在前端重新編碼成 1000px WebP，EXIF（含 GPS）會被移除；若 WebView 不支援 WebP 編碼，PNG／WebP 來源會 fallback PNG 保留透明，其他格式則 fallback JPEG（透明區填白）。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
+- 圖片由 Rust 後端套用 EXIF 方向、縮到長邊 1000px，再以有損 WebP（libwebp，quality 80）重新編碼；其他 EXIF（含 GPS）不會保留，輸出格式與大小不依賴 WebView 的 canvas 編碼能力。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
 - 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。
 - 孤兒附件（附件資料夾沒有對應的 `entries` 列）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免刪到剛好還沒寫入 DB 的圖片。
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。

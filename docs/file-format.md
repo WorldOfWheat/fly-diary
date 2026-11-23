@@ -212,11 +212,12 @@ diary/
   **元素順序就是顯示順序**。沒有 `added-at`，也不依賴檔名或 mtime。
   v5 manifest 的 AAD 綁定 `vault-id`／`key-id`／日期／版本；舊 manifest 使用 `"fly-diary/attachment-manifest" || 0x00 || date`，
   所以搬到別天會失敗，也不能和 `index.xml` 或日記密文互換。
-- **上傳前壓縮**：前端用 canvas 將長邊縮到 1000px、WebP quality 0.8；若 WebView 不支援
-  WebP 編碼時，PNG／WebP 來源會 fallback PNG 以保留透明，其他來源 fallback JPEG（透明區填白）。
-  重新編碼會一併清掉 EXIF（包含 GPS）。
-- **限制**：前端輸入上限 20 MB；後端解碼後上限 5 MB、每天最多 200 張；只接受
-  WebP / JPEG / PNG，拒絕 SVG。`mime` 與 magic bytes 必須一致。
+- **上傳前壓縮**：前端只負責讀取原始 bytes，`prepare_image` 在 Rust 後端解碼、套用 EXIF 方向、
+  將長邊縮到 1000px，再以有損 WebP（libwebp，quality 80）重新編碼。輸出固定是 `image/webp`，
+  不再依賴 WebView 的 canvas 編碼能力；重新編碼會一併清掉其他 EXIF（包含 GPS）。
+- **限制**：前端輸入上限 64 MiB；後端解碼後上限 5 MB、每天最多 200 張。輸入可為
+  WebP / JPEG / PNG / GIF / BMP / TIFF，拒絕 SVG；新寫入的附件一律是 WebP，讀取舊檔時
+  `mime` 與 magic bytes 必須一致。
 - **加入方式**：除了「加入圖片」按鈕，也可以直接把圖片檔拖進編輯區，或把剪貼簿裡的圖片
   （例如截圖）貼上。只有真正的圖片檔會被攔截，文字貼上與相簿內部的排序拖曳不受影響。
   桌面版的檔案拖放走 Tauri 原生事件（`onDragDropEvent`）：它提供的是**檔案路徑**，由
@@ -229,7 +230,7 @@ diary/
   的情況；純文字貼上仍完全交給瀏覽器，不會被攔截。只有剪貼簿真的含圖片時才會自動解鎖唯讀日記。
   原生剪貼簿備援只在桌面版啟用；行動版仍走 WebView 的 paste 事件。
 - **讀取**：`list_attachments` 只解密 manifest；`get_attachment` 才逐張解密，前端延遲載入。
-  剛上傳的圖片直接沿用前端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
+  剛上傳的圖片直接沿用後端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
 - **唯讀與壞檔**：唯讀模式只能看圖；按鈕新增、刪除、排序都要先「解鎖編輯」。貼上或拖放圖片
   被視為明確的編輯動作，會自動解鎖一般唯讀日記並繼續加入；壞檔（`lockedDate`）仍完全鎖定，
   只顯示提示。

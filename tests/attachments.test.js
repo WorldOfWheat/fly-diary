@@ -15,8 +15,7 @@ import {
   createAttachmentGallery,
   imageTypeForFile,
   MAX_INPUT_BYTES,
-  prepareImageFile,
-  targetDimensions,
+  readImageInput,
 } from "../src/attachments.js";
 import {
   fakeElement,
@@ -85,13 +84,6 @@ function setup({ invokeTable = {}, canEdit = true, locked = false } = {}) {
 async function flush() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
-
-test("targetDimensions keeps the aspect ratio and never upscales", () => {
-  assert.deepEqual(targetDimensions(2000, 1000), { width: 1000, height: 500 });
-  assert.deepEqual(targetDimensions(1000, 2000), { width: 500, height: 1000 });
-  assert.deepEqual(targetDimensions(800, 600), { width: 800, height: 600 });
-  assert.deepEqual(targetDimensions(0, 600), { width: 0, height: 0 });
-});
 
 test("imageTypeForFile infers MIME from the name when the OS omits it", () => {
   assert.equal(imageTypeForFile({ type: "", name: "photo.PNG" }), "image/png");
@@ -705,15 +697,54 @@ test("the lightbox opens, loads the image, and closes again", async () => {
   }
 });
 
-test("prepareImageFile rejects SVG and oversized inputs before decoding", async () => {
+test("readImageInput rejects SVG and oversized inputs before reading bytes", async () => {
   await assert.rejects(
-    prepareImageFile({ type: "image/svg+xml", size: 10 }),
+    readImageInput({ type: "image/svg+xml", size: 10 }),
     /raster/
   );
   await assert.rejects(
-    prepareImageFile({ type: "image/png", size: MAX_INPUT_BYTES + 1 }),
+    readImageInput({ type: "image/png", size: MAX_INPUT_BYTES + 1 }),
     /too large/
   );
+});
+
+test("addFiles sends original bytes to the backend for compression", async () => {
+  const saved = {
+    id: "e".repeat(32),
+    mime: "image/webp",
+    width: 1000,
+    height: 500,
+    size: 8,
+    missing: false,
+  };
+  const ctx = setup({
+    invokeTable: {
+      list_attachments: [],
+      prepare_image: {
+        mime: "image/webp",
+        data: "cHJlcGFyZWQ=",
+        width: 1000,
+        height: 500,
+      },
+      save_attachment: saved,
+    },
+  });
+
+  try {
+    await ctx.gallery.load("2026-10-23");
+    const file = new File([new Uint8Array([1, 2, 3])], "a.png", {
+      type: "image/png",
+    });
+    await ctx.gallery.addFiles([file]);
+
+    assert.equal(ctx.invoke.argsOf("prepare_image").data, "AQID");
+    assert.equal(ctx.invoke.argsOf("save_attachment").mime, "image/webp");
+    assert.equal(ctx.invoke.argsOf("save_attachment").data, "cHJlcGFyZWQ=");
+    assert.equal(ctx.invoke.argsOf("save_attachment").width, 1000);
+    assert.equal(ctx.invoke.argsOf("save_attachment").height, 500);
+  } finally {
+    ctx.restore();
+  }
 });
 
 test("handleClick dispatches arrow and remove actions", async () => {

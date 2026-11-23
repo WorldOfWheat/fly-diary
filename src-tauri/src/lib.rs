@@ -11,6 +11,7 @@ mod clipboard;
 pub mod crypto;
 pub mod db;
 mod fsutil;
+mod image_ops;
 mod pool;
 mod search;
 mod secure_memory;
@@ -1002,6 +1003,24 @@ async fn delete_entry(
 // Image attachments
 // ---------------------------------------------------------------------------
 
+/// Decode, resize and re-encode an image before it is stored.
+///
+/// Compression runs here instead of in the webview so the output format and
+/// size do not depend on the platform's canvas encoders. The gallery sends the
+/// original file bytes and stores the returned lossy WebP.
+#[tauri::command]
+async fn prepare_image(data: String) -> Result<image_ops::PreparedImage, String> {
+    // Reject an oversized base64 string before allocating the decoded buffer.
+    if data.len() > image_ops::MAX_INPUT_BYTES.saturating_mul(2) {
+        return Err("Image is too large".to_string());
+    }
+    blocking("Prepare image", move || {
+        let bytes = crypto::b64_decode(&data)?;
+        image_ops::prepare_image(&bytes)
+    })
+    .await
+}
+
 #[tauri::command]
 async fn save_attachment(
     app: tauri::AppHandle,
@@ -1903,6 +1922,7 @@ pub fn run() {
             get_entry,
             save_entry,
             delete_entry,
+            prepare_image,
             save_attachment,
             list_attachments,
             get_attachment,

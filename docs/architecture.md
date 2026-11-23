@@ -26,7 +26,7 @@ fly-diary/
 │   ├── recovery-dialog.js  # 一次性 BIP39 短語、獨立確認視窗（createRecoveryDialog）
 │   ├── word-input.js       # BIP39 單字磁磚與前綴建議（共用於確認／解鎖）
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準、短語解鎖（createLockScreen）
-│   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
+│   ├── attachments.js      # 圖片相簿：上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
 │   ├── input-modality.js   # 記錄指標／鍵盤輸入，讓焦點環只在鍵盤操作時出現
 │   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
@@ -76,7 +76,7 @@ fly-diary/
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
 │   ├── recovery-dialog.test.js # BIP39 短語、獨立確認視窗、前綴建議、取消/失敗不留資料
-│   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
+│   ├── attachments.test.js     # 輸入驗證、相簿順序、上傳/刪除、唯讀、lightbox
 │   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   ├── docs-links.test.js      # README 與 docs/ 的相對連結、文件索引可達性
@@ -111,6 +111,7 @@ fly-diary/
 │       ├── secure_memory.rs # 鎖定頁存放 diary key（mlock／VirtualLock、防 dump/fork）
 │       ├── xml.rs          # vault/recovery 與 legacy XML 的序列化／解析（不再寫日記）
 │       ├── attachments.rs  # 圖片附件：DB manifest、加密 sidecar、順序、孤兒掃描
+│       ├── image_ops.rs    # 附件影像：解碼、EXIF 方向、縮放、有損 WebP 編碼
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
 │       ├── pool.rs         # 受限的 Rayon vault I/O pool（最多 4 執行緒）
 │       ├── search.rs       # 解鎖期間的記憶體全文索引（不落盤，鎖定即清除）
