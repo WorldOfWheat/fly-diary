@@ -249,7 +249,7 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 
 ## 已知限制
 
-- 日期只會出現在附件資料夾名稱 `attachments/YYYY-MM-DD/`；標題、內容與附件 metadata 皆已加密。
+- 附件檔名只有隨機 id（`attachments/<32 hex>.bin`），不再包含日期；附件的日期、標題、內容與 metadata 都只存在加密的 SQLCipher（日記檔名本身仍以日期命名，是既有設計）。尚未執行「更新舊圖片」的舊 vault 仍可能保有 `attachments/YYYY-MM-DD/` 資料夾；執行後日期就不再出現在附件路徑。
 - 舊版（SHA-256）vault 會在解鎖時自動遷移；v2 vault 會補上 `vault-id`／`key-id`。這些步驟仍需要重新加密 XML，完成前無法在設定頁變更密碼。遷移會先寫下 `migration.journal`（內含新 vault 的 salt 與包裝後的新 diary key）才開始改寫日記，所以中途斷電不會讓日記卡在「一半用舊金鑰、一半用新金鑰」；下次解鎖會偵測到 journal 並自動續跑。
 - 升級到 SQLCipher 後，舊 XML 的格式升級不再於解鎖後背景進行；`migrate_storage` 會一次讀取 v1–v4 並寫入 DB。這一步需要解鎖，且會先建立 `diary.db.migrating`，通過 `quick_check` 後才 rename；成功後刪除 XML。中斷只會留下可刪除的暫存 DB。無法解讀的 XML 原始位元組會存進加密的 `legacy_broken`，不會留在磁碟上。
 - 閒置計時使用 wall-clock deadline；Android 背景化、`pagehide` 與 suspend 不會立即鎖定，只會在回到前景時檢查 deadline，已逾時才鎖定。WebView 在背景可能節流計時器，因此 deadline 是權威來源；這也代表 timeout 到期前程序若被休眠，金鑰會留在休眠映像中。
@@ -257,12 +257,13 @@ Android 的 `vault.xml`、`recovery.xml`、日記與附件必須能備份，否�
 - SQLCipher 的 `INSERT`／`UPDATE`／附件 manifest 更新都在單一 transaction 內完成；DB 是唯一權威來源，沒有需要追平的衍生檔。
 - 原子寫入保證的是「檔案內容不會被截斷、且改名本身已 flush」，不是「資料已持久化到磁碟」。`sync_all()` 只保證資料離開程式與作業系統快取，硬碟本身的寫入快取（尤其外接 USB 碟）仍可能因斷電遺失最後幾筆寫入；`fsync` 目錄同理，只把 flush 要求送到裝置。
 - 匯入只讀取資料夾第一層的 `.txt`，不遞迴子資料夾；單檔上限 8 MiB，且必須是 UTF-8。
-- 圖片張數、每張大小與資料夾是否存在仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏內容或原始檔名。manifest 內容（順序、MIME、尺寸）在 SQLCipher 裡；DB 檔大小仍會透露大約的日記量。
+- `attachments/` 的檔案數量與每張大小仍是明文可見的 metadata；檔名本身是隨機 hex，不洩漏日期、內容或原始檔名。manifest 內容（日期、順序、MIME、尺寸）在 SQLCipher 裡；DB 檔大小仍會透露大約的日記量。
 - 完整備份是設定頁匯出的 `.tar`：`VACUUM INTO` 快照 + `vault.xml` + `recovery.xml` + `attachments/`。只複製執行中的 `diary.db` 不是一致快照，請先鎖定並 checkpoint，或使用內建匯出。快照只寫 live pages，不含 free list；`diary.db` 本身仍可能有已刪除資料的殘留。
 - 刪除後的 page 可能留在 SQLite free list；`secure_delete=ON` 會先把內容歸零再加密，但仍建議刪除後 checkpoint 並定期 `VACUUM`。
 - 圖片由 Rust 後端套用 EXIF 方向、縮到長邊 1000px，再以有損 WebP（libwebp，quality 80）重新編碼；其他 EXIF（含 GPS）不會保留，輸出格式與大小不依賴 WebView 的 canvas 編碼能力。1000px 在 2x 螢幕全螢幕檢視時可能偏軟。
+- 設定頁的「更新舊圖片」會把 legacy 日期資料夾的附件搬到扁平 `attachments/`，並就地以有損 WebP 取代需要縮小的附件；重新編碼無法還原，執行前請先匯出備份。
 - 圖片功能是相簿，不是圖文混排：文字仍是純文字 textarea，不能把圖片插在段落中間。
-- 孤兒附件（附件資料夾沒有對應的 `entries` 列）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免刪到剛好還沒寫入 DB 的圖片。
+- 孤兒附件（沒有 `attachments` 列引用的扁平 `*.bin`，或沒有 `entries` 列的 legacy 日期資料夾）可由 `list_orphan_attachments` / `delete_orphan_attachments` 處理，目前沒有自動刪除；這是刻意的，避免刪到剛好還沒寫入 DB 的圖片。
 - 圖片只支援相簿順序，不支援把同一張圖同時放在多個日期或同一天多個位置；每個檔案只有一個 id，刪除就是刪除。
 - 行動版仍沒有「把日記本體放在外部資料夾」的選擇器，也沒有 `.txt` 資料夾匯入：`pick_diary_dir` 固定回傳 App 私有資料夾，`pick_import_dir` 直接回報不支援。備份檔可透過系統檔案選擇器存到外部位置。
 - Linux 的剪貼簿圖片讀取使用 X11（arboard）。純 Wayland 且沒有 XWayland 的環境可能讀不到剪貼簿圖片；此時仍可用「加入圖片」或拖放。

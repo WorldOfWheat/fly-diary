@@ -35,6 +35,14 @@ pub struct PreparedImage {
     pub height: u32,
 }
 
+/// Raw compressed bytes, used by the in-place recompression pass.
+pub(crate) struct PreparedImageBytes {
+    pub mime: String,
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Scale `width`/`height` so the longest edge is at most `MAX_LONG_EDGE`.
 pub fn target_dimensions(width: u32, height: u32) -> (u32, u32) {
     if width == 0 || height == 0 {
@@ -52,6 +60,22 @@ pub fn target_dimensions(width: u32, height: u32) -> (u32, u32) {
 
 /// Decode `bytes`, apply EXIF orientation, resize, and encode lossy WebP.
 pub fn prepare_image(bytes: &[u8]) -> Result<PreparedImage, String> {
+    let PreparedImageBytes {
+        mime,
+        data,
+        width,
+        height,
+    } = prepare_image_bytes(bytes)?;
+    Ok(PreparedImage {
+        mime,
+        data: crypto::b64_encode(&data),
+        width,
+        height,
+    })
+}
+
+/// Like [`prepare_image`], but returns the raw WebP bytes instead of base64.
+pub(crate) fn prepare_image_bytes(bytes: &[u8]) -> Result<PreparedImageBytes, String> {
     if bytes.is_empty() {
         return Err("Image is empty".to_string());
     }
@@ -101,9 +125,9 @@ pub fn prepare_image(bytes: &[u8]) -> Result<PreparedImage, String> {
         ));
     }
 
-    Ok(PreparedImage {
+    Ok(PreparedImageBytes {
         mime: "image/webp".to_string(),
-        data: crypto::b64_encode(&data),
+        data,
         width,
         height,
     })

@@ -208,6 +208,19 @@ const zhHant = {
     "「還原加密備份」只適用於同一個日記本。它會用目前解鎖的金鑰驗證 .tar，替換資料庫與附件，但不會修改密碼、回復短語或金鑰包裝檔。目前資料會保留在日記資料夾旁的 *.local-backup-*；備份之後的變更不會合併回來。跨裝置或建立新日記本請使用下方的「資料移轉」。",
   "settings.backupRestore": "還原加密備份",
   "settings.backupRestoreTitle": "用同一個日記本的加密備份還原資料庫與附件",
+  "settings.images": "圖片",
+  "settings.imagesHint":
+    "把既有圖片搬到統一的 attachments 資料夾，並重新編碼為有損 WebP；通常可以大幅縮小容量。已經很小或已經是壓縮 WebP 的圖片只會搬移。",
+  "settings.recompress": "更新舊圖片",
+  "settings.recompressTitle": "把舊圖片搬到統一資料夾並重新壓縮",
+  "settings.recompressConfirm":
+    "這會把既有圖片搬到 attachments/ 根目錄，並用有損 WebP 取代需要縮小的圖片。畫質可能略微下降且無法還原。建議先匯出備份。要繼續嗎？",
+  "settings.recompressRunning": "正在更新舊圖片…",
+  "settings.recompressDone":
+    "已重新編碼 {n} 張、搬移 {moved} 張、略過 {skipped} 張、失敗 {failed} 張；節省 {saved}。",
+  "settings.recompressNothing":
+    "沒有需要更新的圖片（略過 {skipped} 張，失敗 {failed} 張）。",
+  "settings.recompressFailed": "壓縮失敗：{message}",
   "settings.transfer": "資料移轉",
   "settings.transferHint":
     "匯出一個加密的 .tar，內含資料庫快照、金鑰包裝檔與所有圖片。適合換裝置、備份到另一個位置，或在 App 資料被清除後重新匯入。檔案本身仍是密文，需要原本的密碼才能解開。",
@@ -676,6 +689,19 @@ const en = {
   "settings.backupRestore": "Restore encrypted backup",
   "settings.backupRestoreTitle":
     "Restore the database and attachments from a backup of this same vault",
+  "settings.images": "Images",
+  "settings.imagesHint":
+    "Move existing images into one flat attachments folder and re-encode them as lossy WebP. This usually saves a lot of space; images that are already small or lossy WebP are only moved.",
+  "settings.recompress": "Update old images",
+  "settings.recompressTitle": "Move old images into one folder and recompress them",
+  "settings.recompressConfirm":
+    "This moves existing images into the attachments/ root and replaces the ones worth shrinking with lossy WebP. Quality may drop slightly and the change cannot be undone. Export a backup first. Continue?",
+  "settings.recompressRunning": "Updating old images…",
+  "settings.recompressDone":
+    "Recompressed {n}, moved {moved}, skipped {skipped}, failed {failed}; saved {saved}.",
+  "settings.recompressNothing":
+    "Nothing needed updating (skipped {skipped}, failed {failed}).",
+  "settings.recompressFailed": "Compression failed: {message}",
   "settings.transfer": "Data transfer",
   "settings.transferHint":
     "Export one encrypted .tar containing a database snapshot, the key wrappers and every image. Use it to move to another device, keep an off-site copy, or recover after the app's data was cleared. The archive stays encrypted and needs the original passphrase.",

@@ -2394,8 +2394,19 @@ function createControllers() {
     changeDiaryDir: () => lockScreen.changeDiaryDir(),
     openRecovery: () => recoveryDialog.open(),
     openImportBackup: openImportBackupFromSettings,
+    listen,
     flushSave: flushPendingSave,
     afterRestore: reloadAfterRestore,
+    // Recompressing rewrites the sidecar files, so drop the gallery's decrypted
+    // preview cache and pick the new bytes up the next time the entry is shown.
+    afterRecompress: async () => {
+      try {
+        if (currentDate) await attachmentGallery?.load?.(currentDate);
+        await refreshList();
+      } catch (err) {
+        console.error("refresh after recompress failed:", err);
+      }
+    },
     beginNativePicker,
     endNativePicker,
   });
@@ -2662,6 +2673,7 @@ function wireEvents() {
     calibrateKdf: settingsDialog.calibrateKdf,
     restoreBackup: settingsDialog.restoreBackup,
     exportBackup: settingsDialog.exportBackup,
+    recompressImages: settingsDialog.recompressImages,
     enableBiometric: settingsDialog.enableBiometric,
     disableBiometric: settingsDialog.disableBiometric,
     // Recovery phrase: create/show-once dialog and removal.

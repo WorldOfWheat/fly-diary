@@ -525,6 +525,9 @@ export function initEventWiring(deps) {
   if (els.settingsTarImportBtn) {
     on(els.settingsTarImportBtn, "click", deps.openImportBackup);
   }
+  if (els.settingsRecompressBtn) {
+    on(els.settingsRecompressBtn, "click", deps.recompressImages);
+  }
   if (els.settingsBiometricEnable) {
     on(els.settingsBiometricEnable, "click", deps.enableBiometric);
   }

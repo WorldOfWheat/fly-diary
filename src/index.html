@@ -617,6 +617,43 @@
                         aria-live="polite"></p>
                 </details>
 
+                <!-- Images uploaded before the Rust WebP pipeline can be several
+                     megabytes each, and old vaults keep them in per-date folders.
+                     This is user-triggered because it replaces the stored bytes
+                     with a lossy copy. -->
+                <details class="settings-section" open>
+                    <summary class="settings-disclosure">
+                        <h3 class="settings-heading" data-i18n="settings.images">圖片</h3>
+                    </summary>
+                    <p class="settings-hint" data-i18n="settings.imagesHint">
+                        把既有圖片搬到統一的 attachments 資料夾，並重新編碼為有損 WebP；
+                        通常可以大幅縮小容量。已經很小或已經是壓縮 WebP 的圖片只會搬移。
+                    </p>
+                    <div class="settings-actions">
+                        <button id="settings-recompress-btn" class="btn-browse" type="button"
+                            data-i18n="settings.recompress"
+                            data-i18n-title="settings.recompressTitle"
+                            title="更新既有圖片的存放位置與壓縮格式">更新舊圖片</button>
+                    </div>
+                    <!-- Reuses the import progress bar styles. The bar is driven
+                         by the `recompress-progress` event from the backend. -->
+                    <div id="settings-recompress-progress" class="import-progress" hidden>
+                        <div class="import-progress-head">
+                            <span id="settings-recompress-progress-label"
+                                data-i18n="settings.recompressRunning">正在更新舊圖片…</span>
+                            <span id="settings-recompress-count"
+                                class="import-progress-count">0 / 0</span>
+                        </div>
+                        <div id="settings-recompress-track" class="import-progress-track"
+                            role="progressbar" aria-labelledby="settings-recompress-progress-label"
+                            aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                            <div id="settings-recompress-bar" class="import-progress-bar"></div>
+                        </div>
+                    </div>
+                    <p id="settings-recompress-status" class="settings-hint settings-status"
+                        aria-live="polite"></p>
+                </details>
+
                 <!-- Tar archive transfer: independent from the backup section
                      because importing adopts a different vault and replaces the
                      current one, while restoring is only a same-vault rescue. -->

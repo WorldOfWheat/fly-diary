@@ -1044,6 +1044,32 @@ async fn save_attachment(
     .await
 }
 
+/// Re-encode old attachments and move legacy per-date files into the flat
+/// `attachments/` folder.
+///
+/// The pass is user-triggered from Settings because it replaces the stored
+/// bytes with a lossy WebP copy. Progress is reported as `recompress-progress`
+/// events carrying `{ done, total }`.
+#[tauri::command]
+async fn recompress_attachments(
+    app: tauri::AppHandle,
+    session: tauri::State<'_, SharedSession>,
+) -> Result<attachments::RecompressReport, String> {
+    let dir = diary_dir(&app)?;
+    let key = session_key(&session)?;
+    let emitter = app.clone();
+    blocking("Recompress attachments", move || {
+        attachments::recompress_attachments_with_progress(&dir, &key, |done, total| {
+            use tauri::Emitter;
+            let _ = emitter.emit(
+                "recompress-progress",
+                serde_json::json!({ "done": done, "total": total }),
+            );
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 async fn list_attachments(
     app: tauri::AppHandle,
@@ -1924,6 +1950,7 @@ pub fn run() {
             delete_entry,
             prepare_image,
             save_attachment,
+            recompress_attachments,
             list_attachments,
             get_attachment,
             read_dropped_images,

@@ -928,9 +928,14 @@ pub fn set_favourite(
 pub fn delete_entry(dir: &Path, diary_key: &[u8; 32], date: &str) -> Result<(), String> {
     storage::validate_date(date)?;
     let conn = open(dir, diary_key)?;
-    // Attachment metadata has no foreign key because orphan attachment folders
-    // (a date without an entry) are a supported state that the settings screen
-    // can inspect and clean up. Remove the child rows explicitly instead.
+
+    // Flat storage keeps every image in one folder, so the file names must be
+    // captured before the rows disappear.
+    let attachment_ids = attachment_ids_for_date(&conn, date).unwrap_or_default();
+
+    // Attachment metadata has no foreign key because orphan attachment files
+    // are a supported state that the settings screen can inspect and clean up.
+    // Remove the child rows explicitly instead.
     conn.execute("DELETE FROM attachments WHERE date = ?1", params![date])
         .map_err(|e| format!("Failed to delete attachment metadata for {date}: {e}"))?;
     conn.execute(
@@ -942,7 +947,7 @@ pub fn delete_entry(dir: &Path, diary_key: &[u8; 32], date: &str) -> Result<(), 
         .map_err(|e| format!("Failed to delete preserved broken entry {date}: {e}"))?;
     conn.execute("DELETE FROM entries WHERE date = ?1", params![date])
         .map_err(|e| format!("Failed to delete entry {date}: {e}"))?;
-    let _ = crate::attachments::delete_all_for_date(dir, date);
+    let _ = crate::attachments::delete_attachment_files(dir, date, &attachment_ids);
     let _ = fsutil::sync_dir(dir);
     Ok(())
 }
@@ -1134,6 +1139,13 @@ pub fn key_matches(dir: &Path, diary_key: &[u8; 32]) -> Result<bool, String> {
 // Attachment manifests (metadata only; image bytes stay in sidecars)
 // ---------------------------------------------------------------------------
 
+/// Ids of the attachments that belong to a date.
+fn attachment_ids_for_date(conn: &Connection, date: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM attachments WHERE date = ?1")?;
+    let rows = stmt.query_map(params![date], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
 /// Read the ordered attachment rows for a date.
 fn read_attachment_rows(conn: &Connection, date: &str) -> Result<Vec<AttachmentRow>, String> {
     let mut stmt = conn
@@ -1165,6 +1177,38 @@ pub fn read_attachment_manifest(
     storage::validate_date(date)?;
     let conn = open(dir, diary_key)?;
     read_attachment_rows(&conn, date)
+}
+
+/// Dates that have at least one attachment row, oldest first.
+///
+/// The flat on-disk layout no longer encodes the date in the folder name, so the
+/// database is the only way to enumerate attachments across dates.
+pub fn attachment_dates(dir: &Path, diary_key: &[u8; 32]) -> Result<Vec<String>, String> {
+    let conn = open(dir, diary_key)?;
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT date FROM attachments ORDER BY date ASC")
+        .map_err(|e| format!("Failed to read attachment dates: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to read attachment dates: {e}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| format!("Failed to read attachment dates: {e}"))
+}
+
+/// Every attachment id referenced by the database.
+pub fn attachment_ids(dir: &Path, diary_key: &[u8; 32]) -> Result<HashSet<String>, String> {
+    let conn = open(dir, diary_key)?;
+    let mut stmt = conn
+        .prepare("SELECT id FROM attachments")
+        .map_err(|e| format!("Failed to read attachment ids: {e}"))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("Failed to read attachment ids: {e}"))?;
+    let mut ids = HashSet::new();
+    for row in rows {
+        ids.insert(row.map_err(|e| format!("Failed to read attachment ids: {e}"))?);
+    }
+    Ok(ids)
 }
 
 /// Replace every attachment row for a date.
