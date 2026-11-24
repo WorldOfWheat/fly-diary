@@ -622,12 +622,16 @@ export function createSettingsDialog(deps) {
     void refreshBiometric();
 
     els.settingsOverlay.hidden = false;
+    // Focus lands near the bottom of a long dialog; keep the panel at the top
+    // instead of letting the browser scroll to that field on open.
+    const body = els.settingsOverlay?.querySelector?.(".settings-body");
+    if (body) body.scrollTop = 0;
     focusTrap.activate();
     if (mobile) {
       const first = els.settingsOverlay?.querySelector?.(".settings-disclosure");
       (first ?? els.settingsClose)?.focus?.();
     } else {
-      els.settingsCurrentPass.focus();
+      els.settingsCurrentPass.focus({ preventScroll: true });
     }
   }
 

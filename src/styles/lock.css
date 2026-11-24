@@ -352,6 +352,12 @@ html[data-input-modality="keyboard"] .lock-input:focus {
   text-align: center;
 }
 
+/* An empty alert should not take up a flex gap or a min-height slot; the
+   message only exists when there is something to say. */
+.lock-error:empty {
+  display: none;
+}
+
 .lock-submit {
   padding: var(--space-5) var(--space-6);
   font-size: 0.8125rem;

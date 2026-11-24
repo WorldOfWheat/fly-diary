@@ -226,34 +226,6 @@
                     </svg>
                     <span data-i18n="editor.backToList">列表</span>
                 </button>
-                <div class="date-nav" data-testid="date-nav">
-                    <button id="prev-day" data-testid="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
-                        data-i18n-aria-label="editor.prevDay" title="前一天 (Alt+←)" aria-label="前一天">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M15 5l-7 7 7 7" />
-                        </svg>
-                    </button>
-
-                    <!-- The date pill opens our own calendar. The native
-                         <input type="date"> popup is rendered by the OS and
-                         cannot be styled, so it is only kept as a hidden value
-                         holder. -->
-                    <div class="date-display" data-testid="date-display">
-                        <button id="date-label" data-testid="date-label" class="date-label" type="button" data-i18n-title="editor.pickDate"
-                            title="選擇日期" aria-haspopup="dialog" aria-expanded="false" aria-controls="calendar">
-                            <span id="date-main" data-testid="date-main" class="date-main">—</span>
-                            <span id="date-sub" data-testid="date-sub" class="date-sub"></span>
-                        </button>
-                        <input id="date-picker" data-testid="date-picker" class="date-native" type="date" tabindex="-1" aria-hidden="true" />
-                    </div>
-
-                    <button id="next-day" data-testid="next-day" class="date-step" data-i18n-title="editor.nextDayTitle"
-                        data-i18n-aria-label="editor.nextDay" title="後一天 (Alt+→)" aria-label="後一天">
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M9 5l7 7-7 7" />
-                        </svg>
-                    </button>
-                </div>
                 <div class="status" data-testid="editor-status">
                     <!-- `aria-live` so the save / load messages are still
                          announced when the text is visually hidden on a narrow
@@ -343,14 +315,42 @@
             </section>
 
             <!-- One footer for the whole app: the live word count, the storage
-                 path and the font control. Import, statistics and the folder
-                 picker live in the settings dialog instead, so the footer only
-                 keeps the things you reach for while writing. The path is the
-                 only flexible item, so a long one truncates rather than pushing
-                 the font control off the edge. -->
+                 path, the date navigator and the font control. Import,
+                 statistics and the folder picker live in the settings dialog
+                 instead, so the footer only keeps the things you reach for
+                 while writing. The path is the only flexible item, so a long
+                 one truncates rather than pushing the controls off the edge. -->
             <footer class="editor-footer" data-testid="editor-footer">
                 <span id="word-count" data-testid="word-count" class="word-count"></span>
                 <span id="diary-path" data-testid="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
+                <div class="date-nav" data-testid="date-nav">
+                    <button id="prev-day" data-testid="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
+                        data-i18n-aria-label="editor.prevDay" title="前一天 (Alt+←)" aria-label="前一天">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M15 5l-7 7 7 7" />
+                        </svg>
+                    </button>
+
+                    <!-- The date pill opens our own calendar. The native
+                         <input type="date"> popup is rendered by the OS and
+                         cannot be styled, so it is only kept as a hidden value
+                         holder. -->
+                    <div class="date-display" data-testid="date-display">
+                        <button id="date-label" data-testid="date-label" class="date-label" type="button" data-i18n-title="editor.pickDate"
+                            title="選擇日期" aria-haspopup="dialog" aria-expanded="false" aria-controls="calendar">
+                            <span id="date-main" data-testid="date-main" class="date-main">—</span>
+                            <span id="date-sub" data-testid="date-sub" class="date-sub"></span>
+                        </button>
+                        <input id="date-picker" data-testid="date-picker" class="date-native" type="date" tabindex="-1" aria-hidden="true" />
+                    </div>
+
+                    <button id="next-day" data-testid="next-day" class="date-step" data-i18n-title="editor.nextDayTitle"
+                        data-i18n-aria-label="editor.nextDay" title="後一天 (Alt+→)" aria-label="後一天">
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M9 5l7 7-7 7" />
+                        </svg>
+                    </button>
+                </div>
                 <div class="footer-actions" data-testid="footer-actions">
                     <button id="settings-btn" data-testid="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
                         data-i18n-title="sidebar.settingsTitle" title="開啟設定">設定</button>
