@@ -48,12 +48,12 @@ jobs:
           node-version: 24.13.0
           cache: pnpm
 
-      - uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
       - name: Install Android SDK packages
         run: |
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload debug APK
         if: env.BUILD_MODE == 'debug'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fly-diary-debug-apk
           path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload signed release APK and AAB
         if: env.BUILD_MODE == 'release'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fly-diary-release-apk-and-aab
           path: |
