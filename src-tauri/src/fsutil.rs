@@ -41,7 +41,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use rand::{rngs::OsRng, RngCore};
+use rand::Rng;
 
 /// Mode for files that hold diary data: owner read/write only.
 #[cfg(unix)]
@@ -64,11 +64,12 @@ const TEMP_ATTEMPTS: usize = 8;
 /// predictable temporary name lets another local writer pre-create a symlink
 /// at that path and redirect the subsequent write.
 fn temp_path(path: &Path) -> PathBuf {
+    let mut rng = rand::rng();
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(
         "{TEMP_SUFFIX}-{:016x}{:016x}",
-        OsRng.next_u64(),
-        OsRng.next_u64()
+        rng.next_u64(),
+        rng.next_u64()
     ));
     path.with_file_name(name)
 }

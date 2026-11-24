@@ -44,7 +44,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
-use rand::RngCore;
+use rand::Rng;
 use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -457,7 +457,7 @@ fn cleanup_legacy_date_dir(dir: &Path, date: &str) {
 
 fn new_attachment_id() -> String {
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let mut id = String::with_capacity(32);
     for byte in bytes {
         id.push_str(&format!("{byte:02x}"));

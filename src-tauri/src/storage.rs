@@ -36,7 +36,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rand::{rngs::OsRng, RngCore};
+use rand::Rng;
 use rayon::prelude::*;
 use serde::Serialize;
 use zeroize::{Zeroize, Zeroizing};
@@ -307,7 +307,7 @@ impl Vault {
 /// Create a random 16-byte identifier.
 fn new_id() -> [u8; 16] {
     let mut id = [0u8; 16];
-    OsRng.fill_bytes(&mut id);
+    rand::rng().fill_bytes(&mut id);
     id
 }
 
