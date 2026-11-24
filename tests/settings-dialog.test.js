@@ -84,7 +84,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "2.1.0",
+      version: "2.2.0",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -305,7 +305,7 @@ test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "2.1.0");
+    assert.equal(els.settingsAppVersion.textContent, "2.2.0");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
@@ -1046,11 +1046,11 @@ test("recompressImages shows progress events and hides the bar when done", async
         assert.equal(els.settingsRecompressProgress.hidden, false);
         handler({ payload: { done: 1, total: 3 } });
         assert.equal(els.settingsRecompressCount.textContent, "1 / 3");
+        assert.equal(els.settingsRecompressBar.style.props.get("width"), "33%");
         assert.equal(
-          els.settingsRecompressBar.style.props.get("width"),
-          "33%"
+          els.settingsRecompressTrack.getAttribute("aria-valuenow"),
+          "33"
         );
-        assert.equal(els.settingsRecompressTrack.getAttribute("aria-valuenow"), "33");
 
         resolveCommand(report);
         await promise;
