@@ -752,6 +752,7 @@ function appendHighlighted(container, text, ranges) {
       continue;
     }
     const mark = document.createElement("mark");
+    mark.dataset.testid = "entry-highlight";
     mark.textContent = segment.text;
     container.append(mark);
   }
@@ -761,6 +762,7 @@ function appendHighlighted(container, text, ranges) {
 function createRow(entry, top) {
   const li = document.createElement("li");
   li.className = "entry-row";
+  li.dataset.testid = "entry-row";
   li.style.top = `${top}px`;
 
   // The row itself is the interactive element: a real button gives keyboard
@@ -771,23 +773,29 @@ function createRow(entry, top) {
     "entry-item" +
     (entry.favourite ? " favourite" : "") +
     (entry.date === currentDate ? " active" : "");
+  button.dataset.testid = "entry-open";
   button.dataset.date = entry.date;
   if (entry.date === currentDate) button.setAttribute("aria-current", "date");
 
   const dateRow = document.createElement("div");
   dateRow.className = "entry-date";
+  dateRow.dataset.testid = "entry-date";
   const dateText = document.createElement("span");
+  dateText.dataset.testid = "entry-date-text";
   dateText.textContent = entry.date;
   const weekday = document.createElement("span");
   weekday.className = "entry-weekday";
+  weekday.dataset.testid = "entry-weekday";
   weekday.textContent = weekdayOf(entry.date);
   dateRow.append(dateText, weekday);
 
   const preview = document.createElement("div");
+  preview.dataset.testid = "entry-preview";
   if (Array.isArray(entry.matches) && typeof entry.snippet === "string") {
     preview.className = "entry-preview search-preview";
     const title = document.createElement("span");
     title.className = "search-title";
+    title.dataset.testid = "entry-search-title";
     title.textContent = entry.title || t("common.untitled");
     preview.append(title);
     if (entry.snippet) {
@@ -809,10 +817,12 @@ function createRow(entry, top) {
 function createMonthRow(month, top = null) {
   const li = document.createElement("li");
   li.className = "entry-month" + (top === null ? " entry-month-static" : "");
+  li.dataset.testid = "entry-month-row";
   if (top !== null) li.style.top = `${top}px`;
 
   const label = document.createElement("span");
   label.className = "entry-month-label";
+  label.dataset.testid = "entry-month-label";
   label.textContent = formatMonth(`${month}-01`);
   li.appendChild(label);
   return li;
@@ -877,6 +887,7 @@ function renderBrokenList() {
     els.list.replaceChildren();
     const li = document.createElement("li");
     li.className = "list-empty";
+    li.dataset.testid = "list-empty";
     li.textContent = searchQuery.trim()
       ? t("sidebar.emptyFiltered")
       : t("sidebar.emptyBroken");
@@ -894,9 +905,11 @@ function renderBrokenList() {
     }
 
     const li = document.createElement("li");
+    li.dataset.testid = "broken-row";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "entry-item broken-item";
+    button.dataset.testid = "broken-open";
     button.dataset.date = broken.date;
     if (broken.date === currentDate) {
       button.setAttribute("aria-current", "date");
@@ -904,15 +917,19 @@ function renderBrokenList() {
 
     const dateRow = document.createElement("div");
     dateRow.className = "entry-date";
+    dateRow.dataset.testid = "broken-date";
     const dateText = document.createElement("span");
+    dateText.dataset.testid = "broken-date-text";
     dateText.textContent = broken.date;
     const weekday = document.createElement("span");
     weekday.className = "entry-weekday";
+    weekday.dataset.testid = "broken-weekday";
     weekday.textContent = weekdayOf(broken.date);
     dateRow.append(dateText, weekday);
 
     const preview = document.createElement("div");
     preview.className = "entry-preview";
+    preview.dataset.testid = "broken-preview";
     preview.textContent = `${brokenReasonText(broken.reason)} · ${formatBytes(
       broken.size
     )}`;
@@ -967,6 +984,7 @@ function renderList() {
     hideYearJump();
     const li = document.createElement("li");
     li.className = "list-empty";
+    li.dataset.testid = "list-empty";
     if (searchQuery.trim()) {
       li.textContent =
         currentView === "favourites"
@@ -1045,6 +1063,7 @@ function renderYearJump() {
     const options = years.map((year) => {
       const option = document.createElement("option");
       option.value = year;
+      option.dataset.testid = `year-option-${year}`;
       option.textContent = year;
       return option;
     });
@@ -1131,6 +1150,7 @@ function renderHistory() {
   const rows = items.map((item) => {
     const li = document.createElement("li");
     li.className = "on-this-day-item";
+    li.dataset.testid = "on-this-day-item";
 
     const button = document.createElement("button");
     button.type = "button";
@@ -1138,16 +1158,20 @@ function renderHistory() {
       "history-card" +
       (item.favourite ? " favourite" : "") +
       (item.broken ? " broken" : "");
+    button.dataset.testid = "history-card";
     button.dataset.date = item.date;
 
     const offset = document.createElement("span");
     offset.className = "history-offset";
+    offset.dataset.testid = "history-card-offset";
     offset.textContent = t(item.offsetKey);
     const date = document.createElement("span");
     date.className = "history-date";
+    date.dataset.testid = "history-card-date";
     date.textContent = item.date;
     const title = document.createElement("span");
     title.className = "history-title";
+    title.dataset.testid = "history-card-title";
     const titleText = historyTitle(item);
     title.textContent = titleText;
 

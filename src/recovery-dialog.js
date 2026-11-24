@@ -105,6 +105,7 @@ export function createRecoveryDialog(deps) {
     words.forEach((word, index) => {
       const item = document.createElement("li");
       item.className = "recovery-word";
+      item.dataset.testid = "recovery-word-item";
       item.setAttribute(
         "aria-label",
         deps.t("recovery.wordLabel", { n: index + 1, word }),
@@ -112,11 +113,13 @@ export function createRecoveryDialog(deps) {
 
       const number = document.createElement("span");
       number.className = "recovery-word-index";
+      number.dataset.testid = "recovery-word-index";
       number.textContent = String(index + 1).padStart(2, "0");
       number.setAttribute("aria-hidden", "true");
 
       const text = document.createElement("span");
       text.className = "recovery-word-text";
+      text.dataset.testid = "recovery-word-text";
       text.textContent = word;
 
       item.append(number, text);

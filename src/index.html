@@ -12,16 +12,16 @@
 
 <body>
     <!-- Lock screen: shown until the vault is unlocked. -->
-    <div id="lock-screen" class="lock-screen">
-        <div class="lock-stack">
-        <form id="lock-form" class="lock-card" autocomplete="off">
+    <div id="lock-screen" data-testid="lock-screen" class="lock-screen">
+        <div class="lock-stack" data-testid="lock-stack">
+        <form id="lock-form" data-testid="lock-form" class="lock-card" autocomplete="off">
             <div class="lock-head">
                 <h1 class="lock-title">Fly Diary</h1>
                 <!-- Language and theme switches. Both live on the lock screen
                      too, because a user who cannot read the setup form needs
                      them before they can get any further. -->
-                <div class="lock-actions">
-                    <button id="theme-toggle" class="icon-toggle" type="button" data-theme-mode="system"
+                <div class="lock-actions" data-testid="lock-actions">
+                    <button id="theme-toggle" data-testid="theme-toggle" class="icon-toggle" type="button" data-theme-mode="system"
                         data-i18n-title="theme.toggleTitle" data-i18n-aria-label="theme.toggle" title="切換主題">
                         <svg class="icon-sun" viewBox="0 0 24 24" aria-hidden="true">
                             <circle cx="12" cy="12" r="4.2" />
@@ -36,91 +36,91 @@
                             <path d="M12 3.8v16.4a8.2 8.2 0 000-16.4z" class="icon-auto-fill" />
                         </svg>
                     </button>
-                    <button id="lang-toggle" class="lang-toggle" type="button" data-i18n-title="lang.switchTitle"
+                    <button id="lang-toggle" data-testid="lang-toggle" class="lang-toggle" type="button" data-i18n-title="lang.switchTitle"
                         data-i18n-aria-label="lang.switch">EN</button>
                 </div>
             </div>
-            <p id="lock-subtitle" class="lock-subtitle" data-i18n="lock.subtitle.unlock">請輸入密碼以解鎖日記</p>
+            <p id="lock-subtitle" data-testid="lock-subtitle" class="lock-subtitle" data-i18n="lock.subtitle.unlock">請輸入密碼以解鎖日記</p>
 
             <!-- The workspace (diary folder) currently in use. Shown once a
                  folder has been configured, so the user can see which diary
                  they are about to unlock and switch to another one without
                  having to unlock first. -->
-            <div id="workspace-row" class="lock-workspace" hidden>
-                <span id="workspace-path" class="lock-workspace-path" data-i18n-title="lock.workspaceTitle"
+            <div id="workspace-row" data-testid="workspace-row" class="lock-workspace" hidden>
+                <span id="workspace-path" data-testid="workspace-path" class="lock-workspace-path" data-i18n-title="lock.workspaceTitle"
                     title="目前的工作區"></span>
-                <button id="switch-workspace" class="btn-browse" type="button" data-i18n="lock.switchWorkspace"
+                <button id="switch-workspace" data-testid="switch-workspace" class="btn-browse" type="button" data-i18n="lock.switchWorkspace"
                     data-i18n-title="lock.switchWorkspaceTitle" title="切換工作區">切換工作區</button>
             </div>
 
             <!-- Shown on first run, and again whenever the user asks to switch
                  workspace: choose where the encrypted diary is stored. -->
-            <div id="path-field" class="lock-field" hidden>
+            <div id="path-field" data-testid="path-field" class="lock-field" hidden>
                 <label class="lock-label" for="diary-dir" data-i18n="lock.pathLabel">日記儲存資料夾</label>
-                <div class="lock-path-row">
-                    <input id="diary-dir" class="lock-input" type="text" data-i18n-placeholder="lock.pathPlaceholder"
+                <div class="lock-path-row" data-testid="lock-path-row">
+                    <input id="diary-dir" data-testid="diary-dir" class="lock-input" type="text" data-i18n-placeholder="lock.pathPlaceholder"
                         placeholder="/home/user/Documents/diary" spellcheck="false" autocomplete="off" />
-                    <button id="browse-dir" class="btn-browse" type="button" data-i18n="lock.browse"
+                    <button id="browse-dir" data-testid="browse-dir" class="btn-browse" type="button" data-i18n="lock.browse"
                         data-i18n-title="lock.browseTitle" title="選擇資料夾">瀏覽…</button>
                 </div>
                 <p class="lock-hint" data-i18n="lock.pathHint">此路徑會寫入設定檔，之後每次啟動都從這裡讀取日記。</p>
-                <button id="cancel-workspace" class="btn-browse lock-cancel-workspace" type="button"
+                <button id="cancel-workspace" data-testid="cancel-workspace" class="btn-browse lock-cancel-workspace" type="button"
                     data-i18n="common.cancel">取消</button>
             </div>
 
             <label class="sr-only" for="passphrase" data-i18n="lock.passphraseLabel">密碼</label>
-            <input id="passphrase" class="lock-input" type="password" data-i18n-placeholder="lock.passphrase"
+            <input id="passphrase" data-testid="passphrase" class="lock-input" type="password" data-i18n-placeholder="lock.passphrase"
                 placeholder="密碼" autocomplete="current-password" aria-describedby="lock-error" />
             <label class="sr-only" for="passphrase-confirm" data-i18n="lock.passphraseConfirmLabel">再次輸入密碼</label>
-            <input id="passphrase-confirm" class="lock-input" type="password"
+            <input id="passphrase-confirm" data-testid="passphrase-confirm" class="lock-input" type="password"
                 data-i18n-placeholder="lock.passphraseConfirm" placeholder="再次輸入密碼" autocomplete="new-password"
                 aria-describedby="lock-error" hidden />
 
             <!-- First run only: Argon2id cost parameters. -->
-            <details id="advanced-field" class="lock-advanced" hidden>
-                <summary class="lock-advanced-summary" data-i18n="lock.advanced">進階選項（金鑰派生參數）</summary>
+            <details id="advanced-field" data-testid="advanced-field" class="lock-advanced" hidden>
+                <summary class="lock-advanced-summary" data-testid="lock-advanced-summary" data-i18n="lock.advanced">進階選項（金鑰派生參數）</summary>
                 <p class="lock-hint" data-i18n="lock.advancedHint">
                     密碼會經由 Argon2id 派生主金鑰，再由主金鑰包裝日記金鑰。
                     提高參數會讓暴力破解更困難，但解鎖也會變慢。
                 </p>
-                <div class="lock-advanced-grid">
+                <div class="lock-advanced-grid" data-testid="lock-advanced-grid">
                     <label class="lock-label" for="kdf-memory" data-i18n="lock.kdfMemory">記憶體 (MiB)</label>
-                    <input id="kdf-memory" class="lock-input" type="number" step="1" min="64" max="1024" />
+                    <input id="kdf-memory" data-testid="kdf-memory" class="lock-input" type="number" step="1" min="64" max="1024" />
                     <label class="lock-label" for="kdf-iterations" data-i18n="lock.kdfIterations">迭代次數</label>
-                    <input id="kdf-iterations" class="lock-input" type="number" step="1" min="2" max="16" />
+                    <input id="kdf-iterations" data-testid="kdf-iterations" class="lock-input" type="number" step="1" min="2" max="16" />
                     <label class="lock-label" for="kdf-parallelism" data-i18n="lock.kdfParallelism">平行度</label>
-                    <input id="kdf-parallelism" class="lock-input" type="number" step="1" min="1" max="16" />
+                    <input id="kdf-parallelism" data-testid="kdf-parallelism" class="lock-input" type="number" step="1" min="1" max="16" />
                 </div>
-                <p id="kdf-estimate" class="lock-hint"></p>
-                <button id="kdf-reset" class="btn-browse" type="button" data-i18n="lock.kdfReset">恢復預設值</button>
+                <p id="kdf-estimate" data-testid="kdf-estimate" class="lock-hint"></p>
+                <button id="kdf-reset" data-testid="kdf-reset" class="btn-browse" type="button" data-i18n="lock.kdfReset">恢復預設值</button>
             </details>
 
-            <p id="lock-error" class="lock-error" role="alert"></p>
+            <p id="lock-error" data-testid="lock-error" class="lock-error" role="alert"></p>
 
-            <button id="lock-submit" class="btn-primary lock-submit" type="submit"
+            <button id="lock-submit" data-testid="lock-submit" class="btn-primary lock-submit" type="submit"
                 data-i18n="lock.submitUnlock">解鎖</button>
 
             <!-- Shown when Android biometric unlock is enrolled for this vault. -->
-            <button id="lock-biometric" class="btn-browse lock-recovery-open" type="button"
+            <button id="lock-biometric" data-testid="lock-biometric" class="btn-browse lock-recovery-open" type="button"
                 data-i18n="lock.biometric" hidden>使用生物辨識解鎖</button>
 
             <!-- Shown only after the passphrase was accepted but diary.db is
                  unreadable. Restoring is the supported rescue path. -->
-            <button id="lock-restore" class="btn-browse lock-recovery-open" type="button"
+            <button id="lock-restore" data-testid="lock-restore" class="btn-browse lock-recovery-open" type="button"
                 data-i18n="lock.restoreBackup" hidden>還原加密備份</button>
 
             <!-- First run only: adopt a vault from an encrypted .tar backup. -->
-            <button id="lock-import" class="btn-browse lock-recovery-open" type="button"
+            <button id="lock-import" data-testid="lock-import" class="btn-browse lock-recovery-open" type="button"
                 data-i18n="lock.importBackup" hidden>匯入加密備份</button>
 
             <!-- Optional second way in. Hidden unless the current vault has a
                  recovery phrase; the panel replaces this form rather than
                  stacking another one on top of it. -->
-            <button id="recovery-open" class="btn-browse lock-recovery-open" type="button"
+            <button id="recovery-open" data-testid="recovery-open" class="btn-browse lock-recovery-open" type="button"
                 data-i18n="recovery.open" hidden>使用回復短語</button>
         </form>
 
-        <form id="recovery-form" class="lock-card" autocomplete="off" hidden>
+        <form id="recovery-form" data-testid="recovery-form" class="lock-card" autocomplete="off" hidden>
             <div class="lock-head">
                 <h2 class="lock-title" data-i18n="recovery.unlockTitle">使用回復短語</h2>
             </div>
@@ -128,38 +128,38 @@
                 輸入 12 個 BIP39 英文單字，並設定一組新密碼。輸入前幾個字母會顯示單字建議；
                 恢復後原本的密碼會失效，但日記內容不會重新加密。
             </p>
-            <div id="recovery-phrase-fields" class="word-grid recovery-unlock-fields" role="group"
+            <div id="recovery-phrase-fields" data-testid="recovery-phrase-fields" class="word-grid recovery-unlock-fields" role="group"
                 data-i18n-aria-label="recovery.phraseLabel" aria-label="回復短語"></div>
             <label class="sr-only" for="recovery-new-pass" data-i18n="recovery.newPassLabel">新密碼</label>
-            <input id="recovery-new-pass" class="lock-input" type="password" autocomplete="new-password"
+            <input id="recovery-new-pass" data-testid="recovery-new-pass" class="lock-input" type="password" autocomplete="new-password"
                 data-i18n-placeholder="recovery.newPass" placeholder="新密碼（至少 6 個字元）"
                 aria-describedby="recovery-unlock-error" />
             <label class="sr-only" for="recovery-new-pass-confirm"
                 data-i18n="recovery.newPassConfirmLabel">再次輸入新密碼</label>
-            <input id="recovery-new-pass-confirm" class="lock-input" type="password"
+            <input id="recovery-new-pass-confirm" data-testid="recovery-new-pass-confirm" class="lock-input" type="password"
                 autocomplete="new-password" data-i18n-placeholder="recovery.newPassConfirm"
                 placeholder="再次輸入新密碼" aria-describedby="recovery-unlock-error" />
 
-            <p id="recovery-unlock-error" class="lock-error" role="alert"></p>
+            <p id="recovery-unlock-error" data-testid="recovery-unlock-error" class="lock-error" role="alert"></p>
 
-            <button id="recovery-submit" class="btn-primary lock-submit" type="submit"
+            <button id="recovery-submit" data-testid="recovery-submit" class="btn-primary lock-submit" type="submit"
                 data-i18n="recovery.recover">解鎖並設定新密碼</button>
-            <button id="recovery-back" class="btn-browse lock-recovery-open" type="button"
+            <button id="recovery-back" data-testid="recovery-back" class="btn-browse lock-recovery-open" type="button"
                 data-i18n="recovery.back">返回密碼解鎖</button>
         </form>
         </div>
     </div>
 
-    <div class="app" id="app" hidden>
-        <aside class="sidebar" id="app-sidebar">
-            <header class="sidebar-header">
+    <div class="app" id="app" data-testid="app" hidden>
+        <aside class="sidebar" id="app-sidebar" data-testid="app-sidebar">
+            <header class="sidebar-header" data-testid="sidebar-header">
                 <h1>Fly Diary</h1>
-                <div class="sidebar-header-actions">
-                    <button id="new-today" class="btn-primary" data-i18n="sidebar.newToday"
+                <div class="sidebar-header-actions" data-testid="sidebar-header-actions">
+                    <button id="new-today" data-testid="new-today" class="btn-primary" data-i18n="sidebar.newToday"
                         data-i18n-title="sidebar.newTodayTitle" title="前往今天 (Ctrl/Cmd+T)">
                         今天
                     </button>
-                    <button id="sidebar-collapse" class="btn-icon sidebar-toggle" type="button"
+                    <button id="sidebar-collapse" data-testid="sidebar-collapse" class="btn-icon sidebar-toggle" type="button"
                         data-i18n-title="sidebar.collapseTitle" data-i18n-aria-label="sidebar.collapse"
                         title="收合側邊欄" aria-label="收合側邊欄" aria-controls="app-sidebar"
                         aria-expanded="true">
@@ -174,41 +174,41 @@
                  re-filter rather than a second list to keep in sync. The broken
                  tab is different: it is hidden until a file fails to decrypt,
                  and it renders its own (non-virtualised) list. -->
-            <div class="view-switch" role="group" data-i18n-aria-label="sidebar.viewLabel" aria-label="日記檢視">
-                <button id="view-all" class="view-tab is-active" type="button" aria-pressed="true"
+            <div class="view-switch" data-testid="view-switch" role="group" data-i18n-aria-label="sidebar.viewLabel" aria-label="日記檢視">
+                <button id="view-all" data-testid="view-all" class="view-tab is-active" type="button" aria-pressed="true"
                     data-i18n="sidebar.viewAll" data-i18n-title="sidebar.viewAllTitle" title="顯示所有日記">全部</button>
-                <button id="view-favourites" class="view-tab" type="button" aria-pressed="false"
+                <button id="view-favourites" data-testid="view-favourites" class="view-tab" type="button" aria-pressed="false"
                     data-i18n="sidebar.viewFavourites" data-i18n-title="sidebar.viewFavouritesTitle"
                     title="只顯示收藏的日記">收藏</button>
-                <button id="view-broken" class="view-tab view-tab-broken" type="button" aria-pressed="false"
+                <button id="view-broken" data-testid="view-broken" class="view-tab view-tab-broken" type="button" aria-pressed="false"
                     data-i18n="sidebar.viewBroken" data-i18n-title="sidebar.viewBrokenTitle" title="無法解密的日記檔"
-                    hidden>損壞<span id="broken-count" class="view-badge"></span></button>
+                    hidden>損壞<span id="broken-count" data-testid="broken-count" class="view-badge"></span></button>
             </div>
-            <div class="search-wrap">
+            <div class="search-wrap" data-testid="search-wrap">
                 <label class="sr-only" for="search" data-i18n="sidebar.searchLabel">搜尋日期、標題或內容</label>
-                <input id="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期、標題或內容…"
+                <input id="search" data-testid="search" type="search" data-i18n-placeholder="sidebar.search" placeholder="搜尋日期、標題或內容…"
                     autocomplete="off" />
             </div>
             <!-- Virtual scrolling: only the rows inside the viewport are in
                  the DOM. `entry-spacer` reserves the full scroll height and
                  `entry-list` is absolutely positioned inside it. -->
-            <div id="entry-scroll" class="entry-scroll">
-                <div id="entry-year-bar" class="entry-year-bar" hidden>
+            <div id="entry-scroll" data-testid="entry-scroll" class="entry-scroll">
+                <div id="entry-year-bar" data-testid="entry-year-bar" class="entry-year-bar" hidden>
                     <label class="year-jump-label" for="year-jump" data-i18n="sidebar.yearJump">年份</label>
-                    <select id="year-jump" class="year-jump"></select>
+                    <select id="year-jump" data-testid="year-jump" class="year-jump"></select>
                 </div>
-                <div id="entry-spacer" class="entry-spacer">
-                    <ul id="entry-list" class="entry-list"></ul>
+                <div id="entry-spacer" data-testid="entry-spacer" class="entry-spacer">
+                    <ul id="entry-list" data-testid="entry-list" class="entry-list"></ul>
                 </div>
             </div>
         </aside>
 
-        <main class="editor">
-            <header class="editor-header">
+        <main class="editor" data-testid="editor">
+            <header class="editor-header" data-testid="editor-header">
                 <!-- Desktop-only: brings the sidebar back after it was collapsed.
                      Hidden while the sidebar is open, and on phone layouts where
                      the list is already a separate layer. -->
-                <button id="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button"
+                <button id="sidebar-expand" data-testid="sidebar-expand" class="btn-icon sidebar-expand-btn" type="button"
                     data-i18n-title="sidebar.expandTitle" data-i18n-aria-label="sidebar.expand"
                     title="展開側邊欄" aria-label="展開側邊欄" aria-controls="app-sidebar"
                     aria-expanded="false">
@@ -219,15 +219,15 @@
                 <!-- Phone-only: returns from the editor layer to the list layer.
                      Hidden on wider viewports, where both panes are visible at
                      once and there is nothing to go back to. -->
-                <button id="back-to-list" class="btn-back" type="button" data-i18n="editor.backToList"
+                <button id="back-to-list" data-testid="back-to-list" class="btn-back" type="button" data-i18n="editor.backToList"
                     data-i18n-title="editor.backToListTitle" title="回到日記列表" hidden>
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M15 5l-7 7 7 7" />
                     </svg>
                     <span data-i18n="editor.backToList">列表</span>
                 </button>
-                <div class="date-nav">
-                    <button id="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
+                <div class="date-nav" data-testid="date-nav">
+                    <button id="prev-day" data-testid="prev-day" class="date-step" data-i18n-title="editor.prevDayTitle"
                         data-i18n-aria-label="editor.prevDay" title="前一天 (Alt+←)" aria-label="前一天">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M15 5l-7 7 7 7" />
@@ -238,44 +238,44 @@
                          <input type="date"> popup is rendered by the OS and
                          cannot be styled, so it is only kept as a hidden value
                          holder. -->
-                    <div class="date-display">
-                        <button id="date-label" class="date-label" type="button" data-i18n-title="editor.pickDate"
+                    <div class="date-display" data-testid="date-display">
+                        <button id="date-label" data-testid="date-label" class="date-label" type="button" data-i18n-title="editor.pickDate"
                             title="選擇日期" aria-haspopup="dialog" aria-expanded="false" aria-controls="calendar">
-                            <span id="date-main" class="date-main">—</span>
-                            <span id="date-sub" class="date-sub"></span>
+                            <span id="date-main" data-testid="date-main" class="date-main">—</span>
+                            <span id="date-sub" data-testid="date-sub" class="date-sub"></span>
                         </button>
-                        <input id="date-picker" class="date-native" type="date" tabindex="-1" aria-hidden="true" />
+                        <input id="date-picker" data-testid="date-picker" class="date-native" type="date" tabindex="-1" aria-hidden="true" />
                     </div>
 
-                    <button id="next-day" class="date-step" data-i18n-title="editor.nextDayTitle"
+                    <button id="next-day" data-testid="next-day" class="date-step" data-i18n-title="editor.nextDayTitle"
                         data-i18n-aria-label="editor.nextDay" title="後一天 (Alt+→)" aria-label="後一天">
                         <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M9 5l7 7-7 7" />
                         </svg>
                     </button>
                 </div>
-                <div class="status">
+                <div class="status" data-testid="editor-status">
                     <!-- `aria-live` so the save / load messages are still
                          announced when the text is visually hidden on a narrow
                          window (see the max-width: 400px block in styles/responsive.css). -->
-                    <span id="status" class="status-text" role="status" aria-live="polite"></span>
+                    <span id="status" data-testid="status" class="status-text" role="status" aria-live="polite"></span>
                     <!-- An entry that already has content opens read-only, so a
                          stray keystroke cannot rewrite a finished page. Clicking
                          this swaps the editor into its writable state; the button
                          disappears once unlocked and comes back on the next
                          entry that opens locked. -->
-                    <button id="edit-btn" class="btn-edit" type="button" data-i18n="editor.unlock"
+                    <button id="edit-btn" data-testid="edit-btn" class="btn-edit" type="button" data-i18n="editor.unlock"
                         data-i18n-title="editor.unlockTitle" title="解鎖編輯" hidden>解鎖編輯</button>
                     <!-- Bookmark toggle. `aria-pressed` carries the state so
                          screen readers announce it without a separate label. -->
-                    <button id="favourite-btn" class="btn-favourite" type="button" aria-pressed="false"
+                    <button id="favourite-btn" data-testid="favourite-btn" class="btn-favourite" type="button" aria-pressed="false"
                         data-i18n-title="editor.favouriteTitle" title="加入收藏 (Ctrl/Cmd+D)">
                         <svg class="star" viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M12 3.5l2.6 5.6 6.1.8-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.9l6.1-.8z" />
                         </svg>
-                        <span id="favourite-label" data-i18n="editor.favourite">收藏</span>
+                        <span id="favourite-label" data-testid="favourite-label" data-i18n="editor.favourite">收藏</span>
                     </button>
-                    <button id="delete-btn" class="btn-danger" data-i18n="common.delete"
+                    <button id="delete-btn" data-testid="delete-btn" class="btn-danger" data-i18n="common.delete"
                         data-i18n-title="editor.deleteTitle" title="刪除這一天的日記">刪除</button>
                 </div>
             </header>
@@ -283,63 +283,63 @@
             <!-- Quick links to the same date in the previous five years. The
                  whole section is hidden when none exist; the summary toggles
                  the list, and the open state is persisted by main.js. -->
-            <details id="on-this-day" class="on-this-day" open hidden>
-                <summary class="on-this-day-summary">
-                    <span id="on-this-day-title" class="on-this-day-title" data-i18n="history.title">這一天的回顧</span>
+            <details id="on-this-day" data-testid="on-this-day" class="on-this-day" open hidden>
+                <summary class="on-this-day-summary" data-testid="on-this-day-summary">
+                    <span id="on-this-day-title" data-testid="on-this-day-title" class="on-this-day-title" data-i18n="history.title">這一天的回顧</span>
                     <svg class="history-chevron" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M6 9l6 6 6-6" />
                     </svg>
                 </summary>
-                <ul id="on-this-day-list" class="on-this-day-list"></ul>
+                <ul id="on-this-day-list" data-testid="on-this-day-list" class="on-this-day-list"></ul>
             </details>
 
             <!-- Shown only when the current entry file cannot be decrypted. The
                  editor stays visible but read-only, so the user can see the date
                  and decide whether to export or delete. -->
-            <div id="broken-banner" class="broken-banner" role="alert" hidden>
-                <div class="broken-banner-text">
+            <div id="broken-banner" data-testid="broken-banner" class="broken-banner" role="alert" hidden>
+                <div class="broken-banner-text" data-testid="broken-banner-text">
                     <strong data-i18n="broken.bannerTitle">這個檔案無法解密</strong>
-                    <span id="broken-banner-reason" class="broken-banner-reason"></span>
+                    <span id="broken-banner-reason" data-testid="broken-banner-reason" class="broken-banner-reason"></span>
                 </div>
-                <div class="broken-banner-actions">
-                    <button id="broken-export-btn" class="btn-lock" type="button" data-i18n="broken.export"
+                <div class="broken-banner-actions" data-testid="broken-banner-actions">
+                    <button id="broken-export-btn" data-testid="broken-export-btn" class="btn-lock" type="button" data-i18n="broken.export"
                         data-i18n-title="broken.exportTitle" title="把原始檔案另存一份">匯出備份</button>
-                    <button id="broken-delete-btn" class="btn-danger" type="button" data-i18n="broken.delete"
+                    <button id="broken-delete-btn" data-testid="broken-delete-btn" class="btn-danger" type="button" data-i18n="broken.delete"
                         data-i18n-title="broken.deleteTitle" title="永久刪除這個檔案">刪除檔案</button>
                 </div>
             </div>
 
-            <div class="title-wrap">
+            <div class="title-wrap" data-testid="title-wrap">
                 <label class="sr-only" for="title" data-i18n="editor.titleLabel">日記標題</label>
-                <input id="title" class="title-input" type="text" data-i18n-placeholder="editor.titlePlaceholder"
+                <input id="title" data-testid="title" class="title-input" type="text" data-i18n-placeholder="editor.titlePlaceholder"
                     placeholder="標題" maxlength="200" />
             </div>
 
-            <div class="editor-body">
+            <div class="editor-body" data-testid="editor-body">
                 <label class="sr-only" for="content" data-i18n="editor.contentLabel">日記內容</label>
-                <textarea id="content" data-i18n-placeholder="editor.contentPlaceholder" placeholder="今天過得如何？"
+                <textarea id="content" data-testid="content" data-i18n-placeholder="editor.contentPlaceholder" placeholder="今天過得如何？"
                     spellcheck="false"></textarea>
             </div>
 
             <!-- Images are an optional strip below the text. The textarea stays
                  a plain textarea; the gallery is its own module and stores its
                  files next to the entry, not inside the XML payload. -->
-            <section id="attachments" class="attachments" aria-labelledby="attachments-title" hidden>
-                <div class="attachments-head">
-                    <h2 id="attachments-title" class="attachments-title" data-i18n="attachments.title">圖片</h2>
-                    <div class="attachments-actions">
-                        <button id="attachment-paste" class="btn-attachment" type="button" data-i18n="attachments.paste"
+            <section id="attachments" data-testid="attachments" class="attachments" aria-labelledby="attachments-title" hidden>
+                <div class="attachments-head" data-testid="attachments-head">
+                    <h2 id="attachments-title" data-testid="attachments-title" class="attachments-title" data-i18n="attachments.title">圖片</h2>
+                    <div class="attachments-actions" data-testid="attachments-actions">
+                        <button id="attachment-paste" data-testid="attachment-paste" class="btn-attachment" type="button" data-i18n="attachments.paste"
                             data-i18n-title="attachments.pasteTitle" title="貼上圖片">貼上圖片</button>
-                        <button id="attachment-add" class="btn-attachment" type="button" data-i18n="attachments.add"
+                        <button id="attachment-add" data-testid="attachment-add" class="btn-attachment" type="button" data-i18n="attachments.add"
                             data-i18n-title="attachments.addTitle" title="加入圖片">加入圖片</button>
                     </div>
-                    <input id="attachment-input" class="attachment-input" type="file"
+                    <input id="attachment-input" data-testid="attachment-input" class="attachment-input" type="file"
                         accept="image/webp,image/jpeg,image/png,image/*" multiple hidden />
                 </div>
-                <div id="attachment-list" class="attachment-list" role="list" data-i18n-aria-label="attachments.title"
+                <div id="attachment-list" data-testid="attachment-list" class="attachment-list" role="list" data-i18n-aria-label="attachments.title"
                     aria-label="圖片"></div>
-                <p id="attachment-empty" class="attachment-empty" data-i18n="attachments.empty">還沒有圖片</p>
-                <p id="attachment-status" class="attachment-status" role="status" aria-live="polite"></p>
+                <p id="attachment-empty" data-testid="attachment-empty" class="attachment-empty" data-i18n="attachments.empty">還沒有圖片</p>
+                <p id="attachment-status" data-testid="attachment-status" class="attachment-status" role="status" aria-live="polite"></p>
             </section>
 
             <!-- One footer for the whole app: the live word count, the storage
@@ -348,23 +348,23 @@
                  keeps the things you reach for while writing. The path is the
                  only flexible item, so a long one truncates rather than pushing
                  the font control off the edge. -->
-            <footer class="editor-footer">
-                <span id="word-count" class="word-count"></span>
-                <span id="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
-                <div class="footer-actions">
-                    <button id="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
+            <footer class="editor-footer" data-testid="editor-footer">
+                <span id="word-count" data-testid="word-count" class="word-count"></span>
+                <span id="diary-path" data-testid="diary-path" class="path" data-i18n-title="sidebar.pathTitle" title="日記儲存位置"></span>
+                <div class="footer-actions" data-testid="footer-actions">
+                    <button id="settings-btn" data-testid="settings-btn" class="btn-lock" data-i18n="sidebar.settings"
                         data-i18n-title="sidebar.settingsTitle" title="開啟設定">設定</button>
-                    <button id="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
+                    <button id="lock-btn" data-testid="lock-btn" class="btn-lock" data-i18n="sidebar.lock" data-i18n-title="sidebar.lockTitle"
                         title="鎖定日記 (Ctrl/Cmd+L)">鎖定</button>
                 </div>
                 <!-- Font size control. The whole UI is sized in rem, so changing
                      the root font size scales everything at once. -->
-                <div class="font-size" role="group" data-i18n-aria-label="font.group" aria-label="字體大小">
-                    <button id="font-smaller" class="font-step" type="button" data-i18n-title="font.smallerTitle"
+                <div class="font-size" data-testid="font-size" role="group" data-i18n-aria-label="font.group" aria-label="字體大小">
+                    <button id="font-smaller" data-testid="font-smaller" class="font-step" type="button" data-i18n-title="font.smallerTitle"
                         data-i18n-aria-label="font.smaller" title="縮小字體 (Ctrl/Cmd+-)" aria-label="縮小字體">A−</button>
-                    <button id="font-reset" class="font-value" type="button" data-i18n-title="font.reset"
+                    <button id="font-reset" data-testid="font-reset" class="font-value" type="button" data-i18n-title="font.reset"
                         data-i18n-aria-label="font.reset" title="重設字體大小" aria-label="重設字體大小">100%</button>
-                    <button id="font-larger" class="font-step" type="button" data-i18n-title="font.largerTitle"
+                    <button id="font-larger" data-testid="font-larger" class="font-step" type="button" data-i18n-title="font.largerTitle"
                         data-i18n-aria-label="font.larger" title="放大字體 (Ctrl/Cmd++)" aria-label="放大字體">A+</button>
                 </div>
             </footer>
@@ -374,12 +374,12 @@
     <!-- Attachment lightbox. Same hidden-attribute pattern as the calendars and
          dialogs: the base rule must not set `display`, or it would outrank the
          browser's `[hidden] { display: none }` rule. -->
-    <div id="attachment-viewer" class="attachment-viewer" role="dialog" aria-modal="true"
+    <div id="attachment-viewer" data-testid="attachment-viewer" class="attachment-viewer" role="dialog" aria-modal="true"
         data-i18n-aria-label="attachments.viewerTitle" aria-label="檢視圖片" hidden>
-        <div id="attachment-viewer-backdrop" class="attachment-viewer-backdrop"></div>
-        <figure class="attachment-viewer-panel">
-            <img id="attachment-viewer-image" class="attachment-viewer-image" alt="" />
-            <button id="attachment-viewer-close" class="attachment-viewer-close" type="button"
+        <div id="attachment-viewer-backdrop" data-testid="attachment-viewer-backdrop" class="attachment-viewer-backdrop"></div>
+        <figure class="attachment-viewer-panel" data-testid="attachment-viewer-panel">
+            <img id="attachment-viewer-image" data-testid="attachment-viewer-image" class="attachment-viewer-image" alt="" />
+            <button id="attachment-viewer-close" data-testid="attachment-viewer-close" class="attachment-viewer-close" type="button"
                 data-i18n="attachments.close" data-i18n-aria-label="attachments.close" title="關閉">關閉</button>
         </figure>
     </div>
@@ -387,16 +387,16 @@
     <!-- Full-screen date selector. It covers the whole window so the month grid
          can be large enough to scan at a glance: every day that already has an
          entry carries a dot, and clicking a day jumps straight to it. -->
-    <div id="calendar" class="calendar-overlay" role="dialog" aria-modal="true" data-i18n-aria-label="editor.pickDate"
+    <div id="calendar" data-testid="calendar" class="calendar-overlay" role="dialog" aria-modal="true" data-i18n-aria-label="editor.pickDate"
         aria-label="選擇日期" hidden>
-        <div id="calendar-backdrop" class="calendar-backdrop"></div>
-        <div class="calendar-panel">
-            <header class="calendar-head">
-                <div class="calendar-heading">
-                    <h2 id="cal-title" class="cal-title" data-i18n="editor.pickDate">選擇日期</h2>
-                    <p id="cal-summary" class="cal-summary"></p>
+        <div id="calendar-backdrop" data-testid="calendar-backdrop" class="calendar-backdrop"></div>
+        <div class="calendar-panel" data-testid="calendar-panel">
+            <header class="calendar-head" data-testid="calendar-head">
+                <div class="calendar-heading" data-testid="calendar-heading">
+                    <h2 id="cal-title" data-testid="cal-title" class="cal-title" data-i18n="editor.pickDate">選擇日期</h2>
+                    <p id="cal-summary" data-testid="cal-summary" class="cal-summary"></p>
                 </div>
-                <button id="cal-close" class="cal-close" type="button" data-i18n-title="common.close"
+                <button id="cal-close" data-testid="cal-close" class="cal-close" type="button" data-i18n-title="common.close"
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M6 6l12 12M18 6L6 18" />
@@ -408,29 +408,29 @@
                  single month. A vault can span many years, and clicking the month
                  arrow twelve times to reach last year is the one thing the
                  full-screen grid could not do comfortably. -->
-            <div class="calendar-month">
-                <button id="cal-prev-year" class="cal-step cal-step-year" type="button"
+            <div class="calendar-month" data-testid="calendar-month">
+                <button id="cal-prev-year" data-testid="cal-prev-year" class="cal-step cal-step-year" type="button"
                     data-i18n-title="editor.calPrevYear" data-i18n-aria-label="editor.calPrevYear" title="上一年"
                     aria-label="上一年">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M11 5l-7 7 7 7M18 5l-7 7 7 7" />
                     </svg>
                 </button>
-                <button id="cal-prev" class="cal-step" type="button" data-i18n-title="editor.calPrev"
+                <button id="cal-prev" data-testid="cal-prev" class="cal-step" type="button" data-i18n-title="editor.calPrev"
                     data-i18n-aria-label="editor.calPrev" title="上個月" aria-label="上個月">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M15 5l-7 7 7 7" />
                     </svg>
                 </button>
-                <button id="cal-month" class="cal-month" type="button" data-i18n-title="editor.calBackToToday"
+                <button id="cal-month" data-testid="cal-month" class="cal-month" type="button" data-i18n-title="editor.calBackToToday"
                     title="回到今天">—</button>
-                <button id="cal-next" class="cal-step" type="button" data-i18n-title="editor.calNext"
+                <button id="cal-next" data-testid="cal-next" class="cal-step" type="button" data-i18n-title="editor.calNext"
                     data-i18n-aria-label="editor.calNext" title="下個月" aria-label="下個月">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M9 5l7 7-7 7" />
                     </svg>
                 </button>
-                <button id="cal-next-year" class="cal-step cal-step-year" type="button"
+                <button id="cal-next-year" data-testid="cal-next-year" class="cal-step cal-step-year" type="button"
                     data-i18n-title="editor.calNextYear" data-i18n-aria-label="editor.calNextYear" title="下一年"
                     aria-label="下一年">
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -441,68 +441,68 @@
 
             <!-- Weekday headers are generated by main.js so they follow the
                  active language. -->
-            <div id="cal-weekdays" class="cal-weekdays" aria-hidden="true"></div>
-            <div id="cal-grid" class="cal-grid" role="grid"></div>
+            <div id="cal-weekdays" data-testid="cal-weekdays" class="cal-weekdays" aria-hidden="true"></div>
+            <div id="cal-grid" data-testid="cal-grid" class="cal-grid" role="grid"></div>
 
-            <footer class="calendar-foot">
-                <span class="cal-legend">
-                    <span class="cal-legend-dot" aria-hidden="true"></span>
+            <footer class="calendar-foot" data-testid="calendar-foot">
+                <span class="cal-legend" data-testid="cal-legend">
+                    <span class="cal-legend-dot" data-testid="cal-legend-dot" aria-hidden="true"></span>
                     <span data-i18n="editor.calLegend">有寫日記的日子</span>
                 </span>
-                <button id="cal-today" class="cal-today" type="button" data-i18n="common.today">今天</button>
+                <button id="cal-today" data-testid="cal-today" class="cal-today" type="button" data-i18n="common.today">今天</button>
             </footer>
         </div>
     </div>
 
     <!-- Import dialog: shown after scanning a folder of YYYY-MM-DD.txt files,
          so the user can review what will be written before anything happens. -->
-    <div id="import-overlay" class="modal-overlay" hidden>
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
+    <div id="import-overlay" data-testid="import-overlay" class="modal-overlay" hidden>
+        <div class="modal" data-testid="import-modal" role="dialog" aria-modal="true" aria-labelledby="import-title">
             <header class="modal-head">
-                <h2 id="import-title" class="modal-title" data-i18n="import.title">匯入日記</h2>
-                <button id="import-close" class="modal-close" type="button" data-i18n-title="common.close"
+                <h2 id="import-title" data-testid="import-title" class="modal-title" data-i18n="import.title">匯入日記</h2>
+                <button id="import-close" data-testid="import-close" class="modal-close" type="button" data-i18n-title="common.close"
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
             <div class="modal-body">
-                <p id="import-dir" class="import-dir"></p>
+                <p id="import-dir" data-testid="import-dir" class="import-dir"></p>
 
-                <div id="import-summary" class="import-summary">
-                    <span class="import-stat ready"><b id="import-ready">0</b> <span
+                <div id="import-summary" data-testid="import-summary" class="import-summary">
+                    <span class="import-stat ready"><b id="import-ready" data-testid="import-ready">0</b> <span
                             data-i18n="import.statReady">可匯入</span></span>
-                    <span class="import-stat conflict"><b id="import-conflicts">0</b> <span
+                    <span class="import-stat conflict"><b id="import-conflicts" data-testid="import-conflicts">0</b> <span
                             data-i18n="import.statConflict">已存在</span></span>
-                    <span class="import-stat failed"><b id="import-failed">0</b> <span
+                    <span class="import-stat failed"><b id="import-failed" data-testid="import-failed">0</b> <span
                             data-i18n="import.statFailed">失敗</span></span>
                 </div>
 
-                <label id="import-overwrite-row" class="import-overwrite" hidden>
-                    <input id="import-overwrite" type="checkbox" />
+                <label id="import-overwrite-row" data-testid="import-overwrite-row" class="import-overwrite" hidden>
+                    <input id="import-overwrite" data-testid="import-overwrite" type="checkbox" />
                     <span data-i18n="import.overwrite">覆蓋已存在的日記</span>
                 </label>
 
-                <div id="import-list" class="import-list" role="list"></div>
+                <div id="import-list" data-testid="import-list" class="import-list" role="list"></div>
 
                 <!-- Shown only while the batch is being written. The bar is
                      driven by the `import-progress` event from the backend. -->
-                <div id="import-progress" class="import-progress" hidden>
+                <div id="import-progress" data-testid="import-progress" class="import-progress" hidden>
                     <div class="import-progress-head">
-                        <span id="import-progress-label" data-i18n="import.progress">匯入中…</span>
-                        <span id="import-progress-count" class="import-progress-count">0 / 0</span>
+                        <span id="import-progress-label" data-testid="import-progress-label" data-i18n="import.progress">匯入中…</span>
+                        <span id="import-progress-count" data-testid="import-progress-count" class="import-progress-count">0 / 0</span>
                     </div>
-                    <div class="import-progress-track" role="progressbar" aria-labelledby="import-progress-label"
+                    <div class="import-progress-track" data-testid="import-progress-track" role="progressbar" aria-labelledby="import-progress-label"
                         aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                        <div id="import-progress-bar" class="import-progress-bar"></div>
+                        <div id="import-progress-bar" data-testid="import-progress-bar" class="import-progress-bar"></div>
                     </div>
                 </div>
 
-                <div id="import-result" class="import-result" hidden></div>
+                <div id="import-result" data-testid="import-result" class="import-result" hidden></div>
             </div>
 
             <footer class="modal-foot">
-                <span id="import-error" class="import-error" role="alert"></span>
-                <button id="import-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
-                <button id="import-confirm" class="btn-primary" type="button" data-i18n="sidebar.import">匯入</button>
+                <span id="import-error" data-testid="import-error" class="import-error" role="alert"></span>
+                <button id="import-cancel" data-testid="import-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
+                <button id="import-confirm" data-testid="import-confirm" class="btn-primary" type="button" data-i18n="sidebar.import">匯入</button>
             </footer>
         </div>
     </div>
@@ -510,13 +510,13 @@
     <!-- Encrypted tar import. Deliberately separate from the folder-import
          dialog: this adopts the archive's vault (including its key wrappers),
          so it is the migration path for a new device or a wiped app. -->
-    <div id="backup-import-overlay" class="modal-overlay" hidden>
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="backup-import-title">
+    <div id="backup-import-overlay" data-testid="backup-import-overlay" class="modal-overlay" hidden>
+        <div class="modal" data-testid="backup-import-modal" role="dialog" aria-modal="true" aria-labelledby="backup-import-title">
             <header class="modal-head">
-                <h2 id="backup-import-title" class="modal-title" data-i18n="backup.importTitle">
+                <h2 id="backup-import-title" data-testid="backup-import-title" class="modal-title" data-i18n="backup.importTitle">
                     匯入加密備份
                 </h2>
-                <button id="backup-import-close" class="modal-close" type="button"
+                <button id="backup-import-close" data-testid="backup-import-close" class="modal-close" type="button"
                     data-i18n-title="common.close" data-i18n-aria-label="common.close" title="關閉"
                     aria-label="關閉">×</button>
             </header>
@@ -533,19 +533,19 @@
                 </p>
                 <label class="settings-row" for="backup-import-pass">
                     <span class="settings-label" data-i18n="backup.importPass">備份密碼</span>
-                    <input id="backup-import-pass" class="settings-input" type="password"
+                    <input id="backup-import-pass" data-testid="backup-import-pass" class="settings-input" type="password"
                         autocomplete="current-password" data-i18n-placeholder="backup.importPass"
                         placeholder="備份密碼" />
                 </label>
-                <p id="backup-import-status" class="settings-hint settings-status"
+                <p id="backup-import-status" data-testid="backup-import-status" class="settings-hint settings-status"
                     aria-live="polite"></p>
-                <p id="backup-import-error" class="import-error" role="alert"></p>
+                <p id="backup-import-error" data-testid="backup-import-error" class="import-error" role="alert"></p>
             </div>
 
             <footer class="modal-foot">
-                <button id="backup-import-cancel" class="btn-browse" type="button"
+                <button id="backup-import-cancel" data-testid="backup-import-cancel" class="btn-browse" type="button"
                     data-i18n="common.cancel">取消</button>
-                <button id="backup-import-confirm" class="btn-primary" type="button"
+                <button id="backup-import-confirm" data-testid="backup-import-confirm" class="btn-primary" type="button"
                     data-i18n="backup.importSubmit">選擇檔案並匯入</button>
             </footer>
         </div>
@@ -554,11 +554,11 @@
     <!-- Settings dialog: auto-lock timing and the passphrase / Argon2id
          controls. Only reachable while unlocked, because changing the
          passphrase needs the current one and the vault must be readable. -->
-    <div id="settings-overlay" class="modal-overlay" hidden>
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div id="settings-overlay" data-testid="settings-overlay" class="modal-overlay" hidden>
+        <div class="modal" data-testid="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <header class="modal-head">
-                <h2 id="settings-title" class="modal-title" data-i18n="settings.title">設定</h2>
-                <button id="settings-close" class="modal-close" type="button" data-i18n-title="common.close"
+                <h2 id="settings-title" data-testid="settings-title" class="modal-title" data-i18n="settings.title">設定</h2>
+                <button id="settings-close" data-testid="settings-close" class="modal-close" type="button" data-i18n-title="common.close"
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
@@ -567,8 +567,8 @@
                      whole vault. These used to be footer buttons; they are
                      settings-shaped rather than writing-shaped, so they belong
                      here. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-diary">
+                    <summary class="settings-disclosure" data-testid="settings-summary-diary">
                         <h3 class="settings-heading" data-i18n="settings.diary">日記本</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.diaryHint">
@@ -576,15 +576,15 @@
                     </p>
                     <div class="settings-row">
                         <span class="settings-label" data-i18n="settings.diaryPathLabel">儲存位置</span>
-                        <span id="settings-diary-path" class="settings-path" data-i18n-title="sidebar.pathTitle"
+                        <span id="settings-diary-path" data-testid="settings-diary-path" class="settings-path" data-i18n-title="sidebar.pathTitle"
                             title="日記儲存位置"></span>
                     </div>
                     <div class="settings-actions">
-                        <button id="settings-import-btn" class="btn-browse" type="button" data-i18n="sidebar.import"
+                        <button id="settings-import-btn" data-testid="settings-import-btn" class="btn-browse" type="button" data-i18n="sidebar.import"
                             data-i18n-title="sidebar.importTitle" title="從資料夾匯入日記">匯入</button>
-                        <button id="settings-stats-btn" class="btn-browse" type="button" data-i18n="sidebar.stats"
+                        <button id="settings-stats-btn" data-testid="settings-stats-btn" class="btn-browse" type="button" data-i18n="sidebar.stats"
                             data-i18n-title="sidebar.statsTitle" title="查看統計">統計</button>
-                        <button id="settings-change-dir-btn" class="btn-browse" type="button"
+                        <button id="settings-change-dir-btn" data-testid="settings-change-dir-btn" class="btn-browse" type="button"
                             data-i18n="sidebar.changeDir" data-i18n-title="sidebar.changeDirTitle"
                             title="變更日記儲存資料夾">路徑</button>
                     </div>
@@ -593,8 +593,8 @@
                 <!-- Backup guidance and the same-vault restore rescue. This
                      section deliberately does not export or import archives;
                      those live in the separate transfer section below. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-backup">
+                    <summary class="settings-disclosure" data-testid="settings-summary-backup">
                         <h3 class="settings-heading" data-i18n="settings.backup">備份</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.backupHint">
@@ -608,12 +608,12 @@
                         變更不會合併回來。跨裝置或建立新日記本請使用下方的「資料移轉」。
                     </p>
                     <div class="settings-actions">
-                        <button id="settings-restore-btn" class="btn-danger" type="button"
+                        <button id="settings-restore-btn" data-testid="settings-restore-btn" class="btn-danger" type="button"
                             data-i18n="settings.backupRestore"
                             data-i18n-title="settings.backupRestoreTitle"
                             title="用同一個日記本的加密備份還原資料庫與附件">還原加密備份</button>
                     </div>
-                    <p id="settings-backup-status" class="settings-hint settings-status"
+                    <p id="settings-backup-status" data-testid="settings-backup-status" class="settings-hint settings-status"
                         aria-live="polite"></p>
                 </details>
 
@@ -621,8 +621,8 @@
                      megabytes each, and old vaults keep them in per-date folders.
                      This is user-triggered because it replaces the stored bytes
                      with a lossy copy. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-images">
+                    <summary class="settings-disclosure" data-testid="settings-summary-images">
                         <h3 class="settings-heading" data-i18n="settings.images">圖片</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.imagesHint">
@@ -630,35 +630,35 @@
                         通常可以大幅縮小容量。已經很小或已經是壓縮 WebP 的圖片只會搬移。
                     </p>
                     <div class="settings-actions">
-                        <button id="settings-recompress-btn" class="btn-browse" type="button"
+                        <button id="settings-recompress-btn" data-testid="settings-recompress-btn" class="btn-browse" type="button"
                             data-i18n="settings.recompress"
                             data-i18n-title="settings.recompressTitle"
                             title="更新既有圖片的存放位置與壓縮格式">更新舊圖片</button>
                     </div>
                     <!-- Reuses the import progress bar styles. The bar is driven
                          by the `recompress-progress` event from the backend. -->
-                    <div id="settings-recompress-progress" class="import-progress" hidden>
+                    <div id="settings-recompress-progress" data-testid="settings-recompress-progress" class="import-progress" hidden>
                         <div class="import-progress-head">
-                            <span id="settings-recompress-progress-label"
+                            <span id="settings-recompress-progress-label" data-testid="settings-recompress-progress-label"
                                 data-i18n="settings.recompressRunning">正在更新舊圖片…</span>
-                            <span id="settings-recompress-count"
+                            <span id="settings-recompress-count" data-testid="settings-recompress-count"
                                 class="import-progress-count">0 / 0</span>
                         </div>
-                        <div id="settings-recompress-track" class="import-progress-track"
+                        <div id="settings-recompress-track" data-testid="settings-recompress-track" class="import-progress-track"
                             role="progressbar" aria-labelledby="settings-recompress-progress-label"
                             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                            <div id="settings-recompress-bar" class="import-progress-bar"></div>
+                            <div id="settings-recompress-bar" data-testid="settings-recompress-bar" class="import-progress-bar"></div>
                         </div>
                     </div>
-                    <p id="settings-recompress-status" class="settings-hint settings-status"
+                    <p id="settings-recompress-status" data-testid="settings-recompress-status" class="settings-hint settings-status"
                         aria-live="polite"></p>
                 </details>
 
                 <!-- Tar archive transfer: independent from the backup section
                      because importing adopts a different vault and replaces the
                      current one, while restoring is only a same-vault rescue. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-transfer">
+                    <summary class="settings-disclosure" data-testid="settings-summary-transfer">
                         <h3 class="settings-heading" data-i18n="settings.transfer">資料移轉</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.transferHint">
@@ -672,22 +672,22 @@
                         合併兩邊的變更。
                     </p>
                     <div class="settings-actions">
-                        <button id="settings-tar-export-btn" class="btn-browse" type="button"
+                        <button id="settings-tar-export-btn" data-testid="settings-tar-export-btn" class="btn-browse" type="button"
                             data-i18n="settings.transferExport"
                             data-i18n-title="settings.transferExportTitle"
                             title="匯出包含所有圖片的加密 tar">匯出加密備份</button>
-                        <button id="settings-tar-import-btn" class="btn-browse" type="button"
+                        <button id="settings-tar-import-btn" data-testid="settings-tar-import-btn" class="btn-browse" type="button"
                             data-i18n="settings.transferImport"
                             data-i18n-title="settings.transferImportTitle"
                             title="從加密 tar 匯入一個日記本">匯入加密備份…</button>
                     </div>
-                    <p id="settings-transfer-status" class="settings-hint settings-status"
+                    <p id="settings-transfer-status" data-testid="settings-transfer-status" class="settings-hint settings-status"
                         aria-live="polite"></p>
                 </details>
 
                 <!-- Auto-lock -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-auto-lock">
+                    <summary class="settings-disclosure" data-testid="settings-summary-auto-lock">
                         <h3 class="settings-heading" data-i18n="settings.autoLock">閒置自動鎖定</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.autoLockHint">
@@ -695,14 +695,14 @@
                     </p>
                     <label class="settings-row" for="auto-lock-select">
                         <span class="settings-label" data-i18n="settings.autoLockLabel">鎖定時間</span>
-                        <select id="auto-lock-select" class="settings-select"></select>
+                        <select id="auto-lock-select" data-testid="auto-lock-select" class="settings-select"></select>
                     </label>
                 </details>
 
                 <!-- Android biometric unlock. Hidden on desktop and when the
                      platform reports no secure strong biometric hardware. -->
-                <details id="settings-biometric-section" class="settings-section" open hidden>
-                    <summary class="settings-disclosure">
+                <details id="settings-biometric-section" data-testid="settings-biometric-section" class="settings-section" open hidden>
+                    <summary class="settings-disclosure" data-testid="settings-summary-biometric">
                         <h3 class="settings-heading" data-i18n="settings.biometric">生物辨識解鎖</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.biometricHint">
@@ -710,28 +710,28 @@
                         包裝，金鑰只會在生物辨識成功後短暫解開；指紋資料不會離開系統。
                         變更裝置上的生物辨識註冊後，需要重新啟用。
                     </p>
-                    <p id="settings-biometric-status" class="settings-hint settings-status"
+                    <p id="settings-biometric-status" data-testid="settings-biometric-status" class="settings-hint settings-status"
                         aria-live="polite"></p>
-                    <label id="settings-biometric-enable-row" class="settings-row"
+                    <label id="settings-biometric-enable-row" data-testid="settings-biometric-enable-row" class="settings-row"
                         for="settings-biometric-pass">
                         <span class="settings-label" data-i18n="settings.biometricPass">目前密碼</span>
-                        <input id="settings-biometric-pass" class="settings-input" type="password"
+                        <input id="settings-biometric-pass" data-testid="settings-biometric-pass" class="settings-input" type="password"
                             autocomplete="current-password"
                             data-i18n-placeholder="settings.biometricPass" placeholder="目前密碼" />
                     </label>
                     <div class="settings-actions">
-                        <button id="settings-biometric-enable" class="btn-browse" type="button"
+                        <button id="settings-biometric-enable" data-testid="settings-biometric-enable" class="btn-browse" type="button"
                             data-i18n="settings.biometricEnable">啟用生物辨識</button>
-                        <button id="settings-biometric-disable" class="btn-danger" type="button"
+                        <button id="settings-biometric-disable" data-testid="settings-biometric-disable" class="btn-danger" type="button"
                             data-i18n="settings.biometricDisable" hidden>停用生物辨識</button>
                     </div>
-                    <p id="settings-biometric-message" class="settings-hint settings-status"
+                    <p id="settings-biometric-message" data-testid="settings-biometric-message" class="settings-hint settings-status"
                         aria-live="polite"></p>
                 </details>
 
                 <!-- Autosave -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-autosave">
+                    <summary class="settings-disclosure" data-testid="settings-summary-autosave">
                         <h3 class="settings-heading" data-i18n="settings.autosave">自動儲存</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.autosaveHint">
@@ -739,13 +739,13 @@
                     </p>
                     <label class="settings-row" for="autosave-delay-select">
                         <span class="settings-label" data-i18n="settings.autosaveLabel">延遲時間</span>
-                        <select id="autosave-delay-select" class="settings-select"></select>
+                        <select id="autosave-delay-select" data-testid="autosave-delay-select" class="settings-select"></select>
                     </label>
                 </details>
 
                 <!-- Passphrase / KDF -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-security">
+                    <summary class="settings-disclosure" data-testid="settings-summary-security">
                         <h3 class="settings-heading" data-i18n="settings.security">密碼與金鑰派生</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.securityHint">
@@ -754,64 +754,64 @@
 
                     <label class="settings-row" for="settings-current-pass">
                         <span class="settings-label" data-i18n="settings.currentPass">目前密碼</span>
-                        <input id="settings-current-pass" class="settings-input" type="password"
+                        <input id="settings-current-pass" data-testid="settings-current-pass" class="settings-input" type="password"
                             autocomplete="current-password" data-i18n-placeholder="settings.currentPass"
                             placeholder="目前密碼" />
                     </label>
                     <label class="settings-row" for="settings-new-pass">
                         <span class="settings-label" data-i18n="settings.newPass">新密碼</span>
-                        <input id="settings-new-pass" class="settings-input" type="password" autocomplete="new-password"
+                        <input id="settings-new-pass" data-testid="settings-new-pass" class="settings-input" type="password" autocomplete="new-password"
                             data-i18n-placeholder="settings.newPassPlaceholder" placeholder="留空表示不變更" />
                     </label>
                     <label class="settings-row" for="settings-new-pass-confirm">
                         <span class="settings-label" data-i18n="settings.newPassConfirm">確認新密碼</span>
-                        <input id="settings-new-pass-confirm" class="settings-input" type="password"
+                        <input id="settings-new-pass-confirm" data-testid="settings-new-pass-confirm" class="settings-input" type="password"
                             autocomplete="new-password" data-i18n-placeholder="settings.newPassConfirm"
                             placeholder="再次輸入新密碼" />
                     </label>
 
-                    <details class="settings-advanced">
-                        <summary class="settings-summary" data-i18n="settings.advanced">進階：Argon2id 參數</summary>
+                    <details class="settings-advanced" data-testid="settings-advanced">
+                        <summary class="settings-summary" data-testid="settings-summary-advanced" data-i18n="settings.advanced">進階：Argon2id 參數</summary>
                         <p class="settings-hint" data-i18n="settings.advancedHint">
                             提高參數會讓暴力破解更困難，但解鎖也會變慢。可自動量測本機速度。
                         </p>
-                        <div id="vault-kdf" class="settings-kdf"></div>
+                        <div id="vault-kdf" data-testid="vault-kdf" class="settings-kdf"></div>
                         <div class="settings-kdf-grid">
                             <label class="settings-label" for="settings-kdf-memory" data-i18n="lock.kdfMemory">記憶體
                                 (MiB)</label>
-                            <input id="settings-kdf-memory" class="settings-input" type="number" step="1" min="64"
+                            <input id="settings-kdf-memory" data-testid="settings-kdf-memory" class="settings-input" type="number" step="1" min="64"
                                 max="1024" />
                             <label class="settings-label" for="settings-kdf-iterations"
                                 data-i18n="lock.kdfIterations">迭代次數</label>
-                            <input id="settings-kdf-iterations" class="settings-input" type="number" step="1" min="2"
+                            <input id="settings-kdf-iterations" data-testid="settings-kdf-iterations" class="settings-input" type="number" step="1" min="2"
                                 max="16" />
                             <label class="settings-label" for="settings-kdf-parallelism"
                                 data-i18n="lock.kdfParallelism">平行度</label>
-                            <input id="settings-kdf-parallelism" class="settings-input" type="number" step="1" min="1"
+                            <input id="settings-kdf-parallelism" data-testid="settings-kdf-parallelism" class="settings-input" type="number" step="1" min="1"
                                 max="16" />
                         </div>
-                        <button id="settings-calibrate" class="btn-browse" type="button"
+                        <button id="settings-calibrate" data-testid="settings-calibrate" class="btn-browse" type="button"
                             data-i18n="settings.calibrate">自動量測（約 1 秒）</button>
-                        <p id="settings-calibrate-note" class="settings-hint"></p>
+                        <p id="settings-calibrate-note" data-testid="settings-calibrate-note" class="settings-hint"></p>
                     </details>
                 </details>
 
                 <!-- Recovery phrase: a second, optional way to reach the diary
                      key. It is off by default and can be regenerated or removed
                      at any time; the phrase itself is only ever shown once. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-recovery">
+                    <summary class="settings-disclosure" data-testid="settings-summary-recovery">
                         <h3 class="settings-heading" data-i18n="recovery.settingsTitle">回復短語</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="recovery.settingsHint">
                         啟用後會產生 12 個 BIP39 英文單字。把單字抄在紙上並與日記分開保存，
                         忘記密碼時就能用它重新設定密碼。短語等於第二把鑰匙，取得短語與日記檔的人可以直接讀取內容。
                     </p>
-                    <p id="recovery-status" class="settings-hint settings-recovery-status"></p>
+                    <p id="recovery-status" data-testid="recovery-status" class="settings-hint settings-recovery-status"></p>
                     <div class="settings-actions">
-                        <button id="recovery-generate-btn" class="btn-browse" type="button"
+                        <button id="recovery-generate-btn" data-testid="recovery-generate-btn" class="btn-browse" type="button"
                             data-i18n="recovery.generate">產生回復短語</button>
-                        <button id="recovery-remove-btn" class="btn-danger" type="button"
+                        <button id="recovery-remove-btn" data-testid="recovery-remove-btn" class="btn-danger" type="button"
                             data-i18n="recovery.remove" hidden>停用回復短語</button>
                     </div>
                 </details>
@@ -820,8 +820,8 @@
                      compile time so a running binary can be traced back to an
                      exact source revision. Kept last because it is reference
                      material rather than a setting. -->
-                <details class="settings-section" open>
-                    <summary class="settings-disclosure">
+                <details class="settings-section" open data-testid="settings-section-about">
+                    <summary class="settings-disclosure" data-testid="settings-summary-about">
                         <h3 class="settings-heading" data-i18n="settings.about">關於</h3>
                     </summary>
                     <p class="settings-hint" data-i18n="settings.aboutHint">
@@ -829,23 +829,23 @@
                     </p>
                     <div class="settings-row">
                         <span class="settings-label" data-i18n="settings.version">版本</span>
-                        <span id="settings-app-version" class="settings-path"></span>
+                        <span id="settings-app-version" data-testid="settings-app-version" class="settings-path"></span>
                     </div>
                     <div class="settings-row">
                         <span class="settings-label" data-i18n="settings.commit">Commit</span>
-                        <span id="settings-app-commit" class="settings-path"></span>
+                        <span id="settings-app-commit" data-testid="settings-app-commit" class="settings-path"></span>
                     </div>
                     <div class="settings-row">
                         <span class="settings-label" data-i18n="settings.author">作者</span>
-                        <span id="settings-app-author" class="settings-path"></span>
+                        <span id="settings-app-author" data-testid="settings-app-author" class="settings-path"></span>
                     </div>
                 </details>
             </div>
 
             <footer class="modal-foot">
-                <span id="settings-error" class="import-error" role="alert"></span>
-                <button id="settings-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
-                <button id="settings-save" class="btn-primary" type="button" data-i18n="settings.save">儲存</button>
+                <span id="settings-error" data-testid="settings-error" class="import-error" role="alert"></span>
+                <button id="settings-cancel" data-testid="settings-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
+                <button id="settings-save" data-testid="settings-save" class="btn-primary" type="button" data-i18n="settings.save">儲存</button>
             </footer>
         </div>
     </div>
@@ -854,11 +854,11 @@
          the point is that the user writes them down, so the UI deliberately
          offers no copy button and blocks selection/copy. This is a usability
          barrier, not a security boundary (the webview can still be inspected). -->
-    <div id="recovery-overlay" class="modal-overlay recovery-overlay" hidden>
-        <div class="modal recovery-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-title">
+    <div id="recovery-overlay" data-testid="recovery-overlay" class="modal-overlay recovery-overlay" hidden>
+        <div class="modal recovery-modal" data-testid="recovery-modal" role="dialog" aria-modal="true" aria-labelledby="recovery-title">
             <header class="modal-head">
-                <h2 id="recovery-title" class="modal-title" data-i18n="recovery.createTitle">備份回復短語</h2>
-                <button id="recovery-close" class="modal-close" type="button" data-i18n-title="common.close"
+                <h2 id="recovery-title" data-testid="recovery-title" class="modal-title" data-i18n="recovery.createTitle">備份回復短語</h2>
+                <button id="recovery-close" data-testid="recovery-close" class="modal-close" type="button" data-i18n-title="common.close"
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
@@ -867,19 +867,19 @@
                     以下 12 個單字只會顯示這一次。請用紙筆依序抄寫，不要截圖、不要存到裝置或雲端硬碟，
                     也不要和日記放在同一個資料夾。
                 </p>
-                <ol id="recovery-words" class="recovery-words" data-i18n-aria-label="recovery.wordsLabel"
+                <ol id="recovery-words" data-testid="recovery-words" class="recovery-words" data-i18n-aria-label="recovery.wordsLabel"
                     aria-label="回復短語單字"></ol>
                 <p class="settings-hint" data-i18n="recovery.copyHint">
                     這個畫面不允許選取或複製，請確實抄寫。若單字外流，搭配日記檔案就能解密全部內容。
                 </p>
 
-                <p id="recovery-error" class="import-error" role="alert"></p>
+                <p id="recovery-error" data-testid="recovery-error" class="import-error" role="alert"></p>
             </div>
 
             <footer class="modal-foot">
                 <span class="recovery-foot-hint" data-i18n="recovery.onceHint">確認後才會寫入回復資料</span>
-                <button id="recovery-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
-                <button id="recovery-continue-btn" class="btn-primary" type="button"
+                <button id="recovery-cancel" data-testid="recovery-cancel" class="btn-browse" type="button" data-i18n="common.cancel">取消</button>
+                <button id="recovery-continue-btn" data-testid="recovery-continue-btn" class="btn-primary" type="button"
                     data-i18n="recovery.continue">我已抄寫，繼續</button>
             </footer>
         </div>
@@ -888,14 +888,14 @@
     <!-- Separate confirmation window. The one-time phrase window is closed
          before this opens, so the requested words have to come from the paper
          copy rather than the screen. -->
-    <div id="recovery-confirm-overlay" class="modal-overlay recovery-overlay" hidden>
-        <div class="modal recovery-modal" role="dialog" aria-modal="true"
+    <div id="recovery-confirm-overlay" data-testid="recovery-confirm-overlay" class="modal-overlay recovery-overlay" hidden>
+        <div class="modal recovery-modal" data-testid="recovery-confirm-modal" role="dialog" aria-modal="true"
             aria-labelledby="recovery-confirm-title">
             <header class="modal-head">
-                <h2 id="recovery-confirm-title" class="modal-title" data-i18n="recovery.confirmTitle">
+                <h2 id="recovery-confirm-title" data-testid="recovery-confirm-title" class="modal-title" data-i18n="recovery.confirmTitle">
                     確認回復短語
                 </h2>
-                <button id="recovery-confirm-close" class="modal-close" type="button"
+                <button id="recovery-confirm-close" data-testid="recovery-confirm-close" class="modal-close" type="button"
                     data-i18n-title="common.close" data-i18n-aria-label="common.close" title="關閉"
                     aria-label="關閉">×</button>
             </header>
@@ -904,16 +904,16 @@
                 <p class="settings-hint" data-i18n="recovery.confirmHint">
                     請輸入下面指定位置的單字，確認你已經抄好。輸入前幾個字母會顯示 BIP39 單字建議。
                 </p>
-                <div id="recovery-confirm-fields" class="word-grid recovery-confirm-fields" role="group"
+                <div id="recovery-confirm-fields" data-testid="recovery-confirm-fields" class="word-grid recovery-confirm-fields" role="group"
                     data-i18n-aria-label="recovery.confirmTitle" aria-label="確認回復短語"></div>
-                <p id="recovery-confirm-error" class="import-error" role="alert"></p>
+                <p id="recovery-confirm-error" data-testid="recovery-confirm-error" class="import-error" role="alert"></p>
             </div>
 
             <footer class="modal-foot">
                 <span class="recovery-foot-hint" data-i18n="recovery.onceHint">確認後才會寫入回復資料</span>
-                <button id="recovery-confirm-cancel" class="btn-browse" type="button"
+                <button id="recovery-confirm-cancel" data-testid="recovery-confirm-cancel" class="btn-browse" type="button"
                     data-i18n="common.cancel">取消</button>
-                <button id="recovery-confirm-submit" class="btn-primary" type="button"
+                <button id="recovery-confirm-submit" data-testid="recovery-confirm-submit" class="btn-primary" type="button"
                     data-i18n="recovery.confirm">確認</button>
             </footer>
         </div>
@@ -921,51 +921,51 @@
 
     <!-- Statistics dialog: everything is derived from the entry metadata the
          sidebar already holds, so opening it costs no extra backend call. -->
-    <div id="stats-overlay" class="modal-overlay" hidden>
-        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="stats-title">
+    <div id="stats-overlay" data-testid="stats-overlay" class="modal-overlay" hidden>
+        <div class="modal" data-testid="stats-modal" role="dialog" aria-modal="true" aria-labelledby="stats-title">
             <header class="modal-head">
-                <h2 id="stats-title" class="modal-title" data-i18n="stats.title">統計</h2>
-                <button id="stats-close" class="modal-close" type="button" data-i18n-title="common.close"
+                <h2 id="stats-title" data-testid="stats-title" class="modal-title" data-i18n="stats.title">統計</h2>
+                <button id="stats-close" data-testid="stats-close" class="modal-close" type="button" data-i18n-title="common.close"
                     data-i18n-aria-label="common.close" title="關閉" aria-label="關閉">×</button>
             </header>
 
             <div class="modal-body">
                 <!-- Headline numbers. Values are filled in by `renderStats()`. -->
-                <div class="stats-cards">
-                    <div class="stats-card">
-                        <span class="stats-value" id="stats-total">0</span>
-                        <span class="stats-label" data-i18n="stats.total">總篇數</span>
+                <div class="stats-cards" data-testid="stats-cards">
+                    <div class="stats-card" data-testid="stats-card-total">
+                        <span class="stats-value" id="stats-total" data-testid="stats-total">0</span>
+                        <span class="stats-label" data-testid="stats-label-total" data-i18n="stats.total">總篇數</span>
                     </div>
-                    <div class="stats-card">
-                        <span class="stats-value" id="stats-favourites">0</span>
-                        <span class="stats-label" data-i18n="stats.favourites">收藏</span>
+                    <div class="stats-card" data-testid="stats-card-favourites">
+                        <span class="stats-value" id="stats-favourites" data-testid="stats-favourites">0</span>
+                        <span class="stats-label" data-testid="stats-label-favourites" data-i18n="stats.favourites">收藏</span>
                     </div>
-                    <div class="stats-card">
-                        <span class="stats-value" id="stats-streak">0</span>
-                        <span class="stats-label" data-i18n="stats.streak">目前連續</span>
+                    <div class="stats-card" data-testid="stats-card-streak">
+                        <span class="stats-value" id="stats-streak" data-testid="stats-streak">0</span>
+                        <span class="stats-label" data-testid="stats-label-streak" data-i18n="stats.streak">目前連續</span>
                     </div>
-                    <div class="stats-card">
-                        <span class="stats-value" id="stats-longest">0</span>
-                        <span class="stats-label" data-i18n="stats.longest">最長連續</span>
+                    <div class="stats-card" data-testid="stats-card-longest">
+                        <span class="stats-value" id="stats-longest" data-testid="stats-longest">0</span>
+                        <span class="stats-label" data-testid="stats-label-longest" data-i18n="stats.longest">最長連續</span>
                     </div>
                 </div>
 
-                <p class="stats-range" id="stats-range"></p>
+                <p class="stats-range" id="stats-range" data-testid="stats-range"></p>
 
                 <section class="stats-section">
                     <h3 class="settings-heading" data-i18n="stats.months">近 12 個月</h3>
-                    <div id="stats-months" class="stats-chart"></div>
+                    <div id="stats-months" data-testid="stats-months" class="stats-chart"></div>
                 </section>
 
                 <section class="stats-section">
                     <h3 class="settings-heading" data-i18n="stats.weekdays">星期分布</h3>
-                    <div id="stats-weekdays" class="stats-chart"></div>
+                    <div id="stats-weekdays" data-testid="stats-weekdays" class="stats-chart"></div>
                 </section>
             </div>
 
             <footer class="modal-foot">
                 <span class="import-error"></span>
-                <button id="stats-done" class="btn-primary" type="button" data-i18n="common.done">完成</button>
+                <button id="stats-done" data-testid="stats-done" class="btn-primary" type="button" data-i18n="common.done">完成</button>
             </footer>
         </div>
     </div>

@@ -94,6 +94,7 @@ export function createSettingsDialog(deps) {
     for (const minutes of choices) {
       const option = document.createElement("option");
       option.value = String(minutes);
+      option.dataset.testid = `auto-lock-option-${minutes}`;
       option.textContent =
         minutes === 0
           ? deps.t("settings.autoLockNever")
@@ -109,6 +110,7 @@ export function createSettingsDialog(deps) {
     for (const ms of choices) {
       const option = document.createElement("option");
       option.value = String(ms);
+      option.dataset.testid = `autosave-option-${ms}`;
       option.textContent = deps.t("settings.autosaveMs", { n: ms });
       if (ms === current) option.selected = true;
       els.autosaveDelaySelect.append(option);

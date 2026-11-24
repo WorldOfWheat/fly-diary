@@ -60,24 +60,29 @@ export function createWordFields(container, entries, deps) {
 
     const element = document.createElement("div");
     element.className = "word-field";
+    element.dataset.testid = "word-field";
     element.dataset.index = String(index);
 
     const caption = document.createElement("label");
     caption.className = "word-field-label";
+    caption.dataset.testid = "word-field-label";
     caption.setAttribute("for", inputId);
     caption.textContent = label;
 
     const shell = document.createElement("div");
     shell.className = "word-field-shell";
+    shell.dataset.testid = "word-field-shell";
 
     const number = document.createElement("span");
     number.className = "word-field-index";
+    number.dataset.testid = "word-field-index";
     number.textContent = String(index + 1).padStart(2, "0");
     number.setAttribute("aria-hidden", "true");
 
     const input = document.createElement("input");
     input.id = inputId;
     input.className = "word-field-input";
+    input.dataset.testid = "word-field-input";
     input.type = "text";
     input.autocomplete = "off";
     input.autocapitalize = "off";
@@ -92,6 +97,7 @@ export function createWordFields(container, entries, deps) {
     const list = document.createElement("ul");
     list.id = listId;
     list.className = "word-suggestions";
+    list.dataset.testid = "word-suggestions";
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", deps.t("recovery.suggestionsLabel"));
     list.hidden = true;
@@ -127,6 +133,7 @@ export function createWordFields(container, entries, deps) {
       matches.forEach((word, optionIndex) => {
         const option = document.createElement("li");
         option.className = "word-suggestion";
+        option.dataset.testid = "word-suggestion";
         option.id = `${listId}-${optionIndex}`;
         option.setAttribute("role", "option");
         option.dataset.word = word;

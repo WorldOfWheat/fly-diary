@@ -57,6 +57,7 @@ export function createStatsDialog(deps) {
     items.forEach((item, index) => {
       const bar = document.createElement("div");
       bar.className = "stats-bar";
+      bar.dataset.testid = "stats-bar";
       bar.title = item.title;
       // The bar is a graphical object; without a text alternative a screen
       // reader only gets the month label and misses the value.
@@ -65,10 +66,12 @@ export function createStatsDialog(deps) {
 
       const fill = document.createElement("div");
       fill.className = "stats-bar-fill" + (item.count === 0 ? " empty" : "");
+      fill.dataset.testid = "stats-bar-fill";
       fill.style.setProperty("--v", fractions[index]);
 
       const label = document.createElement("span");
       label.className = "stats-bar-label";
+      label.dataset.testid = "stats-bar-label";
       label.textContent = item.label;
 
       bar.append(fill, label);
@@ -96,6 +99,7 @@ export function createStatsDialog(deps) {
 
       const empty = document.createElement("p");
       empty.className = "stats-empty";
+      empty.dataset.testid = "stats-empty";
       empty.textContent = deps.t("stats.empty");
       els.statsMonths.append(empty);
       return;

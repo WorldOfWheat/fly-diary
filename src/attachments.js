@@ -313,6 +313,7 @@ export function createAttachmentGallery(deps) {
       const row = document.createElement("div");
       row.className = "attachment-item";
       if (newItemIds.has(item.id)) row.classList.add("is-new");
+      row.dataset.testid = "attachment-item";
       row.dataset.attachmentId = item.id;
       row.dataset.index = String(index);
       row.draggable = editable();
@@ -321,6 +322,7 @@ export function createAttachmentGallery(deps) {
       const frame = document.createElement("button");
       frame.type = "button";
       frame.className = "attachment-frame";
+      frame.dataset.testid = "attachment-frame";
       frame.setAttribute(
         "aria-label",
         item.missing
@@ -331,6 +333,7 @@ export function createAttachmentGallery(deps) {
 
       const image = document.createElement("img");
       image.className = "attachment-thumb";
+      image.dataset.testid = "attachment-thumb";
       // The frame button carries the accessible label, so the thumbnail is
       // decorative. An empty alt also avoids the "IMAGE" text browsers show
       // before a src is available.
@@ -342,6 +345,7 @@ export function createAttachmentGallery(deps) {
 
       const broken = document.createElement("span");
       broken.className = "attachment-broken";
+      broken.dataset.testid = "attachment-broken";
       broken.textContent = "!";
       broken.title = deps.t("attachments.broken");
       broken.hidden = !item.missing;
@@ -353,10 +357,12 @@ export function createAttachmentGallery(deps) {
       if (editable()) {
         const controls = document.createElement("div");
         controls.className = "attachment-controls";
+        controls.dataset.testid = "attachment-controls";
 
         const left = document.createElement("button");
         left.className = "attachment-control";
         left.type = "button";
+        left.dataset.testid = "attachment-move-left";
         left.dataset.action = "left";
         left.textContent = "‹";
         left.title = deps.t("attachments.moveLeft");
@@ -365,6 +371,7 @@ export function createAttachmentGallery(deps) {
         const right = document.createElement("button");
         right.className = "attachment-control";
         right.type = "button";
+        right.dataset.testid = "attachment-move-right";
         right.dataset.action = "right";
         right.textContent = "›";
         right.title = deps.t("attachments.moveRight");
@@ -373,6 +380,7 @@ export function createAttachmentGallery(deps) {
         const remove = document.createElement("button");
         remove.className = "attachment-control attachment-remove";
         remove.type = "button";
+        remove.dataset.testid = "attachment-remove";
         remove.dataset.action = "remove";
         remove.textContent = "×";
         remove.title = deps.t("attachments.remove");
