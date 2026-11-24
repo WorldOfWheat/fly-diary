@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<vault version="3">
+  <kdf>argon2id</kdf>
+  <kdf-memory>65536</kdf-memory>
+  <kdf-iterations>3</kdf-iterations>
+  <kdf-parallelism>1</kdf-parallelism>
+  <vault-id>4zN1AiAJjzsoDKKFDXJQ4w==</vault-id>
+  <key-id>SG+6zgxl42dAfaf1+8zY4Q==</key-id>
+  <salt>cniBE0Bpg4mT2aLxGLvZIA==</salt>
+  <wrapped-key-iv>+wz/0xjPGJn2zmo7</wrapped-key-iv>
+  <wrapped-key>DtyggVYGoqPon/JXHrl0pzRyiLkWpzBFZgi3M4Tibrl7pxScHcfmFeuh7b5495XP</wrapped-key>
+</vault>

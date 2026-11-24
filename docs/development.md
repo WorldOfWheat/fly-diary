@@ -89,12 +89,19 @@ key 必須一致、`index.html`、`main.js` 與 `attachments.js` 用到的 key �
 `aria-pressed`、muted／border 對比、placeholder、24px target size，以及 modal 的 Tab 循環與
 焦點還原。它們不能取代螢幕閱讀器實測，完整清單見 [accessibility.md](accessibility.md)。
 
-Rust 測試分四層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
+Rust 測試分五層：`src-tauri/src/*.rs` 內的單元測試、`src-tauri/tests/vault_lifecycle.rs`
 的日記生命週期整合測試、`src-tauri/tests/sqlcipher_migration.rs` 的 XML→SQLCipher
-遷移與快照測試，以及 `src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
-（新增 → 排序 → 上鎖 → 解鎖 → 讀回 → 刪除）。`backup.rs` 另有備份 roundtrip、
+遷移與快照測試、`src-tauri/tests/attachments_lifecycle.rs` 的附件整合測試
+（新增 → 排序 → 上鎖 → 解鎖 → 讀回 → 刪除），以及 `src-tauri/tests/golden_vault.rs`
+的 frozen vault 回歸測試。`backup.rs` 另有備份 roundtrip、
 路徑穿越拒絕與失敗清理的單元測試。涵蓋加解密 roundtrip、錯誤密碼、密文竄改偵測、
 SQLCipher 開啟／完整性、legacy XML 遷移、日期驗證、匯入流程、附件 manifest 重建與孤兒偵測。
+
+`golden_vault.rs` 會複製 `src-tauri/tests/fixtures/golden-vault/` 內由 2.2.0 產生、
+已凍結的 `vault.xml`／`recovery.xml`／`diary.db`／附件，用現行 build 解鎖並讀回內容，
+同時比對每個檔案的 SHA-256。這是偵測「舊日記是否還能解開」的護欄；測試失敗時請修復
+相容性，**不要**重新產生 fixture 讓測試變綠。fixture 的密碼、內容與更新規則見該目錄的
+`README.md`。
 
 Rust coverage 需要 `cargo-llvm-cov`：
 

@@ -19,6 +19,13 @@ updates:
       cargo-minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    # The SQLCipher/SQLite amalgamation is pinned in Cargo.toml. Bump these
+    # manually (and re-run the migration tests) instead of via Dependabot.
+    ignore:
+      - dependency-name: "rusqlite"
+      - dependency-name: "libsqlite3-sys"
+      - dependency-name: "sqlcipher-src"
+      - dependency-name: "sqlite-wasm-rs"
 
   - package-ecosystem: github-actions
     directory: "/"

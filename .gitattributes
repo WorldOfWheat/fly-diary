@@ -1,0 +1,5 @@
+# Frozen golden-vault fixtures are test data. Never let Git rewrite their line
+# endings; the bytes are asserted against SHA-256 in `src-tauri/tests/golden_vault.rs`.
+src-tauri/tests/fixtures/**/*.xml -text
+src-tauri/tests/fixtures/**/*.db -text -diff
+src-tauri/tests/fixtures/**/*.bin -text -diff

@@ -208,9 +208,14 @@ XML 仍是唯一真相。若某個 XML 連原始位元組都無法讀取，它�
 `src-tauri/Cargo.toml`：
 
 ```toml
-rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
+# 版本刻意鎖死，避免上游變更加密格式；升級時請一併重跑遷移／整合測試。
+rusqlite = { version = "=0.43.0", features = ["bundled-sqlcipher-vendored-openssl"] }
+libsqlite3-sys = { version = "=0.40.0" }
 hkdf = "0.13"
 ```
+
+`libsqlite3-sys` 0.40.0 會要求 `sqlcipher-src` 420.0.0（SQLCipher 4.20.0／
+SQLite 3.54.1），`Cargo.toml` 另外以 `sqlcipher-src = "=420.0.0"` 明確鎖住。
 
 `bundled-sqlcipher-vendored-openssl` 會編譯 SQLCipher 與 OpenSSL，Linux／macOS／
 Windows 可重現，但建置時間與 binary 大小會增加。Android 交叉編譯需要 NDK 的
