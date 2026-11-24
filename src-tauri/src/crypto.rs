@@ -31,6 +31,7 @@ use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -204,7 +205,7 @@ pub fn derive_recovery_key(entropy: &[u8; 16]) -> Zeroizing<[u8; KEY_LEN]> {
 /// Generate a fresh random diary key.
 pub fn new_diary_key() -> Zeroizing<[u8; KEY_LEN]> {
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
-    rand::RngCore::fill_bytes(&mut OsRng, key.as_mut());
+    rand::rng().fill_bytes(key.as_mut());
     key
 }
 
@@ -369,7 +370,7 @@ pub fn decrypt(
 /// Generate `len` random bytes, base64 encoded.
 pub fn random_bytes_b64(len: usize) -> String {
     let mut bytes = vec![0u8; len];
-    rand::RngCore::fill_bytes(&mut OsRng, &mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     B64.encode(bytes)
 }
 

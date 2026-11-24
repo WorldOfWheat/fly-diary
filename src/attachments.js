@@ -25,11 +25,7 @@ import { animateOverlayExit, prefersReducedMotion } from "./lib/motion.js";
 //   beginNativePicker — optional () => void, marks the file picker as open
 //   endNativePicker   — optional () => void, marks it as closed
 
-/** Longest edge of the stored image, in pixels. */
-export const MAX_LONG_EDGE = 1000;
-/** WebP quality used for the stored image. */
-export const WEBP_QUALITY = 0.8;
-/** Largest input file accepted before decoding. */
+/** Largest input file accepted before sending it to the backend. */
 export const MAX_INPUT_BYTES = 64 * 1024 * 1024;
 /** Images compressed concurrently before they are saved in selection order. */
 const ATTACHMENT_PREPARE_CONCURRENCY = 3;
@@ -59,40 +55,9 @@ function withTimeout(promise, ms, label) {
   });
 }
 
-/** Scale `width`/`height` so the longest edge is at most `maxEdge`. */
-export function targetDimensions(width, height, maxEdge = MAX_LONG_EDGE) {
-  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-    return { width: 0, height: 0 };
-  }
-  const scale = Math.min(1, maxEdge / Math.max(width, height));
-  return {
-    width: Math.max(1, Math.round(width * scale)),
-    height: Math.max(1, Math.round(height * scale)),
-  };
-}
-
 /** Build a data URL from the base64 the backend returns. */
 export function attachmentDataUrl(mime, base64) {
   return `data:${mime || "application/octet-stream"};base64,${base64}`;
-}
-
-function canvasToBlob(canvas, type, quality) {
-  return new Promise((resolve, reject) => {
-    if (typeof canvas.toBlob === "function") {
-      canvas.toBlob((blob) => {
-        if (blob) resolve(blob);
-        else reject(new Error("Image encoding returned no data"));
-      }, type, quality);
-      return;
-    }
-    if (typeof canvas.convertToBlob === "function") {
-      canvas
-        .convertToBlob({ type, quality })
-        .then(resolve, reject);
-      return;
-    }
-    reject(new Error("This webview cannot encode images"));
-  });
 }
 
 function blobToBase64(blob) {
@@ -177,39 +142,14 @@ export function imageTypeForFile(file) {
   return file?.type || "";
 }
 
-/** Decode a file into something drawable, honouring EXIF orientation. */
-async function decodeImage(file) {
-  if (typeof createImageBitmap === "function") {
-    try {
-      return await createImageBitmap(file, { imageOrientation: "from-image" });
-    } catch {
-      try {
-        return await createImageBitmap(file);
-      } catch {
-        // Fall through to the <img> path; older WebKit builds lack options.
-      }
-    }
-  }
-
-  if (typeof Image !== "function" || typeof URL?.createObjectURL !== "function") {
-    throw new Error("This webview cannot decode images");
-  }
-
-  const url = URL.createObjectURL(file);
-  try {
-    return await new Promise((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () => reject(new Error("Could not decode this image"));
-      image.src = url;
-    });
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-/** Decode, resize to `MAX_LONG_EDGE`, and encode as WebP (or a fallback). */
-export async function prepareImageFile(file) {
+/**
+ * Validate an image input and read its original bytes.
+ *
+ * Decoding, EXIF orientation, resizing and lossy WebP encoding all happen in
+ * the Rust backend (`prepare_image`), so the stored format does not depend on
+ * the canvas encoders the platform's webview happens to ship.
+ */
+export async function readImageInput(file) {
   const type = imageTypeForFile(file);
   if (!type.startsWith("image/") || type === "image/svg+xml") {
     throw new Error("Only raster images are supported");
@@ -217,54 +157,7 @@ export async function prepareImageFile(file) {
   if (file.size > MAX_INPUT_BYTES) {
     throw new Error("Image is too large");
   }
-
-  const source = await decodeImage(file);
-  try {
-    const width = source.width;
-    const height = source.height;
-    const target = targetDimensions(width, height);
-    if (!target.width || !target.height) {
-      throw new Error("Image has no usable dimensions");
-    }
-
-    const canvas = document.createElement("canvas");
-    canvas.width = target.width;
-    canvas.height = target.height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("Could not create a drawing context");
-    context.drawImage(source, 0, 0, target.width, target.height);
-
-    let blob = await canvasToBlob(canvas, "image/webp", WEBP_QUALITY);
-    if (blob.type !== "image/webp") {
-      // WebKit builds that cannot encode WebP fall back to PNG for sources
-      // that may have transparency, and to JPEG otherwise. JPEG needs a white
-      // backdrop or transparent areas turn black.
-      if (file.type === "image/png" || file.type === "image/webp") {
-        const png = await canvasToBlob(canvas, "image/png");
-        if (png.type === "image/png") blob = png;
-      }
-      if (blob.type !== "image/png") {
-        const fallback = document.createElement("canvas");
-        fallback.width = target.width;
-        fallback.height = target.height;
-        const fallbackContext = fallback.getContext("2d");
-        if (!fallbackContext) throw new Error("Could not create a drawing context");
-        fallbackContext.fillStyle = "#ffffff";
-        fallbackContext.fillRect(0, 0, target.width, target.height);
-        fallbackContext.drawImage(canvas, 0, 0);
-        blob = await canvasToBlob(fallback, "image/jpeg", 0.85);
-      }
-    }
-
-    return {
-      mime: blob.type,
-      data: await blobToBase64(blob),
-      width: target.width,
-      height: target.height,
-    };
-  } finally {
-    source.close?.();
-  }
+  return { mime: type, data: await blobToBase64(file) };
 }
 
 /**
@@ -420,6 +313,7 @@ export function createAttachmentGallery(deps) {
       const row = document.createElement("div");
       row.className = "attachment-item";
       if (newItemIds.has(item.id)) row.classList.add("is-new");
+      row.dataset.testid = "attachment-item";
       row.dataset.attachmentId = item.id;
       row.dataset.index = String(index);
       row.draggable = editable();
@@ -428,6 +322,7 @@ export function createAttachmentGallery(deps) {
       const frame = document.createElement("button");
       frame.type = "button";
       frame.className = "attachment-frame";
+      frame.dataset.testid = "attachment-frame";
       frame.setAttribute(
         "aria-label",
         item.missing
@@ -438,6 +333,7 @@ export function createAttachmentGallery(deps) {
 
       const image = document.createElement("img");
       image.className = "attachment-thumb";
+      image.dataset.testid = "attachment-thumb";
       // The frame button carries the accessible label, so the thumbnail is
       // decorative. An empty alt also avoids the "IMAGE" text browsers show
       // before a src is available.
@@ -449,6 +345,7 @@ export function createAttachmentGallery(deps) {
 
       const broken = document.createElement("span");
       broken.className = "attachment-broken";
+      broken.dataset.testid = "attachment-broken";
       broken.textContent = "!";
       broken.title = deps.t("attachments.broken");
       broken.hidden = !item.missing;
@@ -460,10 +357,12 @@ export function createAttachmentGallery(deps) {
       if (editable()) {
         const controls = document.createElement("div");
         controls.className = "attachment-controls";
+        controls.dataset.testid = "attachment-controls";
 
         const left = document.createElement("button");
         left.className = "attachment-control";
         left.type = "button";
+        left.dataset.testid = "attachment-move-left";
         left.dataset.action = "left";
         left.textContent = "‹";
         left.title = deps.t("attachments.moveLeft");
@@ -472,6 +371,7 @@ export function createAttachmentGallery(deps) {
         const right = document.createElement("button");
         right.className = "attachment-control";
         right.type = "button";
+        right.dataset.testid = "attachment-move-right";
         right.dataset.action = "right";
         right.textContent = "›";
         right.title = deps.t("attachments.moveRight");
@@ -480,6 +380,7 @@ export function createAttachmentGallery(deps) {
         const remove = document.createElement("button");
         remove.className = "attachment-control attachment-remove";
         remove.type = "button";
+        remove.dataset.testid = "attachment-remove";
         remove.dataset.action = "remove";
         remove.textContent = "×";
         remove.title = deps.t("attachments.remove");
@@ -646,9 +547,17 @@ export function createAttachmentGallery(deps) {
   }
 
   async function prepareOne(file) {
-    const prepare = deps.prepareFile || prepareImageFile;
-    const prepared = await prepare(file);
-    if (!prepared || !prepared.data || !prepared.mime) {
+    if (deps.prepareFile) {
+      const prepared = await deps.prepareFile(file);
+      if (!prepared?.data || !prepared.mime) {
+        throw new Error("Image preparation failed");
+      }
+      return prepared;
+    }
+
+    const { data } = await readImageInput(file);
+    const prepared = await deps.invoke("prepare_image", { data });
+    if (!prepared?.data || !prepared.mime) {
       throw new Error("Image preparation failed");
     }
     return prepared;
@@ -759,7 +668,7 @@ export function createAttachmentGallery(deps) {
    * Native drag-drop hands the webview paths, not `File` objects (and on Linux
    * `dataTransfer.files` is often empty). The backend reads the bytes; wrapping
    * them in `File` objects here means the drop goes through exactly the same
-   * resize/EXIF-stripping/encrypt path as the file picker.
+   * backend compression/encrypt path as the file picker.
    */
   async function addPaths(paths) {
     if (!editable()) return false;

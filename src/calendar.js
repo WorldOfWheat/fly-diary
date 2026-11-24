@@ -94,6 +94,7 @@ export function createCalendar(deps) {
     // `getDay()` is Sunday-based; the grid starts on Monday, so walk 1..6 then 0.
     for (let i = 1; i <= 7; i += 1) {
       const span = document.createElement("span");
+      span.dataset.testid = "cal-weekday";
       span.textContent = deps.weekdayName(i % 7);
       frag.appendChild(span);
     }
@@ -122,6 +123,7 @@ export function createCalendar(deps) {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "cal-day";
+      btn.dataset.testid = "cal-day";
       btn.dataset.date = iso;
       btn.textContent = String(d.getDate());
       btn.setAttribute("role", "gridcell");

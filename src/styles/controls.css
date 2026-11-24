@@ -117,6 +117,13 @@
   border-color: var(--danger);
 }
 
+/* Destructive actions that stay outlined even before hover, so the risk is
+   visible while scanning the settings dialog. */
+[data-testid="settings-restore-btn"],
+[data-testid="recovery-remove-btn"] {
+  border-color: var(--danger);
+}
+
 .btn-danger:disabled {
   opacity: 0.35;
   cursor: default;

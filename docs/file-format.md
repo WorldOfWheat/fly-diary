@@ -135,7 +135,7 @@ v5 索引的 AAD 使用 `index` object kind 加上 `vault-id`／`key-id`；舊�
 > 收藏旗標的權威來源是日記檔內的密文，索引只是鏡射一份，所以重建索引不會弄丟收藏。
 > 沒有第三欄的舊索引（`日期 \t 標題`）仍可讀取，一律視為未收藏。
 
-附件檔（`attachments/YYYY-MM-DD/<id>.bin`）是二進位加密檔，不經過 XML／base64：
+附件檔（`attachments/<id>.bin`；舊版為 `attachments/YYYY-MM-DD/<id>.bin`）是二進位加密檔，不經過 XML／base64：
 
 ```text
 magic "FDAT" | version u8 | IV 12 bytes | AES-256-GCM ciphertext + tag
@@ -190,17 +190,18 @@ manifest 遺失時，解密後可由 magic bytes 重新判斷 MIME。圖片不�
 diary/
 ├── 2026-10-23.xml
 └── attachments/
-    └── 2026-10-23/
-        ├── manifest.xml
-        ├── 9f2c1a7b4e6d8c039f2c1a7b4e6d8c03.bin
-        └── 4d8e2f1a6b3c9e704d8e2f1a6b3c9e70.bin
+    ├── 9f2c1a7b4e6d8c039f2c1a7b4e6d8c03.bin
+    └── 4d8e2f1a6b3c9e704d8e2f1a6b3c9e70.bin
 ```
+
+舊版 vault 可能還有 `attachments/2026-10-23/<id>.bin` 與 `manifest.xml`；讀取時會
+fallback 到日期資料夾，設定頁的「更新舊圖片」會把檔案搬進扁平的 `attachments/`。
 
 - **檔名**：16 bytes 隨機 → 32 個小寫 hex + `.bin`，由後端產生。不使用原始檔名、標題、
   日期或 SHA-256，避免洩漏與路徑問題。
 - **每張圖獨立加密**：AES-256-GCM，新的隨機 12-byte IV。檔案格式為
   `FDAT | version | IV | ciphertext`；v2 AAD 綁定 `vault-id`／`key-id`／日期／id／版本，舊 v1 使用舊 label。
-- **manifest.xml**：外層沿用日記的 `<diary version="5">` envelope，payload 解密後是內層 XML：
+- **manifest.xml（legacy only）**：外層沿用日記的 `<diary version="5">` envelope，payload 解密後是內層 XML：
 
   ```xml
   <manifest version="2" date="2026-10-23">
@@ -212,11 +213,16 @@ diary/
   **元素順序就是顯示順序**。沒有 `added-at`，也不依賴檔名或 mtime。
   v5 manifest 的 AAD 綁定 `vault-id`／`key-id`／日期／版本；舊 manifest 使用 `"fly-diary/attachment-manifest" || 0x00 || date`，
   所以搬到別天會失敗，也不能和 `index.xml` 或日記密文互換。
-- **上傳前壓縮**：前端用 canvas 將長邊縮到 1000px、WebP quality 0.8；若 WebView 不支援
-  WebP 編碼時，PNG／WebP 來源會 fallback PNG 以保留透明，其他來源 fallback JPEG（透明區填白）。
-  重新編碼會一併清掉 EXIF（包含 GPS）。
-- **限制**：前端輸入上限 20 MB；後端解碼後上限 5 MB、每天最多 200 張；只接受
-  WebP / JPEG / PNG，拒絕 SVG。`mime` 與 magic bytes 必須一致。
+- **上傳前壓縮**：前端只負責讀取原始 bytes，`prepare_image` 在 Rust 後端解碼、套用 EXIF 方向、
+  將長邊縮到 1000px，再以有損 WebP（libwebp，quality 80）重新編碼。輸出固定是 `image/webp`，
+  不再依賴 WebView 的 canvas 編碼能力；重新編碼會一併清掉其他 EXIF（包含 GPS）。
+- **更新舊圖片**：設定頁的「更新舊圖片」會掃描所有附件，把 legacy 日期資料夾的檔案搬進扁平的
+  `attachments/`，並把 PNG／JPEG／無損 WebP 重新編碼為有損 WebP。只有省下至少 10% 才取代原檔；
+  已經是 lossy WebP 的檔案只搬移、不重新編碼，避免世代失真。重新編碼是就地覆寫且不可還原，
+  執行前會提示先備份。
+- **限制**：前端輸入上限 64 MiB；後端解碼後上限 5 MB、每天最多 200 張。輸入可為
+  WebP / JPEG / PNG / GIF / BMP / TIFF，拒絕 SVG；新寫入的附件一律是 WebP，讀取舊檔時
+  `mime` 與 magic bytes 必須一致。
 - **加入方式**：除了「加入圖片」按鈕，也可以直接把圖片檔拖進編輯區，或把剪貼簿裡的圖片
   （例如截圖）貼上。只有真正的圖片檔會被攔截，文字貼上與相簿內部的排序拖曳不受影響。
   桌面版的檔案拖放走 Tauri 原生事件（`onDragDropEvent`）：它提供的是**檔案路徑**，由
@@ -229,7 +235,7 @@ diary/
   的情況；純文字貼上仍完全交給瀏覽器，不會被攔截。只有剪貼簿真的含圖片時才會自動解鎖唯讀日記。
   原生剪貼簿備援只在桌面版啟用；行動版仍走 WebView 的 paste 事件。
 - **讀取**：`list_attachments` 只解密 manifest；`get_attachment` 才逐張解密，前端延遲載入。
-  剛上傳的圖片直接沿用前端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
+  剛上傳的圖片直接沿用後端已壓縮的 bytes 顯示縮圖，不必等後端再解密一次。
 - **唯讀與壞檔**：唯讀模式只能看圖；按鈕新增、刪除、排序都要先「解鎖編輯」。貼上或拖放圖片
   被視為明確的編輯動作，會自動解鎖一般唯讀日記並繼續加入；壞檔（`lockedDate`）仍完全鎖定，
   只顯示提示。
@@ -239,16 +245,19 @@ diary/
 新增圖片時依序做「確保 entry 存在 → 寫圖片 → 寫 manifest」；刪除時依序做
 「刪圖片 → 更新 manifest」。這個方向讓 crash 的結果只會是：
 
-- 新增中斷 → 留下未被 manifest 引用的圖片，下次載入時補到最後。
+- 新增中斷 → 留下未被 manifest 引用的扁平圖片，可由孤兒清理處理。
 - 刪除中斷 → manifest 指向不存在的圖片，顯示「圖片遺失」佔位，不會讓已刪除的圖復活。
 
 manifest 現在只存在 SQLCipher 的 `attachments` 表；不再有 `manifest.xml`。
-DB rows 遺失時會掃描該日期的 `*.bin` 重建，順序退回 mtime／檔名；資料不會不見，
-但精確順序只能近似恢復。整個日期資料夾沒有對應的 `entries` 列時視為孤兒，
-可用 `list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除，不會自動刪除。
+扁平檔名不含日期，DB rows 遺失時無法從檔名重建日期；只有 legacy 日期資料夾的
+`*.bin` 還能靠掃描該日期重建（順序退回 mtime／檔名）。沒有 `entries` 列的 legacy
+日期資料夾，以及沒有 `attachments` 列引用的扁平 `*.bin`，都視為孤兒：可用
+`list_orphan_attachments` 列出、`delete_orphan_attachments` 確認後刪除（扁平孤兒的
+`date` 是空字串），不會自動刪除。
 
-刪除日記的順序是 **DB（entries 與 attachment rows 明確刪除）→ 附件資料夾**；
-反過來先刪附件會在 crash 時留下「日記還在、圖片沒了」的更糟狀態。
+刪除日記的順序是 **先記下 attachment ids → DB（entries 與 attachment rows 明確刪除）
+→ 依 ids 刪除扁平檔案與 legacy 日期資料夾**；反過來先刪附件會在 crash 時留下
+「日記還在、圖片沒了」的更糟狀態。
 
 ## 設定檔
 
@@ -281,9 +290,11 @@ App 的設定與日記本體分開存放。設定檔只記錄**日記資料夾�
 diary.db                     # VACUUM INTO 快照（SQLCipher 密文）
 vault.xml                    # Argon2id 包裝的 diary key
 recovery.xml                 # 選用；有啟用回復短語時才存在
-attachments/YYYY-MM-DD/<32 hex>.bin
+attachments/<32 hex>.bin
 ```
 
+- 備份一律使用扁平附件路徑；舊備份的 `attachments/YYYY-MM-DD/<id>.bin` 仍可匯入，
+  解壓時會正規化成扁平路徑（日期已存在 DB 快照）。
 - 檔名建議為 `fly-diary-backup-YYYY-MM-DD.tar`，但 App 不依賴檔名。
 - `diary.db` 是 `VACUUM INTO` 的輸出，等同一致快照；不含 `-wal`／`-shm`。
 - `vault.xml` 與 `recovery.xml` 讓備份在 App 無法解鎖時仍可手動救援。

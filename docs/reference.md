@@ -59,16 +59,18 @@ Tauri 在 Linux 與 macOS 上會自動掛一個 `Edit` 選單，其 `Undo` 項�
 | `is_unlocked()`                           | 目前是否已解鎖                                                               |
 | `get_entry(date)`                         | 從 SQLCipher 讀取某天的日記，不存在回 `null`                                 |
 | `save_entry(date, title, content)`        | 寫入/覆寫某天的日記                                                          |
-| `delete_entry(date)`                      | 刪除某天的日記、attachment rows 與附件資料夾                                  |
+| `delete_entry(date)`                      | 刪除某天的日記、attachment rows 與對應附件檔案                                |
+| `prepare_image(data)`                     | 解碼原始圖片（base64）、套用 EXIF 方向、縮到長邊 1000px，回傳有損 WebP base64 與尺寸 |
+| `recompress_attachments()`                | 把 legacy 附件搬進扁平資料夾並重新編碼為有損 WebP（需解鎖）；進度以 `recompress-progress` 事件回報 |
 | `save_attachment(date, mime, data, width, height)` | 加密並儲存一張圖片（base64），附加在相簿最後                     |
 | `list_attachments(date)`                  | 從 DB manifest 依順序列出圖片 metadata（檔案仍為 sidecar）                   |
 | `get_attachment(date, id)`                | 解密單張圖片並回傳 base64 與 MIME（v3 用 attachment_key，舊版用 diary key）  |
-| `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（供前端壓縮後上傳）                 |
+| `read_dropped_images(paths)`              | 讀取原生拖放提供的檔案路徑，回傳 base64（交給後端壓縮後上傳）                 |
 | `read_clipboard_image()`                  | 桌面版從系統剪貼簿讀取圖片並轉成 PNG base64；沒有圖片或行動版回 `null`       |
 | `delete_attachment(date, id)`             | 刪除一張圖片並更新 DB manifest                                               |
 | `reorder_attachments(date, ids)`          | 以新的 id 順序更新 DB position                                                |
-| `list_orphan_attachments()`               | 列出沒有對應 `entries` 列的附件資料夾（需解鎖）                               |
-| `delete_orphan_attachments(date)`         | 刪除指定的孤兒附件資料夾與其 DB rows                                         |
+| `list_orphan_attachments()`               | 列出未被 DB 引用的扁平附件，以及沒有對應 `entries` 列的 legacy 日期資料夾（需解鎖） |
+| `delete_orphan_attachments(date)`         | 刪除指定的孤兒附件；`date` 為空字串時刪除未被引用的扁平檔案                   |
 | `list_entries()`                          | 從 DB 列出所有日記（新到舊，需解鎖）                                         |
 | `list_favourites()`                       | 只列出收藏的日記（新到舊）                                                   |
 | `set_favourite(date, favourite)`          | 加入／取消收藏，回傳實際儲存的狀態                                           |

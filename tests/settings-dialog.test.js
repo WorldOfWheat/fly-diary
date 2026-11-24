@@ -47,6 +47,12 @@ const SETTINGS_IDS = [
   "settingsStatsBtn",
   "settingsRestoreBtn",
   "settingsBackupStatus",
+  "settingsRecompressBtn",
+  "settingsRecompressProgress",
+  "settingsRecompressCount",
+  "settingsRecompressTrack",
+  "settingsRecompressBar",
+  "settingsRecompressStatus",
   "settingsTarExportBtn",
   "settingsTarImportBtn",
   "settingsTransferStatus",
@@ -78,7 +84,7 @@ function harness(overrides = {}) {
     get_vault_kdf: KDF,
     diary_path: "/home/user/Documents/diary",
     app_info: {
-      version: "2.1.0",
+      version: "2.2.0",
       commit: "abc123",
       author: "WorldOfWheat",
       repository: "https://github.com/WorldOfWheat/fly-diary",
@@ -91,6 +97,16 @@ function harness(overrides = {}) {
     remove_recovery: null,
     restore_backup: "/tmp/fly-diary-backup.tar",
     export_backup: "/tmp/fly-diary-backup.tar",
+    recompress_attachments: {
+      scanned: 3,
+      moved: 0,
+      recompressed: 2,
+      skipped: 1,
+      failed: 0,
+      bytesBefore: 4000,
+      bytesAfter: 1000,
+      failures: [],
+    },
     biometric_status: {
       available: false,
       enabled: false,
@@ -121,8 +137,10 @@ function harness(overrides = {}) {
     changeDiaryDir: spy(),
     openRecovery: spy(),
     openImportBackup: spy(),
+    listen: async () => () => {},
     flushSave: spy(),
     afterRestore: spy(),
+    afterRecompress: spy(),
     ...overrides.deps,
   };
 
@@ -287,7 +305,7 @@ test("openSettings shows the build version, commit and author", async () => {
   await withSettings(async ({ settings, els }) => {
     await settings.openSettings();
 
-    assert.equal(els.settingsAppVersion.textContent, "2.1.0");
+    assert.equal(els.settingsAppVersion.textContent, "2.2.0");
     assert.equal(els.settingsAppCommit.textContent, "abc123");
     assert.equal(els.settingsAppAuthor.textContent, "WorldOfWheat");
   });
@@ -966,6 +984,174 @@ test("exportBackup flushes before invoking export_backup", async () => {
     );
     assert.equal(els.settingsTarExportBtn.disabled, false);
   });
+});
+
+test("recompressImages confirms, invokes the backend and reports the saving", async () => {
+  await withSettings(async ({ settings, els, invoke, deps }) => {
+    const original = globalThis.confirm;
+    globalThis.confirm = () => true;
+    try {
+      await settings.recompressImages();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.equal(invoke.commands().includes("recompress_attachments"), true);
+    assert.equal(
+      els.settingsRecompressStatus.textContent,
+      "settings.recompressDone(n=2,moved=0,skipped=1,failed=0,saved=2.9 KB)"
+    );
+    assert.equal(els.settingsRecompressBtn.disabled, false);
+    assert.equal(els.settingsRecompressProgress.hidden, true);
+    assert.deepEqual(deps.afterRecompress.args(), [
+      [
+        {
+          scanned: 3,
+          moved: 0,
+          recompressed: 2,
+          skipped: 1,
+          failed: 0,
+          bytesBefore: 4000,
+          bytesAfter: 1000,
+          failures: [],
+        },
+      ],
+    ]);
+  });
+});
+
+test("recompressImages shows progress events and hides the bar when done", async () => {
+  let handler = null;
+  let resolveCommand = null;
+  const unlisten = spy();
+  const report = {
+    scanned: 3,
+    moved: 1,
+    recompressed: 2,
+    skipped: 0,
+    failed: 0,
+    bytesBefore: 4000,
+    bytesAfter: 1000,
+    failures: [],
+  };
+
+  await withSettings(
+    async ({ settings, els }) => {
+      const original = globalThis.confirm;
+      globalThis.confirm = () => true;
+      try {
+        const promise = settings.recompressImages();
+        await Promise.resolve();
+
+        assert.equal(els.settingsRecompressProgress.hidden, false);
+        handler({ payload: { done: 1, total: 3 } });
+        assert.equal(els.settingsRecompressCount.textContent, "1 / 3");
+        assert.equal(els.settingsRecompressBar.style.props.get("width"), "33%");
+        assert.equal(
+          els.settingsRecompressTrack.getAttribute("aria-valuenow"),
+          "33"
+        );
+
+        resolveCommand(report);
+        await promise;
+      } finally {
+        globalThis.confirm = original;
+      }
+
+      assert.equal(els.settingsRecompressProgress.hidden, true);
+      assert.equal(els.settingsRecompressCount.textContent, "0 / 0");
+      assert.equal(unlisten.count(), 1);
+      assert.equal(
+        els.settingsRecompressStatus.textContent,
+        "settings.recompressDone(n=2,moved=1,skipped=0,failed=0,saved=2.9 KB)"
+      );
+    },
+    {
+      invokeTable: {
+        recompress_attachments: () =>
+          new Promise((resolve) => {
+            resolveCommand = resolve;
+          }),
+      },
+      deps: {
+        listen: async (event, fn) => {
+          assert.equal(event, "recompress-progress");
+          handler = fn;
+          return unlisten;
+        },
+      },
+    }
+  );
+});
+
+test("recompressImages still runs when the progress listener fails", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      const original = globalThis.confirm;
+      globalThis.confirm = () => true;
+      try {
+        await settings.recompressImages();
+      } finally {
+        globalThis.confirm = original;
+      }
+
+      assert.equal(els.settingsRecompressBtn.disabled, false);
+      assert.equal(els.settingsRecompressProgress.hidden, true);
+      assert.equal(
+        els.settingsRecompressStatus.textContent,
+        "settings.recompressDone(n=2,moved=0,skipped=1,failed=0,saved=2.9 KB)"
+      );
+    },
+    {
+      deps: {
+        listen: async () => {
+          throw new Error("event system unavailable");
+        },
+      },
+    }
+  );
+});
+
+test("recompressImages does nothing when the confirmation is declined", async () => {
+  await withSettings(async ({ settings, invoke, deps }) => {
+    const original = globalThis.confirm;
+    globalThis.confirm = () => false;
+    try {
+      await settings.recompressImages();
+    } finally {
+      globalThis.confirm = original;
+    }
+
+    assert.deepEqual(invoke.commands(), []);
+    assert.deepEqual(deps.afterRecompress.args(), []);
+  });
+});
+
+test("recompressImages reports a failure and re-enables the button", async () => {
+  await withSettings(
+    async ({ settings, els }) => {
+      const original = globalThis.confirm;
+      globalThis.confirm = () => true;
+      try {
+        await settings.recompressImages();
+      } finally {
+        globalThis.confirm = original;
+      }
+
+      assert.equal(
+        els.settingsRecompressStatus.textContent,
+        "settings.recompressFailed(message=disk full)"
+      );
+      assert.equal(els.settingsRecompressBtn.disabled, false);
+    },
+    {
+      invokeTable: {
+        recompress_attachments: () => {
+          throw "disk full";
+        },
+      },
+    }
+  );
 });
 
 test("enableBiometric requires the current passphrase", async () => {

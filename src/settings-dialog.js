@@ -31,8 +31,10 @@ import { animateOverlayExit } from "./lib/motion.js";
 //   changeDiaryDir     — () => void | Promise<void>
 //   openRecovery       — () => void | Promise<void>
 //   openImportBackup   — () => void | Promise<void>
+//   listen             — (event: string, handler: Function) => Promise<Function>
 //   flushSave          — () => Promise<void>
 //   afterRestore       — () => Promise<void>
+//   afterRecompress    — (report: object) => Promise<void>
 //   beginNativePicker / endNativePicker — optional picker guard
 
 /** Fallback choices if the backend does not report any. */
@@ -40,6 +42,14 @@ const DEFAULT_AUTO_LOCK_CHOICES = [0, 1, 5, 10, 15, 30, 60];
 
 /** Fallback autosave delays, mirroring `settings::AUTOSAVE_DELAY_CHOICES`. */
 const DEFAULT_AUTOSAVE_DELAY_CHOICES = [200, 400, 800, 1500, 3000];
+
+/** Human-readable byte count for the recompression report. */
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 /**
  * Create the settings dialog controller.
@@ -84,6 +94,7 @@ export function createSettingsDialog(deps) {
     for (const minutes of choices) {
       const option = document.createElement("option");
       option.value = String(minutes);
+      option.dataset.testid = `auto-lock-option-${minutes}`;
       option.textContent =
         minutes === 0
           ? deps.t("settings.autoLockNever")
@@ -99,6 +110,7 @@ export function createSettingsDialog(deps) {
     for (const ms of choices) {
       const option = document.createElement("option");
       option.value = String(ms);
+      option.dataset.testid = `autosave-option-${ms}`;
       option.textContent = deps.t("settings.autosaveMs", { n: ms });
       if (ms === current) option.selected = true;
       els.autosaveDelaySelect.append(option);
@@ -313,6 +325,101 @@ export function createSettingsDialog(deps) {
     }
   }
 
+  /** Show the update progress bar at `done / total`. */
+  function setRecompressProgress(done, total) {
+    if (!els.settingsRecompressProgress) return;
+    const safeTotal = Math.max(total, 1);
+    const percent = Math.min(100, Math.round((done / safeTotal) * 100));
+
+    els.settingsRecompressProgress.hidden = false;
+    els.settingsRecompressBar.style.width = `${percent}%`;
+    els.settingsRecompressCount.textContent = `${done} / ${total}`;
+    els.settingsRecompressTrack.setAttribute("aria-valuenow", String(percent));
+  }
+
+  /** Hide and reset the update progress bar. */
+  function hideRecompressProgress() {
+    if (!els.settingsRecompressProgress) return;
+    els.settingsRecompressProgress.hidden = true;
+    els.settingsRecompressBar.style.width = "0%";
+    els.settingsRecompressCount.textContent = "0 / 0";
+    els.settingsRecompressTrack.setAttribute("aria-valuenow", "0");
+  }
+
+  /**
+   * Move old attachments into the flat folder and shrink the ones that benefit
+   * from a lossy WebP re-encode.
+   *
+   * Replacing bytes is lossy, so the pass is explicit and confirmed. Images that
+   * are already small or already lossy WebP are only moved by the backend.
+   */
+  async function recompressImages() {
+    if (!els.settingsRecompressBtn) return;
+    if (!confirm(deps.t("settings.recompressConfirm"))) return;
+
+    els.settingsRecompressBtn.disabled = true;
+    els.settingsRecompressStatus.textContent = "";
+    setRecompressProgress(0, 0);
+
+    const onProgress = (event) => {
+      const { done, total } = event.payload || {};
+      if (typeof done !== "number" || typeof total !== "number") return;
+      setRecompressProgress(done, total);
+    };
+    let unlisten = null;
+    try {
+      unlisten = await deps.listen?.("recompress-progress", onProgress);
+    } catch (err) {
+      // Progress is cosmetic; the update still runs without it.
+      console.warn("recompress-progress listener failed:", err);
+    }
+
+    try {
+      const report = await deps.invoke("recompress_attachments");
+      const recompressed = Number(report?.recompressed) || 0;
+      const moved = Number(report?.moved) || 0;
+      const skipped = Number(report?.skipped) || 0;
+      const failed = Number(report?.failed) || 0;
+      const saved = Math.max(
+        0,
+        (Number(report?.bytesBefore) || 0) - (Number(report?.bytesAfter) || 0)
+      );
+      if (typeof report?.scanned === "number") {
+        setRecompressProgress(report.scanned, report.scanned);
+      }
+
+      const text =
+        recompressed > 0 || moved > 0
+          ? deps.t("settings.recompressDone", {
+              n: recompressed,
+              moved,
+              skipped,
+              failed,
+              saved: formatBytes(saved),
+            })
+          : deps.t("settings.recompressNothing", { skipped, failed });
+
+      showSectionStatus(
+        els.settingsRecompressStatus,
+        text,
+        failed === 0 && (recompressed > 0 || moved > 0)
+      );
+      await deps.afterRecompress?.(report);
+    } catch (err) {
+      console.error("recompress_attachments failed:", err);
+      showSectionStatus(
+        els.settingsRecompressStatus,
+        deps.t("settings.recompressFailed", {
+          message: typeof err === "string" ? err : String(err),
+        })
+      );
+    } finally {
+      if (typeof unlisten === "function") unlisten();
+      hideRecompressProgress();
+      els.settingsRecompressBtn.disabled = false;
+    }
+  }
+
   /** Open the separate tar-import dialog. */
   function openImportBackup() {
     return handOver(deps.openImportBackup);
@@ -515,12 +622,16 @@ export function createSettingsDialog(deps) {
     void refreshBiometric();
 
     els.settingsOverlay.hidden = false;
+    // Focus lands near the bottom of a long dialog; keep the panel at the top
+    // instead of letting the browser scroll to that field on open.
+    const body = els.settingsOverlay?.querySelector?.(".settings-body");
+    if (body) body.scrollTop = 0;
     focusTrap.activate();
     if (mobile) {
       const first = els.settingsOverlay?.querySelector?.(".settings-disclosure");
       (first ?? els.settingsClose)?.focus?.();
     } else {
-      els.settingsCurrentPass.focus();
+      els.settingsCurrentPass.focus({ preventScroll: true });
     }
   }
 
@@ -695,6 +806,7 @@ export function createSettingsDialog(deps) {
     returnFromStats,
     exportBackup,
     restoreBackup,
+    recompressImages,
     openImportBackup,
     enableBiometric,
     disableBiometric,

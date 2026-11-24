@@ -16,9 +16,11 @@ diary/
 ├── diary.db                      # 唯一儲存：SQLCipher
 ├── diary.db-wal / diary.db-shm   # 執行期間的 WAL，關閉後消失
 └── attachments/
-    └── YYYY-MM-DD/
-        └── <id>.bin              # 圖片 sidecar（加密）
+    └── <id>.bin                  # 圖片 sidecar（加密）
 ```
+
+舊 vault 可能還有 `attachments/YYYY-MM-DD/<id>.bin`；讀取時會 fallback，
+設定頁的「更新舊圖片」會把它們搬進扁平 `attachments/`。
 
 資料庫是權威來源，沒有每日衍生檔。舊 XML 只在一次性遷移時讀取，成功後刪除。
 備份是使用者手動複製整個日記資料夾（資料庫 + 金鑰包裝檔 + 附件），不是背景同步。
@@ -132,8 +134,10 @@ Android Keystore 包裝同一把 diary key，解鎖後仍走原本的 HKDF→SQL
 diary.db                     # VACUUM INTO 的一致快照（仍是 SQLCipher 密文）
 vault.xml                    # 包裝後的 diary key
 recovery.xml                 # 選用；有啟用回復短語時才存在
-attachments/YYYY-MM-DD/*.bin # 每張圖片的加密 sidecar
+attachments/<id>.bin        # 每張圖片的加密 sidecar（扁平）
 ```
+
+舊備份的 `attachments/YYYY-MM-DD/<id>.bin` 仍可匯入，解壓時會正規化成扁平路徑。
 
 - `VACUUM INTO` 在單一 read transaction 內產生一致的資料庫副本，不需要停止 App，
   輸出是單一檔案（沒有 `-wal`／`-shm`）。
@@ -169,7 +173,8 @@ attachments/YYYY-MM-DD/*.bin # 每張圖片的加密 sidecar
 4. 從 `attachments/*/manifest.xml` 匯入附件順序與 MIME；manifest 缺失時改掃 sidecar。
 5. `PRAGMA quick_check` 通過後，fsync 暫存檔再原子 rename 成 `diary.db`。
 6. 刪除 `YYYY-MM-DD.xml`、`index.xml` 與所有 `manifest.xml`。成功後資料夾的 XML
-   只剩 `vault.xml` 與 `recovery.xml`。
+   只剩 `vault.xml` 與 `recovery.xml`。legacy 的 `attachments/YYYY-MM-DD/*.bin`
+   仍留在原處，之後由設定頁的「更新舊圖片」搬進扁平資料夾。
 
 遷移可重試：中斷只會留下 `diary.db.migrating`，下次會刪掉重建；在 rename 之前
 XML 仍是唯一真相。若某個 XML 連原始位元組都無法讀取，它不會被刪除，並會出現在

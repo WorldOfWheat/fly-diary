@@ -6,7 +6,7 @@
 //! diary.db                     # VACUUM INTO snapshot, still SQLCipher-encrypted
 //! vault.xml                    # wrapped diary key
 //! recovery.xml                 # optional wrapped diary key
-//! attachments/YYYY-MM-DD/*.bin # encrypted image sidecars
+//! attachments/<id>.bin       # encrypted image sidecars (flat)
 //! ```
 //!
 //! Ciphertext is incompressible, so tar avoids a compression dependency while
@@ -22,6 +22,7 @@ use std::time::UNIX_EPOCH;
 
 use serde::Serialize;
 
+use crate::attachments;
 use crate::db;
 use crate::fsutil;
 use crate::storage;
@@ -73,43 +74,13 @@ pub fn export<W: Write>(
         }
     }
 
-    let root = dir.join("attachments");
-    if root.is_dir() {
-        let mut dates = Vec::new();
-        for item in fs::read_dir(&root).map_err(|e| format!("Failed to read attachments: {e}"))? {
-            let item = item.map_err(|e| format!("Failed to read attachments: {e}"))?;
-            let path = item.path();
-            let Some(date) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if path.is_dir() && storage::validate_date(date).is_ok() {
-                dates.push((date.to_string(), path));
-            }
-        }
-        dates.sort_by(|a, b| a.0.cmp(&b.0));
-        for (date, path) in dates {
-            let mut names = Vec::new();
-            for item in fs::read_dir(&path)
-                .map_err(|e| format!("Failed to read attachments for {date}: {e}"))?
-            {
-                let item =
-                    item.map_err(|e| format!("Failed to read attachments for {date}: {e}"))?;
-                let file = item.path();
-                let Some(name) = file.file_name().and_then(|name| name.to_str()) else {
-                    continue;
-                };
-                if is_regular_file(&file) && is_attachment_name(name) {
-                    names.push(name.to_string());
-                }
-            }
-            names.sort();
-            for name in names {
-                let archive_path = format!("attachments/{date}/{name}");
-                let file = path.join(&name);
-                write_file_entry(out, &archive_path, &file, &mut report)?;
-                report.attachments += 1;
-            }
-        }
+    // Always write the archive in the flat layout, even when the vault still
+    // has legacy per-date folders. The database snapshot already maps each id
+    // to its date, so the folder name is redundant.
+    for (id, path) in attachments::all_attachment_files(dir)? {
+        let name = format!("attachments/{id}.bin");
+        write_file_entry(out, &name, &path, &mut report)?;
+        report.attachments += 1;
     }
 
     out.write_all(&[0u8; BLOCK])
@@ -216,11 +187,13 @@ pub fn extract<R: Read>(input: &mut R, staging: &Path) -> Result<ExtractReport, 
         if size > MAX_FILE_BYTES {
             return Err(format!("{name} is too large for a backup"));
         }
-        if !valid_path(&name) {
+        // Accept both the flat layout and the per-date layout written by older
+        // versions, and extract both into the flat `attachments/` folder.
+        let Some(target_name) = normalized_entry_name(&name) else {
             return Err(format!("Unsupported path in the backup: {name}"));
-        }
-        if !seen.insert(name.clone()) {
-            return Err(format!("Duplicate path in the backup: {name}"));
+        };
+        if !seen.insert(target_name.clone()) {
+            return Err(format!("Duplicate path in the backup: {target_name}"));
         }
         if seen.len() > MAX_FILES {
             return Err("The backup contains too many files".to_string());
@@ -228,10 +201,10 @@ pub fn extract<R: Read>(input: &mut R, staging: &Path) -> Result<ExtractReport, 
 
         match kind {
             b'0' | 0 => {
-                if name.ends_with(".bin") {
+                if target_name.ends_with(".bin") {
                     report.attachments += 1;
                 }
-                let target = staging.join(&name);
+                let target = staging.join(&target_name);
                 if let Some(parent) = target.parent() {
                     fsutil::create_private_dir(parent)
                         .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
@@ -329,20 +302,31 @@ fn skip_padding<R: Read>(input: &mut R, size: u64) -> Result<(), String> {
         .map_err(|e| format!("The backup archive is truncated: {e}"))
 }
 
-fn valid_path(path: &str) -> bool {
-    let parts: Vec<&str> = path.split('/').collect();
-    match parts.as_slice() {
-        ["diary.db"] | ["vault.xml"] | ["recovery.xml"] => true,
-        ["attachments", date, name] => {
-            storage::validate_date(date).is_ok() && is_attachment_name(name)
+/// Accepted archive paths, normalized to the flat layout.
+///
+/// Old backups stored images under `attachments/YYYY-MM-DD/<id>.bin`. The date
+/// is already in the database snapshot, so extracting them flat is lossless and
+/// keeps a single layout after import.
+fn normalized_entry_name(path: &str) -> Option<String> {
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        ["diary.db"] | ["vault.xml"] | ["recovery.xml"] => Some(path.to_string()),
+        ["attachments", name] if is_attachment_name(name) => Some(path.to_string()),
+        ["attachments", date, name]
+            if storage::validate_date(date).is_ok() && is_attachment_name(name) =>
+        {
+            Some(format!("attachments/{name}"))
         }
-        _ => false,
+        _ => None,
     }
 }
 
 fn is_attachment_name(name: &str) -> bool {
-    name.strip_suffix(".bin")
-        .is_some_and(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    name.strip_suffix(".bin").is_some_and(|id| {
+        id.len() == 32
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 fn is_regular_file(path: &Path) -> bool {
@@ -570,6 +554,21 @@ mod tests {
         let _ = fs::remove_dir_all(&backup);
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn legacy_archive_paths_are_normalized_to_flat() {
+        let id = "a".repeat(32);
+        assert_eq!(
+            normalized_entry_name(&format!("attachments/{id}.bin")),
+            Some(format!("attachments/{id}.bin"))
+        );
+        assert_eq!(
+            normalized_entry_name(&format!("attachments/2026-10-23/{id}.bin")),
+            Some(format!("attachments/{id}.bin"))
+        );
+        assert_eq!(normalized_entry_name("../escape"), None);
+        assert_eq!(normalized_entry_name("attachments/not-an-id.bin"), None);
     }
 
     #[test]

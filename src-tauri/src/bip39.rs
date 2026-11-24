@@ -14,7 +14,7 @@
 
 use std::sync::OnceLock;
 
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -53,7 +53,7 @@ pub fn words() -> &'static [&'static str] {
 /// Generate a fresh 128-bit value from the operating system RNG.
 pub fn generate_entropy() -> Zeroizing<[u8; ENTROPY_BYTES]> {
     let mut entropy = Zeroizing::new([0u8; ENTROPY_BYTES]);
-    rand::rngs::OsRng.fill_bytes(entropy.as_mut());
+    rand::rng().fill_bytes(entropy.as_mut());
     entropy
 }
 
@@ -161,7 +161,7 @@ pub fn confirmation_indices() -> Vec<usize> {
     use rand::seq::SliceRandom;
 
     let mut indices: Vec<usize> = (0..WORD_COUNT).collect();
-    indices.shuffle(&mut rand::rngs::OsRng);
+    indices.shuffle(&mut rand::rng());
     indices.truncate(CONFIRMATION_WORDS);
     indices.sort_unstable();
     indices

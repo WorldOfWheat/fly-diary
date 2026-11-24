@@ -26,7 +26,7 @@ fly-diary/
 │   ├── recovery-dialog.js  # 一次性 BIP39 短語、獨立確認視窗（createRecoveryDialog）
 │   ├── word-input.js       # BIP39 單字磁磚與前綴建議（共用於確認／解鎖）
 │   ├── lock-screen.js      # 解鎖畫面、vault 偵測、KDF 校準、短語解鎖（createLockScreen）
-│   ├── attachments.js      # 圖片相簿：壓縮、上傳、排序、lightbox（createAttachmentGallery）
+│   ├── attachments.js      # 圖片相簿：上傳、排序、lightbox（createAttachmentGallery）
 │   ├── native-drop.js      # 桌面原生拖放：路徑事件與編輯區 hover 判定
 │   ├── input-modality.js   # 記錄指標／鍵盤輸入，讓焦點環只在鍵盤操作時出現
 │   ├── focus-trap.js       # modal 的 Tab／Shift+Tab 焦點圈禁與還原
@@ -76,7 +76,7 @@ fly-diary/
 │   ├── stats-dialog.test.js    # 統計卡片、長條圖比例
 │   ├── settings-dialog.test.js # 日記本路徑、匯入/統計/路徑轉交、自動鎖定、KDF、儲存驗證
 │   ├── recovery-dialog.test.js # BIP39 短語、獨立確認視窗、前綴建議、取消/失敗不留資料
-│   ├── attachments.test.js     # 1000px 縮放、相簿順序、上傳/刪除、唯讀、lightbox
+│   ├── attachments.test.js     # 輸入驗證、相簿順序、上傳/刪除、唯讀、lightbox
 │   ├── native-drop.test.js     # 原生拖放：hover 判定、drop 路徑、離開/取消
 │   ├── styles.test.js          # CSS 不變量：hidden 疊層、月曆/lightbox z-index、手機兩層排版
 │   ├── docs-links.test.js      # README 與 docs/ 的相對連結、文件索引可達性
@@ -110,7 +110,8 @@ fly-diary/
 │       ├── fsutil.rs       # 原子寫入／複製、fsync 目錄、0600/0700 權限
 │       ├── secure_memory.rs # 鎖定頁存放 diary key（mlock／VirtualLock、防 dump/fork）
 │       ├── xml.rs          # vault/recovery 與 legacy XML 的序列化／解析（不再寫日記）
-│       ├── attachments.rs  # 圖片附件：DB manifest、加密 sidecar、順序、孤兒掃描
+│       ├── attachments.rs  # 圖片附件：DB manifest、加密 sidecar、順序、孤兒掃描、舊圖重新壓縮
+│       ├── image_ops.rs    # 附件影像：解碼、EXIF 方向、縮放、有損 WebP 編碼
 │       ├── clipboard.rs    # 桌面剪貼簿圖片讀取（WebKitGTK paste 備援）
 │       ├── pool.rs         # 受限的 Rayon vault I/O pool（最多 4 執行緒）
 │       ├── search.rs       # 解鎖期間的記憶體全文索引（不落盤，鎖定即清除）
@@ -134,7 +135,7 @@ fly-diary/
 - **儲存與備份分離**：SQLCipher 是唯一儲存，沒有每日衍生檔。備份由 `backup.rs` 產生單一 `.tar`：`db::snapshot` 以 `VACUUM INTO` 寫出加密快照，再串流加入 `vault.xml`、`recovery.xml` 與附件 sidecar。還原先解到 cache、用目前 key 驗證 `vault_id`／`key_id` 與完整性，成功後才把 DB 與附件換入，舊資料留在 `*.local-backup-*`；匯入則另外採用備份的 `vault.xml`／`recovery.xml`。
 - **生物辨識是另一層包裝，不是新金鑰階層**：Android 啟用時用目前密碼解開 diary key，再交給 Keystore 的 `BiometricPrompt` 金鑰包裝成 `biometric.json`。解鎖時只把包裝解回原本的 diary key，DB 與附件的金鑰派生完全沒變。包裝檔不進 `.tar`，匯入時跟舊金鑰包裝檔一起移到 `*.local-backup-*`。
 - **路徑驗證**：`settings::validate_diary_dir` 要求絕對路徑且不得為檔案系統根目錄，避免工作目錄變動導致日記「消失」。
-- **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`）。DB 以 `date TEXT PRIMARY KEY` 儲存，一天一列；附件資料夾名稱也由日期推導。
+- **日期即主鍵**：`storage::validate_date` 同時驗證格式並阻擋路徑穿越（如 `../../etc/passwd`）。DB 以 `date TEXT PRIMARY KEY` 儲存，一天一列；附件路徑不含日期，附件所屬日期只存在加密 DB。
 - **標題也加密**：SQLCipher 加密整個 DB，標題與內容都在加密頁面內；`list_entries` 必須先以 diary key 開啟 DB。鎖定時側邊欄會清空，避免殘留任何標題。
 - **資料庫即索引**：`entries.date` 主鍵與 `(favourite, date DESC)` 索引取代 `index.xml`。列出日記是一個 SQL query，不再需要解密一份索引檔；舊 `index.xml` 只可能在未遷移的資料夾看到，SQLCipher 版本不再產生它。
 - **全文搜尋不落盤**：搜尋需要明文，所以 `scan_vault` 在解鎖後從 DB 讀出 entries 並建立記憶體索引（原文 + 小寫副本），只回傳命中摘要。索引是衍生狀態，`lock()`、切換 workspace 或重新解鎖時直接清除並 zeroize；不新增任何明文檔案。SQLCipher 的 DB 本身在磁碟上仍是密文。
@@ -145,9 +146,9 @@ fly-diary/
 - **搜尋查詢的平行門檻**：`SearchIndex` 記錄原始文字總量，低於 2 MiB 時循序掃描（避免 Rayon 喚醒成本），超過才把文件分給同一個 I/O pool；收集後一律依日期新到舊排序。
 - **壞檔唯讀鎖定**：`selectDate` 在載入前先查壞檔清單，命中就直接鎖定、完全不呼叫 `get_entry`；`saveNow` 與 `scheduleSave` 也都在 `lockedDate` 有值時提早返回。三層防線確保空白編輯器不可能覆蓋掉一個只是暫時解不開的檔案——這是壞檔處理裡唯一會造成永久資料損失的路徑。
 - **匯出保留兩種路徑**：`export_broken_entry` 若該日期有 `legacy_broken` 列，會原樣匯出遷移時保存的 XML bytes；否則用 `VACUUM INTO` 匯出一份相同 SQLCipher key 的 `diary-backup.db`。
-- **附件 sidecar、manifest 進 DB**：圖片放在 `attachments/YYYY-MM-DD/<id>.bin`，順序／MIME／尺寸在 DB 的 `attachments` 表；備份會把 sidecar 一起打包，沒有 `manifest.xml`。DB 不會因幾百張 5 MiB 圖片膨脹，圖片仍可單張延遲解密。
+- **附件 sidecar、manifest 進 DB**：圖片全部放在扁平的 `attachments/<id>.bin`，順序／MIME／尺寸／日期在 DB 的 `attachments` 表；舊 vault 的 `attachments/YYYY-MM-DD/<id>.bin` 仍可讀取，「更新舊圖片」會搬進扁平資料夾。備份會把 sidecar 一起打包，沒有 `manifest.xml`。DB 不會因幾百張 5 MiB 圖片膨脹，圖片仍可單張延遲解密。
 - **固定順序是資料，不是檔名**：DB 的 `position` 欄位就是顯示順序。新增 append、拖曳只更新 DB 的 position；不依賴 mtime、檔名或 `added-at`。
-- **附件刪除方向固定**：新增是「圖片 → DB manifest」，刪除是「DB row → 圖片」；crash 只會留下未引用圖片（會被補回）或遺失佔位。`attachments` 沒有 foreign key（孤兒資料夾是既有功能），刪除日記時由 `db::delete_entry` 明確刪除 attachment rows，再刪附件資料夾。
+- **附件刪除方向固定**：新增是「圖片 → DB manifest」，刪除是「記下 ids → DB row → 圖片」；crash 只會留下未引用檔案或遺失佔位。`attachments` 沒有 foreign key（孤兒檔案是既有功能），刪除日記時由 `db::delete_entry` 先記下 attachment ids、刪除 rows，再依 ids 刪除扁平檔案與 legacy 日期資料夾。
 - **虛擬滾動**：側邊欄只渲染視窗內可見的列（外加少量 overscan）。列高不再一律相同：`lib/list-rows.js` 先建立「月份標題列 + 日記列」的平面模型並算出每列絕對位移，`main.js` 再用二分搜尋找出視窗內的區段。兩個高度都由 CSS 的 `--row-h`／`--month-h` 決定、JS 用 `getComputedStyle` 讀回，因此字級改變時列高與月份標題會一起縮放，捲動不會錯位。即使有上萬篇日記，DOM 節點數也維持在數十個。
 - **年份跳轉**：`entry-scroll` 頂端有一個 sticky 年份選單，選項只包含目前可見清單（全部／收藏／搜尋結果）實際存在的年份；跳轉時直接定位到該年第一篇前面的月份標題列。它是捲動容器內的元素，JS 會把它的高度從可見視窗扣除，因此 sticky 列不會遮住第一筆資料。
 - **單一縮放來源**：所有尺寸都是 `rem`，根字級 = 流動 `clamp()` × 使用者倍率。改一個變數就縮放整個介面（含內距、圖示、日曆），不必為每個元件寫縮放邏輯。
@@ -178,7 +179,7 @@ fly-diary/
 - **CSP 不含 `unsafe-inline` script**：`script-src` 只允許 `'self'`，並加上 `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`。前端沒有任何 inline `<script>`、`on*=` 屬性或 `eval`，所以拿掉 `unsafe-inline` 不影響功能；`style-src` 仍保留 `unsafe-inline`，因為 JS 會直接設定 `element.style`。
 - **防止截圖**：視窗以 `contentProtected: true` 建立，Tauri 會轉成 Windows 的 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` 與 macOS 的 `NSWindow.setSharingType(.none)`，讓截圖工具與螢幕錄影／分享只看到黑畫面。鎖定畫面同樣受保護；只有開啟「切換工作區」選擇資料夾時，前端才透過 `set_screenshot_protection` 暫時解除，因為那裡只顯示路徑、使用者可能正想分享螢幕，選完或取消後立刻恢復。
 - **本地時區**：`today()` 用 `chrono::Local`，前端日期運算也用本地 `Date`，避免 UTC 跨日問題。
-- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`save_attachment`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`import_backup`、`restore_backup`、`biometric_enable`、`biometric_unlock`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
+- **所有 I/O 命令都不佔主執行緒**：Tauri 的同步命令跑在主執行緒上，所以任何碰檔案、DB 或加密的命令都會凍住 webview。`lib.rs` 提供 `blocking()` 包住 `spawn_blocking`，**所有會做 I/O 的命令都經過它**：`save_entry`、`get_entry`、`delete_entry`、`prepare_image`、`save_attachment`、`recompress_attachments`、`list_attachments`、`get_attachment`、`delete_attachment`、`reorder_attachments`、`list_orphan_attachments`、`delete_orphan_attachments`、`set_favourite`、`list_entries`、`list_favourites`、`rebuild_index`、`list_broken_entries`、`scan_vault`、`search_entries`、`scan_import`、`export_broken_entry`、`export_backup`、`import_backup`、`restore_backup`、`biometric_enable`、`biometric_unlock`、`storage_status`、`migrate_storage`、`check_vault_integrity`、`diary_path`，以及設定檔的 `get_settings` / `set_diary_dir` / `set_auto_lock` / `set_autosave_delay` / `vault_exists` / `get_vault_kdf`。只有 `lock`、`is_unlocked`、`get_kdf_defaults`、`today` 這種讀一個欄位或常數的命令維持同步。
 - **Argon2id 一定離開主執行緒**：`unlock`、`create_vault`、`change_passphrase` 各要跑一到兩次刻意放慢的 Argon2id 派生（單次約一秒），是最容易讓人感覺到凍結的地方。三者都改為 `async` 並把派生交給 `blocking()`；session 只在工作回傳後才寫入，因為 `tauri::State` 無法 move 進 `spawn_blocking`。
 - **金鑰先複製再交給背景執行緒**：`MutexGuard` 不是 `Send`，也不能讓鎖跨越整個寫入過程（會擋住 `lock` 與其他命令）。所有需要金鑰的命令都先用 `session_key()` 把 `[u8; 32]` 複製出來，再 move 進閉包；鎖只持有到複製完成為止。
 - **存檔的資料庫往返**：寫入一篇日記包含讀取舊列（保留收藏旗標）與 `INSERT ... ON CONFLICT` 寫入。自動儲存延遲可設定（最小 200 ms），所以這條路徑會頻繁觸發，必須離開主執行緒；raw key 沒有 KDF，每次開啟 DB 的成本很低。

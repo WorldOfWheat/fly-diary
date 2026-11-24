@@ -10,7 +10,7 @@
   width: 100%;
   max-width: calc(var(--measure) + 3.5rem);
   margin-inline: auto;
-  padding: 0 var(--space-14) var(--space-2);
+  padding: var(--space-4) var(--space-14) var(--space-4);
   min-width: 0;
 }
 

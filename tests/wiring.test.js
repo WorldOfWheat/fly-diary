@@ -134,6 +134,7 @@ const ELEMENT_IDS = [
   "settingsStatsBtn",
   "settingsChangeDirBtn",
   "settingsRestoreBtn",
+  "settingsRecompressBtn",
   "settingsTarExportBtn",
   "settingsTarImportBtn",
   "settingsBiometricEnable",
@@ -254,6 +255,7 @@ function harness(overrides = {}) {
     calibrateKdf: spy("calibrateKdf"),
     restoreBackup: spy("restoreBackup"),
     exportBackup: spy("exportBackup"),
+    recompressImages: spy("recompressImages"),
     enableBiometric: spy("enableBiometric"),
     disableBiometric: spy("disableBiometric"),
     openImportFromSettings: spy("openImportFromSettings"),
@@ -993,6 +995,11 @@ test("the settings dialog hosts import, statistics and the folder picker", () =>
   withHarness((h) => {
     h.els.settingsTarImportBtn.dispatch("click");
     assert.deepEqual(h.names(), ["openImportBackup"]);
+  });
+
+  withHarness((h) => {
+    h.els.settingsRecompressBtn.dispatch("click");
+    assert.deepEqual(h.names(), ["recompressImages"]);
   });
 
   withHarness((h) => {

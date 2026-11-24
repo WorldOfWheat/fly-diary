@@ -47,19 +47,23 @@ export function createImportDialog(deps) {
   function createImportRow(file) {
     const row = document.createElement("div");
     row.className = `import-row ${file.status}`;
+    row.dataset.testid = "import-row";
     row.setAttribute("role", "listitem");
 
     const date = document.createElement("span");
     date.className = "row-date";
+    date.dataset.testid = "import-row-date";
     date.textContent = file.date || file.name;
 
     const title = document.createElement("span");
     title.className = "row-title" + (file.title ? "" : " empty");
+    title.dataset.testid = "import-row-title";
     title.textContent = file.title || deps.t("common.untitled");
     title.title = file.title || "";
 
     const badge = document.createElement("span");
     badge.className = "row-badge";
+    badge.dataset.testid = "import-row-badge";
     const badgeKey = IMPORT_BADGE_KEYS[file.status];
     badge.textContent = badgeKey ? deps.t(badgeKey) : file.status;
 
@@ -69,6 +73,7 @@ export function createImportDialog(deps) {
     if (file.reason) {
       const reason = document.createElement("span");
       reason.className = "row-reason";
+      reason.dataset.testid = "import-row-reason";
       reason.textContent = file.reason;
       row.append(reason);
     }
@@ -98,6 +103,7 @@ export function createImportDialog(deps) {
     if (scan.files.length === 0) {
       const empty = document.createElement("div");
       empty.className = "import-row failed";
+      empty.dataset.testid = "import-row-empty";
       empty.textContent = deps.t("import.emptyFolder");
       els.importList.replaceChildren(empty);
     } else {
@@ -129,6 +135,7 @@ export function createImportDialog(deps) {
 
     const loading = document.createElement("div");
     loading.className = "import-row";
+    loading.dataset.testid = "import-row-loading";
     loading.textContent = deps.t("import.scanning");
     els.importList.replaceChildren(loading);
 
@@ -285,12 +292,14 @@ export function createImportDialog(deps) {
     for (const line of lines) {
       const p = document.createElement("div");
       p.className = "result-line";
+      p.dataset.testid = "import-result-line";
       p.textContent = line;
       frag.appendChild(p);
     }
     for (const failure of report.failed) {
       const p = document.createElement("div");
       p.className = "result-fail";
+      p.dataset.testid = "import-result-fail";
       p.textContent = `${failure.name}：${failure.reason}`;
       frag.appendChild(p);
     }

@@ -5,6 +5,7 @@
   flex: none;
   align-items: center;
   gap: 0.75rem;
+  margin-left: auto;
 }
 
 .status-text {
