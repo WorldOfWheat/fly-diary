@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.2.0)"
+        description: "Tag to release (e.g. v2.2.0)"
         required: true
         type: string
 
@@ -119,6 +119,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Verify tag matches app version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          EXPECTED="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ "$RELEASE_TAG" != "$EXPECTED" ]; then
+            echo "::error::Release tag ${RELEASE_TAG} does not match tauri.conf.json version (${EXPECTED})"
+            exit 1
+          fi
+
       # No build cache here on purpose: release artifacts are built from a
       # clean target directory instead of restoring cache written by other
       # workflows.
@@ -128,8 +138,14 @@ jobs:
         with:
           tagName: ${{ inputs.tag || github.ref_name }}
           releaseName: "Fly Diary ${{ inputs.tag || github.ref_name }}"
-          releaseBody: "See the assets below to download and install."
-          releaseDraft: true
+          releaseBody: |
+            Fly Diary ${{ inputs.tag || github.ref_name }}
+
+            Download the installer for your platform below. See CHANGELOG.md for release notes:
+            https://github.com/WorldOfWheat/fly-diary/blob/master/CHANGELOG.md
+
+            Linux: .deb / .rpm (no AppImage). macOS and Windows builds are currently unsigned; see the README for install notes.
+          releaseDraft: false
           prerelease: false
 
       # SLSA-style provenance for every bundle produced on this runner. Users

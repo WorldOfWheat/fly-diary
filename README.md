@@ -2,8 +2,25 @@
 
 一個用 Tauri 2 寫的極簡加密日記 App：**一天只會有一篇**，以 **SQLCipher 加密的 SQLite** 儲存，
 並可匯出單一加密備份檔（資料庫快照 + 金鑰包裝檔 + 附件）。
-目前版本 `2.2.0`。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
+
+目前版本 `2.2.0`，是**第一個正式版**；`0.1.0`–`2.1.0` 為 PoC／pre-release，已在 GitHub Releases
+標為 Pre-release。桌面版之外，原始碼也包含 Android 所需的手機版排版與 `cfg(mobile)` 分支；
 把視窗縮到 `640px` 以下即可在桌面上預覽手機版介面。
+
+## 下載與安裝
+
+從 [GitHub Releases](https://github.com/WorldOfWheat/fly-diary/releases) 下載最新正式版：
+
+| 平台    | 產物                    | 說明                                                                 |
+| ------- | ----------------------- | -------------------------------------------------------------------- |
+| Linux   | `.deb`、`.rpm`          | 不提供 AppImage；使用系統 GTK 與輸入法模組                           |
+| macOS   | `.dmg`（Apple Silicon） | 目前未簽章／未公證；首次開啟請右鍵 →「打開」                         |
+| Windows | `.msi`、`x64-setup.exe` | 目前未簽章；SmartScreen 可能顯示警告                                 |
+| Android | APK／AAB                | 由 Actions 的 **Android APK** workflow 產生；目前不附加到 GitHub Release |
+
+- **沒有自動更新**：請手動下載新版本；日記與設定會沿用。
+- Release workflow 會為產物產生 SLSA 形式的 provenance，可用 `gh attestation verify <file>` 驗證。
+- 想自己建置的話，見下方[從原始碼建置](#從原始碼建置)。
 
 ## 功能亮點
 
@@ -38,9 +55,9 @@
 
 更完整的功能行為與實作細節請見 [文件索引](docs/README.md)。
 
-## 快速開始
+## 從原始碼建置
 
-需求：Node 20 以上、pnpm `9.15.4`、Rust（CI 固定 `1.98.1`）。
+需求：Node 20 以上、pnpm `9.15.4`、Rust `1.90.0` 以上（CI 固定 `1.98.1`）。
 Linux 另需 WebKitGTK 等系統函式庫，完整清單見 [docs/development.md](docs/development.md#安裝系統依賴linux)。
 
 ```bash
@@ -68,6 +85,10 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 | [architecture.md](docs/architecture.md)   | 專案結構與設計取捨                                                 |
 | [development.md](docs/development.md)     | 系統依賴、開發指令、測試、打包、Android                            |
 | [reference.md](docs/reference.md)         | 鍵盤快速鍵與 Tauri Commands                                        |
+| [CHANGELOG.md](CHANGELOG.md)              | 版本變更紀錄                                                       |
+| [SECURITY.md](SECURITY.md)                | 支援版本、漏洞回報與安全政策                                       |
+| [CONTRIBUTING.md](CONTRIBUTING.md)        | 開發環境、測試與 PR 規則                                           |
+| [LICENSE](LICENSE)                        | MIT 授權                                                           |
 
 ## 安全摘要
 
@@ -92,5 +113,16 @@ pnpm build             # 打包（Linux 產出 .deb / .rpm）
 - 備份檔含 `vault.xml` 與 `recovery.xml`，方便在 App 無法解鎖時手動救援；但用 App 內還原時不會覆寫目前的金鑰包裝檔，避免把密碼或回復短語回滾到舊狀態。
 - 回復短語是明文可讀的第二把鑰匙，必須與日記分開保存；它不會自動備份，也不會顯示第二次。備份檔已包含 `recovery.xml`，但仍建議與日記分開保存。
 - 生物辨識包裝檔（`biometric.json`）綁定單一裝置的 Android Keystore，不會進 `.tar`；換裝置、重裝、清除 App 資料或變更生物辨識註冊後，都必須用密碼解鎖再重新啟用。生物辨識是便利性解鎖，不取代密碼。
+- **無障礙**：以 WCAG 2.2 AA 為目標，但 200% 文字縮放與螢幕閱讀器實測尚未完成；詳見 [accessibility.md](docs/accessibility.md)。
+- **沒有自動更新**：需手動下載新版本；目前也沒有內建的更新檢查。
 
 完整列表請見 [docs/security.md#已知限制](docs/security.md#已知限制)。
+
+## 貢獻
+
+歡迎開 issue 或 PR；建置、測試與 PR 規則見 [CONTRIBUTING.md](CONTRIBUTING.md)。
+安全性問題請依 [SECURITY.md](SECURITY.md) 私下回報，不要開公開 issue。
+
+## 授權
+
+[MIT](LICENSE)。Copyright (c) 2026 WorldOfWheat。

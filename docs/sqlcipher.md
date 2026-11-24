@@ -117,6 +117,10 @@ CREATE TABLE legacy_broken (
 `meta` 保存 `schema_version`、`format=sqlcipher`、`vault_id`、`key_id`。開啟時會比對
 `vault_id`／`key_id`；把 DB 從別的 vault 複製過來會直接拒絕。
 
+自 `2.2.0`（第一個正式版）起，`schema_version` 凍結為 `1`（`PRAGMA user_version = 1`）。
+若未來需要變更 schema，必須遞增 `DB_VERSION` 並提供遷移；舊版 App 遇到較新的 schema 會
+拒絕開啟，不會嘗試寫入。DB schema 版本與 App 版號彼此獨立。
+
 Android 生物辨識不改變這個 schema，也不改變 DB key 派生：`biometric.json` 只用
 Android Keystore 包裝同一把 diary key，解鎖後仍走原本的 HKDF→SQLCipher 路徑。它是
 裝置綁定的 sidecar，不屬於 DB，也不會進 `.tar`。
@@ -204,8 +208,8 @@ XML 仍是唯一真相。若某個 XML 連原始位元組都無法讀取，它�
 `src-tauri/Cargo.toml`：
 
 ```toml
-rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
-hkdf = "0.12"
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
+hkdf = "0.13"
 ```
 
 `bundled-sqlcipher-vendored-openssl` 會編譯 SQLCipher 與 OpenSSL，Linux／macOS／

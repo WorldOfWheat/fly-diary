@@ -111,6 +111,58 @@ pnpm build
 
 Linux 只產出 `.deb` 與 `.rpm`，**不產出 AppImage**。AppImage 會把 GTK 一起打包，並在 `AppRun` 裡把 `GTK_IM_MODULE_FILE` 指向打包內的 `immodules.cache`；該 cache 不含 `im-ibus.so` / `im-fcitx.so`，導致輸入法在 AppImage 內完全無法切換。`.deb` / `.rpm` 直接使用系統的 GTK 與系統的輸入法模組，沒有這個問題。
 
+## 發佈
+
+`2.2.0` 是第一個正式版；`0.1.0`–`2.1.0` 在 GitHub Releases 中標為 Pre-release。
+
+### 版號來源
+
+Tauri 以 `src-tauri/tauri.conf.json` 的 `version` 為準；發佈前以下必須一致：
+
+| 位置                        | 用途                          |
+| --------------------------- | ----------------------------- |
+| `src-tauri/tauri.conf.json` | Tauri 產物與安裝檔版本        |
+| `package.json`              | 前端 manifest                 |
+| `src-tauri/Cargo.toml`      | Rust crate 版本               |
+| `src-tauri/Cargo.lock`      | 執行 `cargo check` 後自動更新 |
+| `README.md`                 | 對外顯示的目前版本            |
+| `CHANGELOG.md`              | 版本變更紀錄                  |
+
+Tag 必須是 `v` + 版本號（例如 `v2.2.0`）。`release.yml` 會在建置前檢查 tag 與
+`tauri.conf.json` 是否一致。
+
+### 流程
+
+1. 更新上表版本與 `CHANGELOG.md`。
+2. 跑 `./test.sh`（或至少 `./test.sh --no-cov`）。
+3. commit 後建立 annotated tag：`git tag -a v2.2.0 -m "Fly Diary 2.2.0"`。
+4. push tag：`git push origin v2.2.0`。
+5. `release.yml` 先跑測試與 `security.yml` 審計，再在 Linux／macOS／Windows 建置並建立
+   GitHub Release。
+6. 檢查 Release 是否有 `.deb`／`.rpm`／`.dmg`／`.msi`／`.exe` 與 provenance；必要時重新執行
+   workflow。
+
+`releaseDraft` 目前設為 `false`，tag 通過測試與審計後會直接公開。若要先人工檢查，可暫時改回
+`true`，檢查完再 publish。
+
+### 產物與簽章
+
+- Linux：`.deb`、`.rpm`（不產出 AppImage）。
+- macOS：`.dmg`（目前 runner 為 Apple Silicon）。
+- Windows：`.msi`、`x64-setup.exe`。
+- 目前 workflow 只使用 `GITHUB_TOKEN`，沒有 Apple notarization 或 Windows code-signing
+  secrets，因此產物未簽章。若要簽章，把憑證放在 `release` environment 的 secrets，並在
+  `tauri-action` 前設定對應環境變數。
+- Android 由 `.github/workflows/android.yml` 在 `v*` tag 另外建置，APK／AAB 上傳到該次
+  Actions run 的 artifacts（保留 30 天），**不會自動附加到 GitHub Release**。若要長期提供
+  下載，需手動上傳或調整 workflow。
+
+### 版號政策
+
+- 正式版從 `2.2.0` 開始；舊的 `0.1.0`–`2.1.0` 是 PoC／pre-release。
+- 之後遵循 SemVer：向後相容的功能用 MINOR，修正用 PATCH，不相容的變更用 MAJOR。
+- 不要重用或移動已發佈的 tag。
+
 ## 行動版（Android）
 
 手機版沿用同一份前端，靠 `640px` 斷點切換成兩層式排版。Tauri 產生的 Android 專案位於

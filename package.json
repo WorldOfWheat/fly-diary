@@ -3,6 +3,7 @@
   "version": "2.2.0",
   "private": true,
   "author": "WorldOfWheat",
+  "license": "MIT",
   "repository": "https://github.com/WorldOfWheat/fly-diary",
   "type": "module",
   "packageManager": "pnpm@9.15.4",
